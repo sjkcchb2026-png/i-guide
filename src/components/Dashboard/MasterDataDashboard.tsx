@@ -1665,6 +1665,36 @@ export default function MasterDataDashboard() {
               email: row.data.email?.toLowerCase().trim()
             }, { merge: true });
 
+            // Automatically mirror into users collection for Staff Attendance Accounts
+            try {
+              const cleanEmail = row.data.email?.toLowerCase().trim() || '';
+              const posUpper = String(row.data.position || row.data.jawatan || '').toUpperCase();
+              const isGb = posUpper.includes('GURU BESAR') || posUpper === 'GB' || row.data.leadershipRole === 'GURU_BESAR';
+              const catUpper = String(row.data.category || '').toUpperCase();
+              const isAkp = catUpper === 'AKP' || posUpper.includes('PKA') || posUpper.includes('PPM') || posUpper.includes('PT') || posUpper.includes('PEMBANTU') || posUpper.includes('KERANI') || posUpper.includes('OPERASI');
+              const cleanIc = String(row.data.ic || '').replace(/[^0-9]/g, '');
+              const userDocId = cleanIc ? `staff_${cleanIc}` : `staff_${row.key}`;
+
+              await setDoc(doc(db, 'users', userDocId), {
+                uid: userDocId,
+                name: row.data.name,
+                email: cleanEmail,
+                category: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
+                role: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
+                ic: row.data.ic || '',
+                phone: row.data.phone || '',
+                grade: row.data.grade || '',
+                position: row.data.position || '',
+                staffFileNo: row.data.staffFileNo || '',
+                personnelId: row.key,
+                active: true,
+                isPreRegistered: true,
+                updatedAt: new Date().toISOString(),
+              }, { merge: true });
+            } catch (userMirrorErr) {
+              console.warn('Note: Master Data user mirror notice:', userMirrorErr);
+            }
+
           } else {
             await setDoc(ref, row.data, { merge: true });
           }

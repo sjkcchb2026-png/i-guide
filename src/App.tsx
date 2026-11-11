@@ -8,7 +8,7 @@ import { auth, db } from './firebase';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, getDocs, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { deepSanitizeFirestore } from './utils/sanitizeFirestore';
-import { UserProfile, SchoolSettings } from './types';
+import { UserProfile, SchoolSettings, UserRole, StaffCategory } from './types';
 import { Header } from './components/Header';
 import { LoginView } from './components/LoginView';
 import { StaffPunchIn } from './components/StaffPunchIn';
@@ -79,29 +79,132 @@ export default function App() {
 
         let resolvedUserSnap = userSnap;
 
-        // If user document does not exist by auth UID, check if it was pre-synced from Personnel Master by email
+        // 3. If user document does not exist by auth UID, resolve by email across users, personnel, teachers & backend roster
         if (!resolvedUserSnap.exists() && user.email) {
+          const cleanEmail = user.email.toLowerCase().trim();
+
+          // Stage A: Query `users` collection by email
           try {
-            const cleanEmail = user.email.toLowerCase().trim();
-            const q = query(collection(db, 'users'), where('email', '==', cleanEmail));
-            const querySnap = await getDocs(q);
+            const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
+            const querySnap = await getDocs(qUsers);
             if (!querySnap.empty) {
               const matchedDoc = querySnap.docs[0];
               const preData = matchedDoc.data() as UserProfile;
               const linkedProfile = deepSanitizeFirestore({
                 ...preData,
                 uid: user.uid,
+                isPreRegistered: false,
                 active: preData.active !== false,
                 updatedAt: serverTimestamp(),
               });
               await setDoc(userDocRef, linkedProfile, { merge: true });
               if (matchedDoc.id !== user.uid) {
-                await deleteDoc(matchedDoc.ref).catch(() => {});
+                await setDoc(matchedDoc.ref, { uid: user.uid, isPreRegistered: false, active: true }, { merge: true }).catch(() => {});
               }
               resolvedUserSnap = await getDoc(userDocRef);
             }
           } catch (syncErr) {
-            console.warn('Error linking synced user by email:', syncErr);
+            console.warn('Stage A users email lookup:', syncErr);
+          }
+
+          // Stage B: If not in users, check `personnel` Master Data by email
+          if (!resolvedUserSnap.exists()) {
+            try {
+              const qPersonnel = query(collection(db, 'personnel'), where('email', '==', cleanEmail));
+              const pSnap = await getDocs(qPersonnel);
+              if (!pSnap.empty) {
+                const pDoc = pSnap.docs[0];
+                const pData: any = pDoc.data();
+                const posUpper = String(pData.position || pData.jawatan || '').toUpperCase();
+                const isPrincipalUser = posUpper.includes('GURU BESAR') || posUpper === 'GB' || pData.leadershipRole === 'GURU_BESAR' || cleanEmail === schoolSettings?.principalEmail?.toLowerCase().trim();
+                const catUpper = String(pData.category || '').toUpperCase();
+                const isAkpUser = catUpper === 'AKP' || posUpper.includes('PKA') || posUpper.includes('PPM') || posUpper.includes('PT') || posUpper.includes('PEMBANTU') || posUpper.includes('KERANI') || posUpper.includes('OPERASI');
+                const resolvedRole: UserRole = isPrincipalUser ? 'PRINCIPAL' : (isAkpUser ? 'AKP' : 'GURU');
+                const resolvedCat: StaffCategory = isPrincipalUser ? 'PRINCIPAL' : (isAkpUser ? 'AKP' : 'GURU');
+
+                const linkedProfile = deepSanitizeFirestore({
+                  uid: user.uid,
+                  name: pData.name || pData.nama || user.displayName || cleanEmail.split('@')[0],
+                  email: cleanEmail,
+                  category: resolvedCat,
+                  role: resolvedRole,
+                  ic: pData.ic || '',
+                  phone: pData.phone || pData.noTel || '',
+                  grade: pData.grade || pData.gred || '',
+                  position: pData.position || pData.jawatan || '',
+                  staffFileNo: pData.staffFileNo || pData.noFail || '',
+                  personnelId: pDoc.id,
+                  active: true,
+                  isPreRegistered: false,
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                });
+                await setDoc(userDocRef, linkedProfile, { merge: true });
+                resolvedUserSnap = await getDoc(userDocRef);
+              }
+            } catch (pErr) {
+              console.warn('Stage B personnel email lookup:', pErr);
+            }
+          }
+
+          // Stage C: If not in personnel, check `teachers` collection by email
+          if (!resolvedUserSnap.exists()) {
+            try {
+              const qTeachers = query(collection(db, 'teachers'), where('email', '==', cleanEmail));
+              const tSnap = await getDocs(qTeachers);
+              if (!tSnap.empty) {
+                const tDoc = tSnap.docs[0];
+                const tData: any = tDoc.data();
+                const linkedProfile = deepSanitizeFirestore({
+                  uid: user.uid,
+                  name: tData.name || user.displayName || cleanEmail.split('@')[0],
+                  email: cleanEmail,
+                  category: 'GURU',
+                  role: 'GURU',
+                  ic: tData.ic || '',
+                  personnelId: tDoc.id,
+                  active: true,
+                  isPreRegistered: false,
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                });
+                await setDoc(userDocRef, linkedProfile, { merge: true });
+                resolvedUserSnap = await getDoc(userDocRef);
+              }
+            } catch (tErr) {
+              console.warn('Stage C teachers email lookup:', tErr);
+            }
+          }
+
+          // Stage D: Fallback to server resolver endpoint (checks authoritative school staff roster)
+          if (!resolvedUserSnap.exists()) {
+            try {
+              const idToken = await user.getIdToken();
+              const res = await fetch('/api/auth/resolve-staff-profile', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${idToken}`,
+                },
+                body: JSON.stringify({ email: cleanEmail }),
+              });
+              if (res.ok) {
+                const data = await res.json();
+                if (data.profile) {
+                  const linkedProfile = deepSanitizeFirestore({
+                    ...data.profile,
+                    uid: user.uid,
+                    isPreRegistered: false,
+                    active: true,
+                    updatedAt: serverTimestamp(),
+                  });
+                  await setDoc(userDocRef, linkedProfile, { merge: true });
+                  resolvedUserSnap = await getDoc(userDocRef);
+                }
+              }
+            } catch (apiErr) {
+              console.warn('Stage D server resolver error:', apiErr);
+            }
           }
         }
 
@@ -138,8 +241,7 @@ export default function App() {
             setActiveView('staff');
           }
         } else {
-          // Account exists in Firebase Auth but has NO authorized record in /users created by Principal!
-          // Strictly forbid access, remove any auto-create fallback!
+          // Account exists in Firebase Auth but has NO authorized record in /users created by Principal or Master Data!
           setAccessDeniedReason('NOT_REGISTERED');
           setCurrentUserProfile(null);
         }

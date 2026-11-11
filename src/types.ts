@@ -24,6 +24,13 @@ export interface UserProfile {
   class_assigned?: string;
   subject_assigned?: string;
   academic_year?: string;
+  ic?: string;
+  phone?: string;
+  grade?: string;
+  position?: string;
+  staffFileNo?: string;
+  personnelId?: string;
+  isPreRegistered?: boolean;
   createdAt?: any;
   updatedAt?: any;
 }

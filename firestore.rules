@@ -53,11 +53,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Staff accounts: Staff can only read their own profile; Principal / Admin can list all
+    // Staff accounts: Staff can read their own profile or find by verified email; Principal / Admin can list all
     match /users/{userId} {
-      allow get: if isSignedIn() && (isOwner(userId) || isAdmin());
-      allow list: if isAdmin();
-      allow write: if isAdmin() || isOwner(userId);
+      allow get: if isSignedIn() && (isOwner(userId) || isAdmin() || resource.data.email == request.auth.token.email);
+      allow list: if isSignedIn() && (isAdmin() || resource.data.email == request.auth.token.email);
+      allow write: if isAdmin() || isOwner(userId) || (isSignedIn() && request.resource.data.email == request.auth.token.email);
     }
 
     // Master Data: Personnel SSOT

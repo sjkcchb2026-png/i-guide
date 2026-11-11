@@ -1,12 +1,18 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { UserProfile, SchoolSettings, AttendanceRecord, AttendanceGeo, StaffCategory, SchoolCalendarDay, StaffAbsenceRecord } from '../types';
+import { UserProfile, SchoolSettings, AttendanceRecord, AttendanceGeo, StaffCategory, UserRole, SchoolCalendarDay, StaffAbsenceRecord } from '../types';
 import { auth, db } from '../firebase';
 import { 
   collection, 
   query, 
   where, 
-  onSnapshot 
+  onSnapshot,
+  getDocs,
+  doc,
+  setDoc,
+  writeBatch,
+  serverTimestamp
 } from 'firebase/firestore';
+import { deepSanitizeFirestore } from '../utils/sanitizeFirestore';
 import { getTodayDateString, formatTimeFromTimestamp, calculateDuration } from '../utils/date';
 import { calculateDailyWorkTime } from '../utils/checkoutRules';
 import { formatCoordinates, getGoogleMapsUrl } from '../utils/geo';
@@ -88,26 +94,86 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
   const [editingSchoolCode, setEditingSchoolCode] = useState(schoolSettings?.schoolCode || '');
   const [savingSettings, setSavingSettings] = useState(false);
 
-  // 1. Subscribe to Staff List (/users)
+  // 1. Subscribe to Staff List (/users) and seamlessly merge with Master Data Personnel
   useEffect(() => {
+    let isMounted = true;
     const q = query(collection(db, 'users'));
     const unsubscribe = onSnapshot(
       q,
-      (snapshot) => {
+      async (snapshot) => {
         const users: UserProfile[] = [];
+        const seenEmails = new Set<string>();
+        const seenIcs = new Set<string>();
+
         snapshot.forEach((d) => {
-          users.push(d.data() as UserProfile);
+          const u = d.data() as UserProfile;
+          users.push(u);
+          if (u.email) seenEmails.add(u.email.toLowerCase().trim());
+          if ((u as any).ic) seenIcs.add(String((u as any).ic).replace(/[^0-9]/g, ''));
         });
+
+        // Merge any teachers or AKP from Master Data / official roster not yet in users
+        try {
+          let extraRoster: any[] = [];
+          const pSnap = await getDocs(collection(db, 'personnel')).catch(() => null);
+          if (pSnap && !pSnap.empty) {
+            extraRoster = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          } else {
+            const res = await fetch('/api/personnel/official-roster').catch(() => null);
+            if (res && res.ok) {
+              const rData = await res.json();
+              extraRoster = rData.roster || [];
+            }
+          }
+
+          for (const p of extraRoster) {
+            const pEmail = String((p as any).email || '').toLowerCase().trim();
+            const pIc = String((p as any).ic || '').replace(/[^0-9]/g, '');
+            if ((pEmail && seenEmails.has(pEmail)) || (pIc && seenIcs.has(pIc))) {
+              continue;
+            }
+            const posUpper = String((p as any).position || (p as any).jawatan || '').toUpperCase();
+            const isGb = posUpper.includes('GURU BESAR') || posUpper === 'GB';
+            const catUpper = String((p as any).category || '').toUpperCase();
+            const isAkp = catUpper === 'AKP' || posUpper.includes('PKA') || posUpper.includes('PPM') || posUpper.includes('PT') || posUpper.includes('PEMBANTU') || posUpper.includes('KERANI') || posUpper.includes('OPERASI');
+
+            users.push({
+              uid: `staff_${pIc || p.id}`,
+              name: String((p as any).name || (p as any).nama || '').trim().toUpperCase(),
+              email: pEmail,
+              category: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
+              role: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
+              ic: pIc,
+              phone: String((p as any).phone || (p as any).noTel || '').trim(),
+              grade: String((p as any).grade || (p as any).gred || '').trim(),
+              position: String((p as any).position || (p as any).jawatan || '').trim(),
+              staffFileNo: String((p as any).staffFileNo || (p as any).noFail || '').trim(),
+              personnelId: p.id,
+              active: true,
+              isPreRegistered: true,
+            });
+            if (pEmail) seenEmails.add(pEmail);
+            if (pIc) seenIcs.add(pIc);
+          }
+        } catch (rosterErr) {
+          console.warn('Error fetching extra roster for staff list:', rosterErr);
+        }
+
         users.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
-        setStaffList(users);
-        setLoadingStaff(false);
+        if (isMounted) {
+          setStaffList(users);
+          setLoadingStaff(false);
+        }
       },
       (error) => {
         console.error('Error fetching staff list:', error);
-        setLoadingStaff(false);
+        if (isMounted) setLoadingStaff(false);
       }
     );
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
 
   // 2. Subscribe to All Attendance Records (Used for both daily attendance & monthly analysis)
@@ -406,20 +472,109 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
     setSyncingPersonnel(true);
     setActionFeedback(null);
     try {
-      const idToken = await auth.currentUser?.getIdToken();
-      if (!idToken) throw new Error('未检测到管理员凭证');
-      const res = await fetch('/api/admin/sync-personnel-to-users', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
+      // 1. Fetch official roster from server and/or Firestore personnel collection
+      let roster: any[] = [];
+      try {
+        const pSnap = await getDocs(collection(db, 'personnel'));
+        if (!pSnap.empty) {
+          roster = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        }
+      } catch (e) {
+        console.warn('Personnel collection read notice:', e);
+      }
+
+      if (roster.length === 0) {
+        try {
+          const res = await fetch('/api/personnel/official-roster');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.roster && data.roster.length > 0) {
+              roster = data.roster;
+            }
+          }
+        } catch (e) {
+          console.warn('Official roster fetch notice:', e);
+        }
+      }
+
+      // 2. Fetch current users collection
+      const usersSnap = await getDocs(collection(db, 'users'));
+      const existingUsersByEmail = new Map<string, any>();
+      const existingUsersByIc = new Map<string, any>();
+      const existingUsersById = new Map<string, any>();
+      usersSnap.forEach(d => {
+        const u = d.data() as UserProfile;
+        existingUsersById.set(d.id, { ...u, _docId: d.id });
+        if (u.email) existingUsersByEmail.set(u.email.toLowerCase().trim(), { ...u, _docId: d.id });
+        if ((u as any).ic) existingUsersByIc.set(String((u as any).ic).replace(/[^0-9]/g, ''), { ...u, _docId: d.id });
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || data.message || 'Penyelarasan gagal');
+
+      // 3. Batch sync into users collection
+      const batch = writeBatch(db);
+      let syncCount = 0;
+
+      for (const p of roster) {
+        const pName = String((p as any).name || (p as any).nama || '').trim().toUpperCase();
+        if (!pName) continue;
+        const pEmail = String((p as any).email || '').toLowerCase().trim();
+        const pIc = String((p as any).ic || '').replace(/[^0-9]/g, '');
+        const pPosition = String((p as any).position || (p as any).jawatan || '').trim();
+        const pCategory = String((p as any).category || '').toUpperCase().trim();
+        const posUpper = pPosition.toUpperCase();
+        const isGb = posUpper.includes('GURU BESAR') || posUpper === 'GB' || (p as any).leadershipRole === 'GURU_BESAR';
+        const isAkp = pCategory === 'AKP' || posUpper.includes('PKA') || posUpper.includes('PPM') || posUpper.includes('PT') || posUpper.includes('PEMBANTU') || posUpper.includes('KERANI') || posUpper.includes('OPERASI');
+        const resolvedRole: UserRole = isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
+        const resolvedCat: StaffCategory = isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
+
+        const matched = (pEmail && existingUsersByEmail.get(pEmail)) ||
+                        (pIc && existingUsersByIc.get(pIc)) ||
+                        existingUsersById.get(p.id);
+
+        const targetDocId = matched ? matched._docId : (pIc ? `staff_${pIc}` : (p.id ? `staff_${p.id}` : `staff_${Date.now()}_${syncCount}`));
+        const userRef = doc(db, 'users', targetDocId);
+
+        const userPayload: any = {
+          uid: matched ? (matched.uid || targetDocId) : targetDocId,
+          name: pName,
+          email: pEmail,
+          category: matched?.category || resolvedCat,
+          role: matched?.role || resolvedRole,
+          ic: pIc,
+          phone: String((p as any).phone || (p as any).noTel || '').trim(),
+          grade: String((p as any).grade || (p as any).gred || '').trim(),
+          position: pPosition,
+          staffFileNo: String((p as any).staffFileNo || (p as any).noFail || '').trim(),
+          personnelId: p.id,
+          active: true,
+          isPreRegistered: matched ? (matched.isPreRegistered ?? matched.uid?.startsWith('staff_')) : true,
+          updatedAt: serverTimestamp(),
+        };
+
+        batch.set(userRef, deepSanitizeFirestore(userPayload), { merge: true });
+        syncCount++;
+      }
+
+      await batch.commit();
+
+      // Also trigger server endpoint if available
+      try {
+        const idToken = await auth.currentUser?.getIdToken();
+        if (idToken) {
+          await fetch('/api/admin/sync-personnel-to-users', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${idToken}`,
+            },
+          });
+        }
+      } catch {
+        // Non-blocking
+      }
+
       setActionFeedback({
         type: 'success',
-        message: data.message || `Berjaya menyelaraskan ${data.syncedCount || 0} rekod personel ke Kehadiran Staf.`,
+        message: `Berjaya menyelaraskan ${syncCount} rekod personel dari Master Data ke Pengurusan Akaun Staf!`,
       });
     } catch (err: any) {
       console.error('Failed to sync personnel to users:', err);
@@ -1043,16 +1198,27 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                   {staffList.map((staff) => (
                     <tr key={staff.uid} className="hover:bg-slate-800/40 transition">
                       
-                      {/* Name */}
+                      {/* Name, Position & IC */}
                       <td className="py-3 px-4 font-sans">
-                        <div className="font-semibold text-white">{staff.name}</div>
-                        {staff.role === 'PRINCIPAL' && (
-                          <span className="text-[10px] text-amber-400 font-mono">校方最高管理员</span>
-                        )}
+                        <div className="font-semibold text-white flex items-center gap-1.5">
+                          <span>{staff.name}</span>
+                          {(staff.isPreRegistered || staff.uid.startsWith('staff_')) && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">
+                              Master Data
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                          {staff.position && <span className="text-amber-400 font-mono font-medium">{staff.position}</span>}
+                          {(staff as any).ic && <span className="font-mono text-slate-400">KP: {(staff as any).ic}</span>}
+                          {staff.role === 'PRINCIPAL' && !staff.position && (
+                            <span className="text-amber-400 font-mono font-medium">校方最高管理员 (Guru Besar)</span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Email */}
-                      <td className="py-3 px-4 text-slate-300">{staff.email}</td>
+                      <td className="py-3 px-4 text-slate-300 font-mono text-[11px]">{staff.email || '-'}</td>
 
                       {/* Category */}
                       <td className="py-3 px-3 font-sans">
@@ -1096,12 +1262,18 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
 
                       {/* Active Status */}
                       <td className="py-3 px-3 text-center font-sans">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
-                          staff.active
-                            ? 'bg-emerald-500/10 text-emerald-400'
-                            : 'bg-rose-500/10 text-rose-400'
+                        <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-semibold border ${
+                          !staff.active
+                            ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                            : (staff.isPreRegistered || staff.uid.startsWith('staff_'))
+                              ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                              : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                         }`}>
-                          {staff.active ? '正常启用' : '已停用'}
+                          {!staff.active
+                            ? '已停用'
+                            : (staff.isPreRegistered || staff.uid.startsWith('staff_'))
+                              ? 'AKTIF (Sedia Log Masuk)'
+                              : '正常启用 (Disahkan)'}
                         </span>
                       </td>
 
