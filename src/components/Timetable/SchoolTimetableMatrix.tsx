@@ -217,18 +217,77 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         teachers: emptyTeachers(),
       },
       {
-        id: 'pkar',
+        id: 'pkar_1',
         category: 'KP2027_ONLY',
-        subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (15 MIN)',
-        subjectCode: 'PKAR',
-        // KP2027: Tahap I (15 min x 5 hari = 2.5 节)；Tahap II & III (15 min x 4 hari = 2 节)
+        subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (ISNIN)',
+        subjectCode: 'PKAR_1',
         periods: {
-          1: kp(1) ? 2.5 : 0,
-          2: kp(2) ? 2.5 : 0,
-          3: kp(3) ? 2 : 0,
-          4: kp(4) ? 2 : 0,
-          5: kp(5) ? 2 : 0,
-          6: kp(6) ? 2 : 0,
+          1: kp(1) ? 0.5 : 0,
+          2: kp(2) ? 0.5 : 0,
+          3: kp(3) ? 0.5 : 0,
+          4: kp(4) ? 0.5 : 0,
+          5: kp(5) ? 0.5 : 0,
+          6: kp(6) ? 0.5 : 0,
+        },
+        teachers: emptyTeachers(),
+      },
+      {
+        id: 'pkar_2',
+        category: 'KP2027_ONLY',
+        subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (SELASA)',
+        subjectCode: 'PKAR_2',
+        periods: {
+          1: kp(1) ? 0.5 : 0,
+          2: kp(2) ? 0.5 : 0,
+          3: kp(3) ? 0.5 : 0,
+          4: kp(4) ? 0.5 : 0,
+          5: kp(5) ? 0.5 : 0,
+          6: kp(6) ? 0.5 : 0,
+        },
+        teachers: emptyTeachers(),
+      },
+      {
+        id: 'pkar_3',
+        category: 'KP2027_ONLY',
+        subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (RABU)',
+        subjectCode: 'PKAR_3',
+        periods: {
+          1: kp(1) ? 0.5 : 0,
+          2: kp(2) ? 0.5 : 0,
+          3: kp(3) ? 0.5 : 0,
+          4: kp(4) ? 0.5 : 0,
+          5: kp(5) ? 0.5 : 0,
+          6: kp(6) ? 0.5 : 0,
+        },
+        teachers: emptyTeachers(),
+      },
+      {
+        id: 'pkar_4',
+        category: 'KP2027_ONLY',
+        subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (KHAMIS)',
+        subjectCode: 'PKAR_4',
+        periods: {
+          1: kp(1) ? 0.5 : 0,
+          2: kp(2) ? 0.5 : 0,
+          3: kp(3) ? 0.5 : 0,
+          4: kp(4) ? 0.5 : 0,
+          5: kp(5) ? 0.5 : 0,
+          6: kp(6) ? 0.5 : 0,
+        },
+        teachers: emptyTeachers(),
+      },
+      {
+        id: 'pkar_5',
+        category: 'KP2027_ONLY',
+        subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (JUMAAT)',
+        subjectCode: 'PKAR_5',
+        periods: {
+          1: kp(1) ? 0.5 : 0,
+          2: kp(2) ? 0.5 : 0,
+          3: 0,
+          4: 0,
+          5: 0,
+          6: 0,
         },
         teachers: emptyTeachers(),
       },
@@ -439,7 +498,26 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         if (matrixDocSnap.exists()) {
           const data = matrixDocSnap.data();
           if (data.matrixData && Array.isArray(data.matrixData) && isMounted) {
-            setMatrixData(data.matrixData);
+            let rows: SubjectAllocationRow[] = data.matrixData;
+            const hasLegacyPkar = rows.some((r) => r.subjectCode.toUpperCase() === 'PKAR');
+            const hasSplitPkar = rows.some((r) => r.subjectCode.toUpperCase().startsWith('PKAR_'));
+            if (hasLegacyPkar && !hasSplitPkar) {
+              const legacyRow = rows.find((r) => r.subjectCode.toUpperCase() === 'PKAR');
+              const preset = buildPresetRows(selectedYear);
+              const pkarPresetRows = preset.filter((r) => r.subjectCode.toUpperCase().startsWith('PKAR_'));
+              if (legacyRow?.teachers) {
+                pkarPresetRows.forEach((pr) => {
+                  pr.teachers = { ...legacyRow.teachers };
+                });
+              }
+              const idx = rows.findIndex((r) => r.subjectCode.toUpperCase() === 'PKAR');
+              rows = [
+                ...rows.slice(0, idx),
+                ...pkarPresetRows,
+                ...rows.slice(idx + 1),
+              ];
+            }
+            setMatrixData(rows);
           } else if (isMounted) {
             setMatrixData(buildPresetRows(selectedYear));
           }
@@ -594,7 +672,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
             Tahun 1–{[1, 2, 3, 4, 5, 6].filter((g) => isGradeKP2027(selectedYear, g)).pop() || 1} menggunakan{' '}
-            <strong className="text-emerald-400">KP2027 (T1: 46.5 waktu, BC 12 waktu, AM 3 waktu, PKAR 2.5 waktu)</strong>;
+            <strong className="text-emerald-400">KP2027 (T1: 46.5 waktu, BC 12 waktu, AM 3 waktu, PKAR 2.5 waktu [5 × 0.5 waktu])</strong>;
             tahun lain kekal <strong className="text-amber-300">KSSR Semakan (50 waktu)</strong>.
           </p>
         </div>

@@ -107,6 +107,12 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
 
         snapshot.forEach((d) => {
           const u = d.data() as UserProfile;
+          if (!u.uid) {
+            u.uid = d.id;
+          }
+          if (!u.name) {
+            u.name = String((u as any).displayName || (u as any).nama || u.email?.split('@')[0] || 'STAF').trim();
+          }
           users.push(u);
           if (u.email) seenEmails.add(u.email.toLowerCase().trim());
           if ((u as any).ic) seenIcs.add(String((u as any).ic).replace(/[^0-9]/g, ''));
@@ -139,7 +145,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
 
             users.push({
               uid: `staff_${pIc || p.id}`,
-              name: String((p as any).name || (p as any).nama || '').trim().toUpperCase(),
+              name: String((p as any).name || (p as any).nama || pEmail.split('@')[0] || 'STAF').trim().toUpperCase(),
               email: pEmail,
               category: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
               role: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
@@ -159,7 +165,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
           console.warn('Error fetching extra roster for staff list:', rosterErr);
         }
 
-        users.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+        users.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), 'zh'));
         if (isMounted) {
           setStaffList(users);
           setLoadingStaff(false);
@@ -546,7 +552,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
           staffFileNo: String((p as any).staffFileNo || (p as any).noFail || '').trim(),
           personnelId: p.id,
           active: true,
-          isPreRegistered: matched ? (matched.isPreRegistered ?? matched.uid?.startsWith('staff_')) : true,
+          isPreRegistered: matched ? (matched.isPreRegistered ?? (typeof matched.uid === 'string' && matched.uid.startsWith('staff_'))) : true,
           updatedAt: serverTimestamp(),
         };
 
@@ -634,8 +640,8 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      const matchName = staff.name.toLowerCase().includes(q);
-      const matchEmail = staff.email.toLowerCase().includes(q);
+      const matchName = String(staff.name || '').toLowerCase().includes(q);
+      const matchEmail = String(staff.email || '').toLowerCase().includes(q);
       if (!matchName && !matchEmail) return false;
     }
 
@@ -656,7 +662,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
   }).sort((a, b) => {
     if (a.role === 'PRINCIPAL' && b.role !== 'PRINCIPAL') return -1;
     if (b.role === 'PRINCIPAL' && a.role !== 'PRINCIPAL') return 1;
-    return a.name.localeCompare(b.name, 'zh');
+    return String(a?.name || '').localeCompare(String(b?.name || ''), 'zh');
   });
 
   return (
@@ -934,7 +940,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                       </td>
                     </tr>
                   ) : (
-                    filteredStaff.map((staff) => {
+                    filteredStaff.map((staff, idx) => {
                       const records = attendanceMap.get(staff.uid) || [];
                       const slot1 = records.find((r) => r.slot === 1);
                       const slot2 = records.find((r) => r.slot === 2);
@@ -959,8 +965,9 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                         return matchStaff && matchDate && u.status !== 'CANCELLED';
                       });
 
+                      const rowKey = staff.uid || (staff as any).id || (staff as any).ic || staff.email || `att_row_${idx}`;
                       return (
-                        <tr key={staff.uid} className="hover:bg-slate-800/50 transition">
+                        <tr key={rowKey} className="hover:bg-slate-800/50 transition">
                           
                           {/* Staff Name & Email */}
                           <td className="py-3 px-4 font-sans">
@@ -1195,14 +1202,17 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800 font-mono">
-                  {staffList.map((staff) => (
-                    <tr key={staff.uid} className="hover:bg-slate-800/40 transition">
+                  {staffList.map((staff, idx) => {
+                    const isStaffPreReg = Boolean(staff.isPreRegistered || (typeof staff.uid === 'string' && staff.uid.startsWith('staff_')));
+                    const rowKey = staff.uid || (staff as any).id || (staff as any).ic || staff.email || `staff_row_${idx}`;
+                    return (
+                    <tr key={rowKey} className="hover:bg-slate-800/40 transition">
                       
                       {/* Name, Position & IC */}
                       <td className="py-3 px-4 font-sans">
                         <div className="font-semibold text-white flex items-center gap-1.5">
                           <span>{staff.name}</span>
-                          {(staff.isPreRegistered || staff.uid.startsWith('staff_')) && (
+                          {isStaffPreReg && (
                             <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">
                               Master Data
                             </span>
@@ -1228,19 +1238,19 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                           </span>
                         ) : (
                           <StaffRoleCell
-                            userId={staff.uid}
+                            userId={staff.uid || rowKey}
                             currentCategory={staff.category || 'GURU'}
                             currentSubRole={(staff as any).subRole || (staff as any).primaryRoleCode}
                             currentRole={staff.category || 'GURU'}
                             userEmail={staff.email || ''}
                             onUpdated={(newCat, newSub) => {
                               setStaffList((prev) =>
-                                prev.map((s) => (s.uid === staff.uid ? { ...s, category: newCat, subRole: newSub } : s))
+                                prev.map((s) => ((s.uid || (s as any).id) === (staff.uid || rowKey) ? { ...s, category: newCat, subRole: newSub } : s))
                               );
                             }}
                             onRoleUpdated={(newRole) => {
                               setStaffList((prev) =>
-                                prev.map((s) => (s.uid === staff.uid ? { ...s, category: newRole } : s))
+                                prev.map((s) => ((s.uid || (s as any).id) === (staff.uid || rowKey) ? { ...s, category: newRole } : s))
                               );
                             }}
                           />
@@ -1265,13 +1275,13 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                         <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-semibold border ${
                           !staff.active
                             ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                            : (staff.isPreRegistered || staff.uid.startsWith('staff_'))
+                            : isStaffPreReg
                               ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
                               : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                         }`}>
                           {!staff.active
                             ? '已停用'
-                            : (staff.isPreRegistered || staff.uid.startsWith('staff_'))
+                            : isStaffPreReg
                               ? 'AKTIF (Sedia Log Masuk)'
                               : '正常启用 (Disahkan)'}
                         </span>
@@ -1286,8 +1296,8 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                               onClick={() => handleToggleClerkAccess(staff)}
                               className={`p-1.5 rounded-lg text-xs transition ${
                                 staff.hasClerkAccess
-                                  ? 'bg-purple-950 text-purple-300 border border-purple-800'
-                                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                                   ? 'bg-purple-950 text-purple-300 border border-purple-800'
+                                   : 'text-slate-400 hover:text-white hover:bg-slate-800'
                               }`}
                               title={staff.hasClerkAccess ? '收回书记假期权限' : '授权书记假期权限'}
                             >
@@ -1315,7 +1325,8 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                       </td>
 
                     </tr>
-                  ))}
+                  );
+                  })}
                 </tbody>
               </table>
             </div>

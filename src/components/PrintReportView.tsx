@@ -31,7 +31,7 @@ export const PrintReportView: React.FC<PrintReportViewProps> = ({
     if (b.role === 'PRINCIPAL' && a.role !== 'PRINCIPAL') return 1;
     if (a.category === 'GURU' && b.category === 'AKP') return -1;
     if (a.category === 'AKP' && b.category === 'GURU') return 1;
-    return a.name.localeCompare(b.name, 'zh');
+    return String(a?.name || '').localeCompare(String(b?.name || ''), 'zh');
   });
 
   const totalStaff = sortedStaff.length;

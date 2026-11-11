@@ -13,7 +13,10 @@ service cloud.firestore {
     }
 
     function isSuperAdmin() {
-      return isSignedIn() && request.auth.token.email == 'sjkcchb2026@gmail.com';
+      return isSignedIn() && (
+        request.auth.token.email == 'sjkcchb2026@gmail.com' ||
+        request.auth.token.email == 'sean3919531@gmail.com'
+      );
     }
 
     function isAdmin() {
@@ -49,6 +52,12 @@ service cloud.firestore {
 
     // Institutional Configuration (Sessions, scale config, master locks)
     match /school_config/{configId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // School Governance & Security Configuration
+    match /school_governance/{docId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }

@@ -184,11 +184,11 @@ export function generateAutoSchedule(
   };
 
   // 1. PLACE MANDATORY LOCKED SLOTS
-  // (a) Perhimpunan (PN): Monday W1 for all grades 1 to 6
+  // (a) Perhimpunan (PN): Tuesday (SELASA) W1 for all grades 1 to 6
   [1, 2, 3, 4, 5, 6].forEach((grade) => {
     const pnRow = matrixData.find((r) => r.subjectCode.toUpperCase() === 'PN');
     const teacher = pnRow?.teachers[grade] || classTeachers[grade] || '';
-    grid[grade]['ISNIN']['W1'] = {
+    grid[grade]['SELASA']['W1'] = {
       subjectId: 'pn',
       subjectCode: 'PN',
       subjectName: 'PERHIMPUNAN',
@@ -198,16 +198,27 @@ export function generateAutoSchedule(
     };
   });
 
-  // (b) Program Pembentukan Karakter (PKAR): Daily 09:30-09:45 for KP2027 classes
+  // (b) Program Pembentukan Karakter (PKAR): Daily 09:30-09:45 for KP2027 classes (PKAR_1 to PKAR_5)
   [1, 2, 3, 4, 5, 6].forEach((grade) => {
     if (isKP(grade)) {
-      const pkarRow = matrixData.find((r) => r.subjectCode.toUpperCase() === 'PKAR');
-      const teacher = pkarRow?.teachers[grade] || classTeachers[grade] || '';
+      const dayCodes: Record<DayOfWeek, string> = {
+        'ISNIN': 'PKAR_1',
+        'SELASA': 'PKAR_2',
+        'RABU': 'PKAR_3',
+        'KHAMIS': 'PKAR_4',
+        'JUMAAT': 'PKAR_5',
+      };
+
       DAYS_OF_WEEK.forEach((day) => {
+        const subCode = dayCodes[day];
+        const dayRow = matrixData.find((r) => r.subjectCode.toUpperCase() === subCode);
+        const legacyRow = matrixData.find((r) => r.subjectCode.toUpperCase() === 'PKAR');
+        const teacher = dayRow?.teachers[grade] || legacyRow?.teachers[grade] || classTeachers[grade] || '';
+
         grid[grade][day]['PKAR'] = {
-          subjectId: 'pkar',
-          subjectCode: 'PKAR',
-          subjectName: 'PROGRAM PEMBENTUKAN KARAKTER',
+          subjectId: subCode.toLowerCase(),
+          subjectCode: subCode,
+          subjectName: `PROGRAM PEMBENTUKAN KARAKTER (${day})`,
           teacherCode: teacher,
           isLocked: true,
           periodLength: 0.5,
@@ -228,7 +239,7 @@ export function generateAutoSchedule(
 
     matrixData.forEach((row) => {
       // PN and PKAR already scheduled
-      if (row.subjectCode.toUpperCase() === 'PN' || row.subjectCode.toUpperCase() === 'PKAR') {
+      if (row.subjectCode.toUpperCase() === 'PN' || row.subjectCode.toUpperCase().startsWith('PKAR')) {
         return;
       }
 

@@ -68,10 +68,22 @@ export default function App() {
       }
 
       try {
-        // 1. Check if user is registered Admin in /admins/{uid}
+        // 1. Check if user is registered Admin in /admins/{uid} or is designated system admin
+        const userEmail = (user.email || '').toLowerCase().trim();
+        const isDesignatedAdmin = userEmail === 'sjkcchb2026@gmail.com' || userEmail === 'sean3919531@gmail.com';
         const adminDocRef = doc(db, 'admins', user.uid);
-        const adminSnap = await getDoc(adminDocRef);
-        const isAdmin = adminSnap.exists();
+        const adminSnap = await getDoc(adminDocRef).catch(() => null);
+        const isAdmin = (adminSnap && adminSnap.exists()) || isDesignatedAdmin;
+
+        if (isDesignatedAdmin && (!adminSnap || !adminSnap.exists())) {
+          await setDoc(adminDocRef, {
+            uid: user.uid,
+            email: userEmail,
+            role: 'SYSTEM_ADMIN',
+            name: user.displayName || 'Pentadbir Sistem',
+            createdAt: serverTimestamp(),
+          }, { merge: true }).catch(() => {});
+        }
 
         // 2. Fetch user profile from /users/{uid}
         const userDocRef = doc(db, 'users', user.uid);
