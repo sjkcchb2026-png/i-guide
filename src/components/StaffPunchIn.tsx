@@ -10,7 +10,10 @@ import {
   limit,
   doc,
   setDoc,
-  deleteDoc
+  deleteDoc,
+  updateDoc,
+  serverTimestamp,
+  writeBatch
 } from 'firebase/firestore';
 import { 
   getTodayDateString, 
@@ -278,9 +281,10 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
     }
   }
 
-  // Handle Check In via Secure Server Endpoint
+  // Handle Check In via Secure Direct Firebase Client SDK
   const handleCheckIn = async () => {
     if (!canCheckIn || isProcessing) return;
+    if (!currentUser?.uid) return;
     setFeedback(null);
     setIsProcessing(true);
 
@@ -288,36 +292,89 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
       // 1. Get high-precision GPS position (Strict verification)
       const location = await getCurrentGPSPosition();
 
-      // 2. Obtain caller ID token
-      const idToken = await auth.currentUser?.getIdToken();
-      if (!idToken) {
-        throw new Error('用户登录凭证已失效，请重新登录。');
+      // 2. Compute date and time
+      const todayStr = getTodayDateString();
+      const timeStr = getCurrentMalaysiaTimeString();
+
+      // 3. Double check state to prevent invalid slot increments
+      let slotCountToday = 0;
+      if (attendanceState?.lastDate === todayStr && typeof attendanceState.todaySlotCount === 'number') {
+        slotCountToday = attendanceState.todaySlotCount;
+      } else {
+        slotCountToday = todayRecords.filter((r) => r.status === 'COMPLETED').length;
       }
 
-      // 3. Post to authoritative backend (Enforces server UTC+8 time, mutex, max 2 slots)
-      const res = await fetch('/api/attendance/punch-in', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          latitude: location.latitude,
-          longitude: location.longitude,
-          accuracy: location.accuracy,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || '打卡未成功');
+      if (slotCountToday >= 2) {
+        throw new Error('今日已完成两组打卡（每日上限2组），禁止打第三组！\n(Maksimum 2 sesi sehari telah dicapai.)');
       }
 
-      // 4. Show success ONLY after backend confirms
+      if (attendanceState?.currentStatus === 'IN' || attendanceState?.activeSessionId) {
+        throw new Error('您上一组打卡尚未 Check Out，请先完成离校打卡。\n(Sila daftar keluar sesi terdahulu terlebih dahulu.)');
+      }
+
+      const newSlot = slotCountToday + 1;
+      const recordId = `${currentUser.uid}_${todayStr}_${newSlot}`;
+
+      // 4. Client-side Firestore batch write (Zero /api fetch dependency)
+      const batch = writeBatch(db);
+
+      const attendanceRecordData = {
+        id: recordId,
+        userId: currentUser.uid,
+        userName: currentUser.name || '',
+        userEmail: currentUser.email || '',
+        category: currentUser.category || 'GURU',
+        date: todayStr,
+        slot: newSlot,
+        status: 'IN',
+        checkInTime: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+
+      const geoRecordData = {
+        recordId,
+        userId: currentUser.uid,
+        date: todayStr,
+        slot: newSlot,
+        checkInLat: location.latitude,
+        checkInLng: location.longitude,
+        checkInAccuracy: Math.round(location.accuracy),
+        updatedAt: serverTimestamp(),
+      };
+
+      const userStateData = {
+        userId: currentUser.uid,
+        activeSessionId: recordId,
+        activeSessionDate: todayStr,
+        activeSessionSlot: newSlot,
+        lastDate: todayStr,
+        todaySlotCount: newSlot,
+        currentStatus: 'IN',
+        status: 'IN',
+        checkInTime: timeStr,
+        checkInTimestamp: serverTimestamp(),
+        checkOutTime: null,
+        checkOutTimestamp: null,
+        checkOutReason: null,
+        updatedAt: serverTimestamp(),
+      };
+
+      // Dual-write to attendance and attendance_records for backward/forward compatibility
+      batch.set(doc(db, 'attendance', recordId), attendanceRecordData);
+      batch.set(doc(db, 'attendance_records', recordId), attendanceRecordData);
+      batch.set(doc(db, 'attendance_geo', recordId), geoRecordData);
+      // Update both user_attendance_state/{uid} and user_attendance_state/{uid}_{today}
+      batch.set(doc(db, 'user_attendance_state', currentUser.uid), userStateData, { merge: true });
+      batch.set(doc(db, 'user_attendance_state', `${currentUser.uid}_${todayStr}`), userStateData, { merge: true });
+
+      await batch.commit();
+
+      // 5. Show success
       setFeedback({
         type: 'success',
         title: `Check In 成功！(Berjaya)`,
-        message: `第 ${data.slot || currentTargetSlot} 轮上班已登记。伺服器时间与 GPS 校验已保存。\n(Sesi ${data.slot || currentTargetSlot} bermula pada masa pelayan UTC+8.)`,
+        message: `第 ${newSlot} 轮上班已登记 (${timeStr})。GPS 校验与时间已成功保存。\n(Sesi ${newSlot} bermula pada masa Malaysia UTC+8.)`,
       });
     } catch (err: any) {
       console.error('Check In error:', err);
@@ -326,7 +383,7 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
         title: 'Check In 失败！(Gagal)',
         message: err instanceof GeolocationError 
           ? err.message 
-          : `打卡未成功：${err.message || '无法连接至云端服务器，请稍候再试。'}\n(Kehadiran belum direkodkan. Sila cuba lagi.)`,
+          : `打卡未成功：${err.message || '无法连接至云端数据库，请稍候再试。'}\n(Kehadiran belum direkodkan. Sila cuba lagi.)`,
       });
     } finally {
       setIsProcessing(false);
@@ -360,9 +417,10 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
     handleCheckOut();
   };
 
-  // Handle Check Out via Secure Server Endpoint
+  // Handle Check Out via Secure Direct Firebase Client SDK
   const handleCheckOut = async (earlyReason?: string) => {
     if (!canCheckOut || isProcessing) return;
+    if (!currentUser?.uid) return;
     setFeedback(null);
     setIsProcessing(true);
 
@@ -370,39 +428,66 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
       // 1. Get high-precision GPS position
       const location = await getCurrentGPSPosition();
 
-      // 2. Obtain caller ID token
-      const idToken = await auth.currentUser?.getIdToken();
-      if (!idToken) {
-        throw new Error('用户登录凭证已失效，请重新登录。');
+      // 2. Determine target session ID and slot
+      const todayStr = getTodayDateString();
+      const timeStr = getCurrentMalaysiaTimeString();
+      const sessionDate = attendanceState?.activeSessionDate || todayStr;
+      const targetSessionId = 
+        attendanceState?.activeSessionId ||
+        todayRecords.find((r) => r.status === 'IN')?.id ||
+        `${currentUser.uid}_${sessionDate}_${currentTargetSlot}`;
+      const targetSlot = attendanceState?.activeSessionSlot || currentTargetSlot || 1;
+
+      // 3. Client-side Firestore batch update (Zero /api fetch dependency)
+      const batch = writeBatch(db);
+
+      const attendanceUpdatePayload: Record<string, any> = {
+        userId: currentUser.uid,
+        status: 'COMPLETED',
+        checkOutTime: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      if (earlyReason && typeof earlyReason === 'string' && earlyReason.trim()) {
+        attendanceUpdatePayload.earlyCheckOutReason = earlyReason.trim();
+        attendanceUpdatePayload.isEarlyCheckOut = true;
       }
 
-      // 3. Post to authoritative backend
-      const res = await fetch('/api/attendance/punch-out', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          latitude: location.latitude,
-          longitude: location.longitude,
-          accuracy: location.accuracy,
-          earlyCheckOutReason: earlyReason || undefined,
-        }),
-      });
+      const geoUpdatePayload: Record<string, any> = {
+        userId: currentUser.uid,
+        checkOutLat: location.latitude,
+        checkOutLng: location.longitude,
+        checkOutAccuracy: Math.round(location.accuracy),
+        updatedAt: serverTimestamp(),
+      };
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Check Out 失败');
-      }
+      const userStateUpdatePayload: Record<string, any> = {
+        userId: currentUser.uid,
+        activeSessionId: null,
+        activeSessionDate: null,
+        currentStatus: 'OUT',
+        status: 'COMPLETED',
+        checkOutTime: timeStr,
+        checkOutTimestamp: serverTimestamp(),
+        checkOutReason: earlyReason?.trim() || null,
+        updatedAt: serverTimestamp(),
+      };
+
+      // Update attendance, attendance_records, attendance_geo, and user_attendance_state
+      batch.set(doc(db, 'attendance', targetSessionId), attendanceUpdatePayload, { merge: true });
+      batch.set(doc(db, 'attendance_records', targetSessionId), attendanceUpdatePayload, { merge: true });
+      batch.set(doc(db, 'attendance_geo', targetSessionId), geoUpdatePayload, { merge: true });
+      batch.set(doc(db, 'user_attendance_state', currentUser.uid), userStateUpdatePayload, { merge: true });
+      batch.set(doc(db, 'user_attendance_state', `${currentUser.uid}_${sessionDate}`), userStateUpdatePayload, { merge: true });
+
+      await batch.commit();
 
       // 4. Show success
       setFeedback({
         type: 'success',
         title: `Check Out 成功！(Berjaya)`,
         message: earlyReason 
-          ? `离校已成功登记（已记录理由：${earlyReason}）。辛苦了！\n(Sesi tamat. Alasan telah direkodkan.)`
-          : `离校已成功登记。辛苦了！\n(Sesi tamat. Rekod telah disimpan pada masa pelayan.)`,
+          ? `离校已成功登记（已记录理由：${earlyReason}，时间：${timeStr}）。辛苦了！\n(Sesi ${targetSlot} tamat. Alasan telah direkodkan.)`
+          : `离校已成功登记（时间：${timeStr}）。辛苦了！\n(Sesi ${targetSlot} tamat. Rekod telah disimpan.)`,
       });
     } catch (err: any) {
       console.error('Check Out error:', err);

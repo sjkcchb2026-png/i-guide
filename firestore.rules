@@ -207,6 +207,12 @@ service cloud.firestore {
       allow write: if isAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
     }
 
+    match /attendance_records/{recordId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+    }
+
     // Isolated GPS Coordinates: Readable by Admin; Writable by Admin or user punch
     match /attendance_geo/{recordId} {
       allow read: if isAdmin();
@@ -215,8 +221,8 @@ service cloud.firestore {
 
     // User Attendance State
     match /user_attendance_state/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow read: if isSignedIn() && (request.auth.uid == userId || userId.matches('^' + request.auth.uid + '.*') || (resource != null && resource.data.userId == request.auth.uid) || isAdmin());
+      allow write: if isSignedIn() && (request.auth.uid == userId || userId.matches('^' + request.auth.uid + '.*') || (request.resource != null && request.resource.data.userId == request.auth.uid) || isAdmin());
     }
 
     // School Calendar & Holidays

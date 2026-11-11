@@ -510,9 +510,17 @@
       "schema": { "$ref": "#/entities/AttendanceRecord" },
       "description": "Staff attendance clock-in and clock-out entries."
     },
+    "/attendance_records/{recordId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Staff attendance clock-in and clock-out entries."
+    },
     "/attendance_geo/{recordId}": {
       "schema": { "$ref": "#/entities/AttendanceGeo" },
       "description": "Protected GPS latitude, longitude, and accuracy."
+    },
+    "/user_attendance_state/{userId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Real-time user punch session and daily state tracking."
     },
     "/surat_masuk_records/{suratId}": {
       "schema": { "$ref": "#/entities/SuratMasukRecord" },
