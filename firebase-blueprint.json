@@ -1,0 +1,534 @@
+{
+  "entities": {
+    "SchoolSettings": {
+      "title": "SchoolSettings",
+      "description": "General settings of the school configured during principal setup.",
+      "type": "object",
+      "properties": {
+        "schoolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150,
+          "description": "Official name of the school."
+        },
+        "schoolCode": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Official school code."
+        },
+        "principalEmail": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Email address of the headmaster/principal."
+        },
+        "principalUid": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase Auth UID of the headmaster/principal."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when settings were initialized."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when settings were last modified."
+        }
+      },
+      "required": ["schoolName", "principalEmail", "principalUid"]
+    },
+    "SchoolConfig": {
+      "title": "SchoolConfig",
+      "description": "Institutional configuration for academic sessions, levels, and school profile.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 50 },
+        "schoolName": { "type": "string", "maxLength": 150 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
+        "currentAcademicYear": { "type": "string", "maxLength": 20 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolName", "schoolCode"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Designated administrator / principal reference record.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Admin email address."
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 20,
+          "description": "Role string, PRINCIPAL."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when admin entry was created."
+        }
+      },
+      "required": ["email", "role"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Staff profile record for Teachers (GURU), AKP and Principal.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 100 },
+        "category": { "type": "string", "enum": ["GURU", "AKP", "PRINCIPAL"] },
+        "role": { "type": "string", "enum": ["PRINCIPAL", "GURU", "AKP", "CLERK"] },
+        "hasClerkAccess": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "category", "role", "active"]
+    },
+    "Personnel": {
+      "title": "Personnel",
+      "description": "Authoritative Single Source of Truth for school personnel (Guru and AKP).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "gender": { "type": "string", "maxLength": 10 },
+        "ic": { "type": "string", "maxLength": 20 },
+        "maskedIc": { "type": "string", "maxLength": 20 },
+        "staffFileNo": { "type": "string", "maxLength": 50 },
+        "grade": { "type": "string", "maxLength": 20 },
+        "position": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "enum": ["GURU", "AKP"] },
+        "leadershipRole": { "type": "string", "maxLength": 50 },
+        "email": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "employmentStatus": { "type": "string", "maxLength": 30 },
+        "teachingStatus": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["name", "category"]
+    },
+    "Teacher": {
+      "title": "Teacher",
+      "description": "Academic teacher profile for class and subject assignments.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["name"]
+    },
+    "AcademicYear": {
+      "title": "AcademicYear",
+      "description": "Academic year session definition.",
+      "type": "object",
+      "properties": {
+        "year": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "maxLength": 20 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "endDate": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["year", "status"]
+    },
+    "Class": {
+      "title": "Class",
+      "description": "School classroom / cohort record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "level": { "type": "number" },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "classTeacherId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["name", "level", "academicYear"]
+    },
+    "SubjectAllocation": {
+      "title": "SubjectAllocation",
+      "description": "Subject teacher allocation to a class.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "classId": { "type": "string", "maxLength": 128 },
+        "subjectId": { "type": "string", "maxLength": 50 },
+        "teacherId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["academicYear", "classId", "subjectId", "teacherId"]
+    },
+    "GovernanceAssignment": {
+      "title": "GovernanceAssignment",
+      "description": "Administrative and committee governance assignments for personnel.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "personnelId": { "type": "string", "maxLength": 128 },
+        "portfolio": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["academicYear", "personnelId"]
+    },
+    "StudentMaster": {
+      "title": "StudentMaster",
+      "description": "Permanent student biographical record independent of academic year.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 50 },
+        "name": { "type": "string", "maxLength": 100 },
+        "ic": { "type": "string", "maxLength": 20 },
+        "gender": { "type": "string", "maxLength": 10 }
+      },
+      "required": ["name"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Yearly student class enrollment record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "student_id": { "type": "string", "maxLength": 50 },
+        "name": { "type": "string", "maxLength": 100 },
+        "class_id": { "type": "string", "maxLength": 100 },
+        "academic_year": { "type": "string", "maxLength": 20 },
+        "year": { "type": "number" },
+        "gender": { "type": "string", "maxLength": 10 }
+      },
+      "required": ["name", "class_id"]
+    },
+    "ImportSession": {
+      "title": "ImportSession",
+      "description": "Audit record of batch data imports with rollback capabilities.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "timestamp": { "type": "string" },
+        "importType": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "maxLength": 30 },
+        "actorEmail": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["id", "importType", "status"]
+    },
+    "RollbackRecord": {
+      "title": "RollbackRecord",
+      "description": "Previous state snapshots for reversible batch commits.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "maxLength": 128 },
+        "collection": { "type": "string", "maxLength": 50 },
+        "docId": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["sessionId", "collection", "docId"]
+    },
+    "AuditTrailEntry": {
+      "title": "AuditTrailEntry",
+      "description": "Immutable log of administrative operations.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string" },
+        "actor_id": { "type": "string", "maxLength": 128 },
+        "actor_name": { "type": "string", "maxLength": 100 },
+        "actor_role": { "type": "string", "maxLength": 50 },
+        "action_type": { "type": "string", "maxLength": 50 },
+        "layer": { "type": "number" },
+        "entity_id": { "type": "string", "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["timestamp", "action_type", "entity_id"]
+    },
+    "PbdResult": {
+      "title": "PbdResult",
+      "description": "Pentaksiran Bilik Darjah (PBD) assessment marks.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "student_id": { "type": "string", "maxLength": 128 },
+        "subject_id": { "type": "string", "maxLength": 50 },
+        "term": { "type": "string", "maxLength": 20 },
+        "tp": { "type": "number" },
+        "assessmentScaleId": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["student_id", "subject_id", "tp"]
+    },
+    "UasaResult": {
+      "title": "UasaResult",
+      "description": "Ujian Akhir Sesi Akademik (UASA) assessment marks.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "student_id": { "type": "string", "maxLength": 128 },
+        "subject_id": { "type": "string", "maxLength": 50 },
+        "grade": { "type": "string", "maxLength": 5 },
+        "mark": { "type": "number" }
+      },
+      "required": ["student_id", "subject_id"]
+    },
+    "KokoMembership": {
+      "title": "KokoMembership",
+      "description": "Kokurikulum student memberships.",
+      "type": "object",
+      "properties": {
+        "student_id": { "type": "string", "maxLength": 128 },
+        "uniform_id": { "type": "string", "maxLength": 128 },
+        "club_id": { "type": "string", "maxLength": 128 },
+        "sport_id": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["student_id"]
+    },
+    "KokoGroup": {
+      "title": "KokoGroup",
+      "description": "Kokurikulum unit definition.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["name", "category"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily attendance punch in and out record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 100 },
+        "userEmail": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "enum": ["GURU", "AKP", "PRINCIPAL"] },
+        "date": { "type": "string", "maxLength": 10 },
+        "slot": { "type": "number" },
+        "status": { "type": "string", "enum": ["IN", "COMPLETED"] },
+        "checkInTime": { "type": "string", "format": "date-time" },
+        "checkOutTime": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "userName", "userEmail", "category", "date", "slot", "status", "checkInTime"]
+    },
+    "AttendanceGeo": {
+      "title": "AttendanceGeo",
+      "description": "Sensitive GPS coordinates readable ONLY by Principal.",
+      "type": "object",
+      "properties": {
+        "recordId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 10 },
+        "checkInLat": { "type": "number" },
+        "checkInLng": { "type": "number" }
+      },
+      "required": ["recordId", "userId", "date", "checkInLat", "checkInLng"]
+    },
+    "SchoolTimetable": {
+      "title": "SchoolTimetable",
+      "description": "School timetable subject allocation matrix and master schedule grids.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "AcademicOPRReport": {
+      "title": "AcademicOPRReport",
+      "description": "One Page Reporting (OPR) records for Academic & PLC activities.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "reportType": { "type": "string", "maxLength": 20 },
+        "programName": { "type": "string", "maxLength": 200 },
+        "tarikh": { "type": "string", "maxLength": 20 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "MaklumanTask": {
+      "title": "MaklumanTask",
+      "description": "Makluman tasks, checklists, and WhatsApp evidence records.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 30 },
+        "dueDate": { "type": "string", "maxLength": 20 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "SuratMasukRecord": {
+      "title": "SuratMasukRecord",
+      "description": "Incoming official letter records managed by Pembantu Operasi (PO).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tarikhSurat": { "type": "string", "maxLength": 20 },
+        "tarikhTerima": { "type": "string", "maxLength": 20 },
+        "bulanTahunLabel": { "type": "string", "maxLength": 20 },
+        "perkara": { "type": "string", "maxLength": 500 },
+        "noRujukanLuar": { "type": "string", "maxLength": 150 },
+        "noFailSekolah": { "type": "string", "maxLength": 150 },
+        "tindakanCustomLabel": { "type": "string", "maxLength": 300 },
+        "actionMode": { "type": "string", "maxLength": 30 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "StaffUnavailability": {
+      "title": "StaffUnavailability",
+      "description": "Staff leave, official duty, or course unavailabilities auto-synced with daily attendance.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "endDate": { "type": "string", "maxLength": 20 },
+        "reasonCode": { "type": "string", "maxLength": 30 },
+        "reasonText": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "maxLength": 20 }
+      }
+    },
+    "ReliefAlert": {
+      "title": "ReliefAlert",
+      "description": "Alerts triggered by incoming letters requiring substitute teaching periods.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "suratId": { "type": "string", "maxLength": 128 },
+        "perkara": { "type": "string", "maxLength": 500 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "endDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "maxLength": 30 }
+      }
+    },
+    "ReliefSchedule": {
+      "title": "ReliefSchedule",
+      "description": "Assigned substitute teaching periods generated for absent teachers.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "alertId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 20 },
+        "perkara": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "/makluman_tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/MaklumanTask" },
+      "description": "School tasks, notices, and WhatsApp compliance evidence."
+    },
+    "/academic_opr_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/AcademicOPRReport" },
+      "description": "One Page Reporting records for Academic Panitia and PLC."
+    },
+    "/school_timetables/{docId}": {
+      "schema": { "$ref": "#/entities/SchoolTimetable" },
+      "description": "School teaching allocation matrix and timetable schedule grids."
+    },
+    "/school_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/SchoolSettings" },
+      "description": "School identification details."
+    },
+    "/school_config/{configId}": {
+      "schema": { "$ref": "#/entities/SchoolConfig" },
+      "description": "School institutional configuration."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "Master list of administrators/principals for rule lookups."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Staff member account profiles."
+    },
+    "/personnel/{personnelId}": {
+      "schema": { "$ref": "#/entities/Personnel" },
+      "description": "Authoritative Single Source of Truth for school personnel."
+    },
+    "/teachers/{teacherId}": {
+      "schema": { "$ref": "#/entities/Teacher" },
+      "description": "Academic teacher profile for class and subject assignments."
+    },
+    "/academic_years/{yearId}": {
+      "schema": { "$ref": "#/entities/AcademicYear" },
+      "description": "Academic year session definition."
+    },
+    "/classes/{classId}": {
+      "schema": { "$ref": "#/entities/Class" },
+      "description": "School classroom / cohort record."
+    },
+    "/subject_allocations/{allocId}": {
+      "schema": { "$ref": "#/entities/SubjectAllocation" },
+      "description": "Subject teacher allocation to a class."
+    },
+    "/governance_assignments/{gaId}": {
+      "schema": { "$ref": "#/entities/GovernanceAssignment" },
+      "description": "Administrative governance portfolios."
+    },
+    "/student_master/{studentId}": {
+      "schema": { "$ref": "#/entities/StudentMaster" },
+      "description": "Permanent student biographical record."
+    },
+    "/students/{enrollmentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Yearly student class enrollment record."
+    },
+    "/import_sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/ImportSession" },
+      "description": "Audit record of batch data imports."
+    },
+    "/rollback_records/{recordId}": {
+      "schema": { "$ref": "#/entities/RollbackRecord" },
+      "description": "Previous state snapshots for reversible batch commits."
+    },
+    "/audit_trail/{logId}": {
+      "schema": { "$ref": "#/entities/AuditTrailEntry" },
+      "description": "Immutable audit trail of system events."
+    },
+    "/pbd_results/{resultId}": {
+      "schema": { "$ref": "#/entities/PbdResult" },
+      "description": "PBD assessment marks."
+    },
+    "/uasa_results/{resultId}": {
+      "schema": { "$ref": "#/entities/UasaResult" },
+      "description": "UASA assessment marks."
+    },
+    "/koko_memberships/{memberId}": {
+      "schema": { "$ref": "#/entities/KokoMembership" },
+      "description": "Kokurikulum memberships."
+    },
+    "/koko_groups/{groupId}": {
+      "schema": { "$ref": "#/entities/KokoGroup" },
+      "description": "Kokurikulum units."
+    },
+    "/attendance/{recordId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Staff attendance clock-in and clock-out entries."
+    },
+    "/attendance_geo/{recordId}": {
+      "schema": { "$ref": "#/entities/AttendanceGeo" },
+      "description": "Protected GPS latitude, longitude, and accuracy."
+    },
+    "/surat_masuk_records/{suratId}": {
+      "schema": { "$ref": "#/entities/SuratMasukRecord" },
+      "description": "Official incoming letters registered by PO / clerk."
+    },
+    "/staff_unavailability/{unavailId}": {
+      "schema": { "$ref": "#/entities/StaffUnavailability" },
+      "description": "Staff duty out and leave records auto-reflected in daily attendance."
+    },
+    "/relief_alerts_from_surat/{alertId}": {
+      "schema": { "$ref": "#/entities/ReliefAlert" },
+      "description": "Substitute teacher alerts generated from official letters."
+    },
+    "/relief_schedules/{scheduleId}": {
+      "schema": { "$ref": "#/entities/ReliefSchedule" },
+      "description": "Assigned substitute timetable schedules and official slips."
+    }
+  }
+}

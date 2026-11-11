@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Kehadiran Sekolah (学校出勤网页系统)",
+  "description": "学校教职员（Guru 与 AKP）在线出勤打卡系统，支持多端打卡、GPS定位验证、账号批量管理与校长后台查询报表。",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

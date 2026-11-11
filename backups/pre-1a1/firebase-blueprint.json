@@ -1,0 +1,279 @@
+{
+  "entities": {
+    "SchoolSettings": {
+      "title": "SchoolSettings",
+      "description": "General settings of the school configured during principal setup.",
+      "type": "object",
+      "properties": {
+        "schoolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150,
+          "description": "Official name of the school."
+        },
+        "schoolCode": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Official school code."
+        },
+        "principalEmail": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Email address of the headmaster/principal."
+        },
+        "principalUid": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase Auth UID of the headmaster/principal."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when settings were initialized."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when settings were last modified."
+        }
+      },
+      "required": ["schoolName", "principalEmail", "principalUid"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Designated administrator / principal reference record.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Admin email address."
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 20,
+          "description": "Role string, PRINCIPAL."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when admin entry was created."
+        }
+      },
+      "required": ["email", "role"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Staff profile record for Teachers (GURU), AKP and Principal. Initial passwords are never stored.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase Auth UID of user."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Full official name of teacher or staff member."
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 100,
+          "description": "DELIMa email or work email address used for login."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["GURU", "AKP", "PRINCIPAL"],
+          "description": "Classification: GURU if ends with @moe-dl.edu.my, otherwise AKP."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["PRINCIPAL", "GURU", "AKP", "CLERK"],
+          "description": "Application permission role."
+        },
+        "hasClerkAccess": {
+          "type": "boolean",
+          "description": "Flag granting clerk holiday management permissions."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether the staff member account is active."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp."
+        }
+      },
+      "required": ["uid", "name", "email", "category", "role", "active"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily attendance punch in and out record. Does NOT contain coordinates or accuracy (isolated in AttendanceGeo).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Unique record document ID."
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "UID of the staff member."
+        },
+        "userName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Name of the staff member."
+        },
+        "userEmail": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Email of the staff member."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["GURU", "AKP", "PRINCIPAL"],
+          "description": "Staff category."
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 10,
+          "description": "Attendance date in YYYY-MM-DD Malaysia local format (UTC+8)."
+        },
+        "slot": {
+          "type": "number",
+          "description": "Session slot 1 or 2 (maximum 2 per day)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["IN", "COMPLETED"],
+          "description": "Status: IN when checked in, COMPLETED when checked out."
+        },
+        "checkInTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Check in timestamp."
+        },
+        "checkOutTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Check out timestamp."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "System or session transition notes."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp."
+        }
+      },
+      "required": ["id", "userId", "userName", "userEmail", "category", "date", "slot", "status", "checkInTime"]
+    },
+    "AttendanceGeo": {
+      "title": "AttendanceGeo",
+      "description": "Sensitive GPS coordinates and accuracy data readable ONLY by Principal.",
+      "type": "object",
+      "properties": {
+        "recordId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Corresponding attendance record ID."
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Staff UID."
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 10,
+          "description": "Date string YYYY-MM-DD."
+        },
+        "slot": {
+          "type": "number",
+          "description": "Session slot 1 or 2."
+        },
+        "checkInLat": {
+          "type": "number",
+          "description": "Check in latitude."
+        },
+        "checkInLng": {
+          "type": "number",
+          "description": "Check in longitude."
+        },
+        "checkInAccuracy": {
+          "type": "number",
+          "description": "Check in accuracy in meters."
+        },
+        "checkOutLat": {
+          "type": "number",
+          "description": "Check out latitude."
+        },
+        "checkOutLng": {
+          "type": "number",
+          "description": "Check out longitude."
+        },
+        "checkOutAccuracy": {
+          "type": "number",
+          "description": "Check out accuracy in meters."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp."
+        }
+      },
+      "required": ["recordId", "userId", "date", "slot", "checkInLat", "checkInLng", "checkInAccuracy"]
+    }
+  },
+  "firestore": {
+    "/school_settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/SchoolSettings"
+      },
+      "description": "School identification details."
+    },
+    "/admins/{userId}": {
+      "schema": {
+        "$ref": "#/entities/Admin"
+      },
+      "description": "Master list of administrators/principals for rule lookups."
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Staff member account profiles. No plaintext passwords stored."
+    },
+    "/attendance/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/AttendanceRecord"
+      },
+      "description": "Staff attendance clock-in and clock-out entries without GPS coordinates."
+    },
+    "/attendance_geo/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/AttendanceGeo"
+      },
+      "description": "Protected GPS latitude, longitude, and accuracy readable only by the Principal."
+    }
+  }
+}

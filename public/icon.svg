@@ -1,0 +1,22 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512'>
+    <defs>
+      <linearGradient id='grad' x1='0%' y1='0%' x2='100%' y2='100%'>
+        <stop offset='0%' stop-color='#1d4ed8' />
+        <stop offset='100%' stop-color='#0f172a' />
+      </linearGradient>
+      <filter id='shadow' x='-10%' y='-10%' width='120%' height='120%'>
+        <feDropShadow dx='0' dy='8' stdDeviation='12' flood-opacity='0.4'/>
+      </filter>
+    </defs>
+    <rect width='512' height='512' rx='110' fill='url(#grad)' />
+    <g transform='translate(24, 24)' filter='url(#shadow)'>
+      <!-- School Crest / Shield -->
+      <path d='M 232 40 L 404 90 C 404 240, 232 360, 232 400 C 232 360, 60 240, 60 90 Z' fill='#2563eb' stroke='#93c5fd' stroke-width='8'/>
+      <!-- Inner clock & checkmark icon -->
+      <circle cx='232' cy='210' r='90' fill='#0f172a' stroke='#60a5fa' stroke-width='8'/>
+      <!-- Checkmark -->
+      <path d='M 187 210 L 222 245 L 277 175' fill='none' stroke='#34d399' stroke-width='16' stroke-linecap='round' stroke-linejoin='round'/>
+      <!-- School label -->
+      <text x='232' y='340' fill='#f8fafc' font-family='Arial, sans-serif' font-weight='bold' font-size='32' text-anchor='middle' letter-spacing='2'>SJK(C) CHB</text>
+    </g>
+  </svg>

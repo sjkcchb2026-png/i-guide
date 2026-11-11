@@ -1,0 +1,1208 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Mail,
+  Plus,
+  Printer,
+  Clock,
+  Send,
+  Search,
+  UserCheck,
+  FolderOpen,
+  CheckCircle2,
+  Trash2,
+  AlertCircle,
+  MessageSquare,
+  FileCheck,
+  Eye,
+  X
+} from 'lucide-react';
+import {
+  collection,
+  doc,
+  setDoc,
+  deleteDoc,
+  onSnapshot,
+  getDocs
+} from 'firebase/firestore';
+import { db, auth } from '../firebase';
+import { TeacherProfile } from '../types/admin';
+import { SchoolProfile, SchoolAcademicAssignment } from '../types/schoolData';
+
+export type ArahanTindakanType =
+  | 'UNTUK_TINDAKAN'
+  | 'SILA_URUS'
+  | 'SILA_BINCANG_DENGAN_GB'
+  | 'UNTUK_SIMPANAN_FAIL'
+  | 'UNTUK_DIPAMERKAN';
+
+export type SuratActionMode =
+  | 'UNTUK_TINDAKAN'        // 需采取行动 (强制截止日期)
+  | 'SILA_URUS'             // 请处理/办理 (强制截止日期)
+  | 'PERLU_HADIR'           // 需出席外出课程/会议 (自动 Keberadaan + Jadual Ganti)
+  | 'HANTAR_LAPORAN'        // 需交报告/数据 (强制截止日期)
+  | 'HADIR_DAN_TINDAKAN'    // 既需出席又需交报告/行动 (强制截止日期 + 自动代课)
+  | 'SILA_BINCANG_GB'       // 请与校长商讨 (自动通知老师与校长)
+  | 'UNTUK_DIPAMERKAN'      // 张贴展示
+  | 'UNTUK_SIMPANAN_FAIL';  // 归档备查
+
+export interface SuratMasukRecord {
+  id: string;
+  tarikhSurat: string;
+  tarikhTerima: string;
+  bulanTahunLabel: string;
+  perkara: string;
+  noRujukanLuar: string;
+  noFailSekolah: string;
+  tindakanTeacherIds: string[];
+  arahanTindakan: ArahanTindakanType;
+  tindakanCustomLabel: string;
+  actionMode: SuratActionMode;
+  tarikhHadirMula: string;
+  tarikhHadirTamat: string;
+  masaHadir: string;
+  lokasiHadir: string;
+  jenisKeberadaan: 'KURSUS' | 'URUSAN_RASMI';
+  perluJadualGanti: boolean;
+  tarikhAkhirLaporan: string; // 用于 Untuk tindakan, Sila urus, Hantar laporan 的必填截止日期
+  catatanLaporan: string;
+  linkedMaklumanIds: string[];
+  linkedUnavailabilityIds: string[];
+  linkedReliefAlertId: string;
+  createdByUid: string;
+  createdByName: string;
+  createdAt: string;
+}
+
+interface SuratMasukManagerViewProps {
+  currentUid?: string;
+  currentUserName?: string;
+  allTeachers?: TeacherProfile[];
+  academicAssignments?: SchoolAcademicAssignment[];
+  schoolProfile?: SchoolProfile | null;
+  addToast?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
+}
+
+const MALAY_MONTHS = [
+  'JANUARI', 'FEBRUARI', 'MAC', 'APRIL', 'MEI', 'JUN',
+  'JULAI', 'OGOS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DISEMBER'
+];
+
+const ARAHAN_LABELS: Record<ArahanTindakanType, string> = {
+  UNTUK_TINDAKAN: 'Untuk tindakan',
+  SILA_URUS: 'Sila urus',
+  SILA_BINCANG_DENGAN_GB: 'Sila bincang dengan GB',
+  UNTUK_SIMPANAN_FAIL: 'Untuk simpanan fail',
+  UNTUK_DIPAMERKAN: 'Untuk dipamerkan',
+};
+
+const LOCAL_STORAGE_KEY = 'isepadu_surat_masuk_cache_v2';
+
+// 递归清除所有 undefined，防止 Firestore 保存失败
+function cleanFirestorePayload<T extends Record<string, any>>(obj: T): T {
+  const cleaned: Record<string, any> = {};
+  Object.keys(obj).forEach((key) => {
+    const val = obj[key];
+    if (val === undefined) {
+      cleaned[key] = '';
+    } else if (Array.isArray(val)) {
+      cleaned[key] = val.filter((v) => v !== undefined);
+    } else if (val !== null && typeof val === 'object' && !(val instanceof Date)) {
+      cleaned[key] = cleanFirestorePayload(val);
+    } else {
+      cleaned[key] = val;
+    }
+  });
+  return cleaned as T;
+}
+
+const formatDotDate = (yyyyMmDd?: string): string => {
+  if (!yyyyMmDd) return '-';
+  const parts = yyyyMmDd.split('-');
+  if (parts.length !== 3) return yyyyMmDd;
+  return `${parts[2]}.${parts[1]}.${parts[0]}`;
+};
+
+const formatWhatsAppPhone = (rawPhone?: string): string => {
+  if (!rawPhone) return '';
+  const digits = rawPhone.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('60')) return digits;
+  if (digits.startsWith('0')) return `6${digits}`;
+  return `60${digits}`;
+};
+
+export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
+  currentUid,
+  currentUserName,
+  allTeachers = [],
+  academicAssignments = [],
+  schoolProfile = null,
+  addToast,
+}) => {
+  const [records, setRecords] = useState<SuratMasukRecord[]>(() => {
+    try {
+      const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [fallbackTeachers, setFallbackTeachers] = useState<TeacherProfile[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [bannerMsg, setBannerMsg] = useState<{ text: string; type: 'success' | 'warning' } | null>(null);
+
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [viewMode, setViewMode] = useState<'SENARAI' | 'CETAK_WORD'>('SENARAI');
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [tarikhSurat, setTarikhSurat] = useState<string>(todayStr);
+  const [tarikhTerima, setTarikhTerima] = useState<string>(todayStr);
+  const [perkara, setPerkara] = useState<string>('');
+  const [noRujukanLuar, setNoRujukanLuar] = useState<string>('PPDMKH.');
+  const [noFailSekolah, setNoFailSekolah] = useState<string>('Sjkcch.');
+  const [selectedTeacherIds, setSelectedTeacherIds] = useState<string[]>([]);
+  const [arahanTindakan, setArahanTindakan] = useState<ArahanTindakanType>('UNTUK_TINDAKAN');
+  const [customTindakanText, setCustomTindakanText] = useState<string>('');
+  const [actionMode, setActionMode] = useState<SuratActionMode>('UNTUK_TINDAKAN');
+
+  const [tarikhHadirMula, setTarikhHadirMula] = useState<string>(todayStr);
+  const [tarikhHadirTamat, setTarikhHadirTamat] = useState<string>(todayStr);
+  const [masaHadir, setMasaHadir] = useState<string>('SEPANJANG_HARI');
+  const [lokasiHadir, setLokasiHadir] = useState<string>('PPD Mukah / PKG');
+  const [jenisKeberadaan, setJenisKeberadaan] = useState<'KURSUS' | 'URUSAN_RASMI'>('KURSUS');
+  const [perluJadualGanti, setPerluJadualGanti] = useState<boolean>(true);
+
+  const [tarikhAkhirLaporan, setTarikhAkhirLaporan] = useState<string>(todayStr);
+  const [catatanLaporan, setCatatanLaporan] = useState<string>('');
+
+  const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
+    setBannerMsg({ text: msg, type: type === 'warning' ? 'warning' : 'success' });
+    setTimeout(() => setBannerMsg(null), 5000);
+    if (typeof addToast === 'function') {
+      addToast(msg, type);
+    }
+  };
+
+  useEffect(() => {
+    if (allTeachers && allTeachers.length > 0) return;
+    async function loadStaffList() {
+      try {
+        const snap = await getDocs(collection(db, 'teacher_profiles'));
+        const list: TeacherProfile[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as any;
+          list.push({
+            teacherId: data.teacherId || d.id,
+            fullName: data.fullName || data.name || d.id,
+            delimaEmail: data.delimaEmail || data.email || '',
+            phone: data.phone || '',
+            gender: data.gender || '',
+            schoolCode: data.schoolCode || 'YCC3404',
+            status: data.status || 'ACTIVE',
+            position: data.position || data.category || 'GURU',
+          });
+        });
+        if (list.length > 0) setFallbackTeachers(list);
+      } catch (e) {
+        console.warn('Fallback staff load skipped:', e);
+      }
+    }
+    loadStaffList();
+  }, [allTeachers]);
+
+  const activeTeachers = useMemo(() => {
+    const source = allTeachers && allTeachers.length > 0 ? allTeachers : fallbackTeachers;
+    return source.filter((t) => t.status !== 'INACTIVE');
+  }, [allTeachers, fallbackTeachers]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, 'surat_masuk_records'),
+      (snap) => {
+        const list: SuratMasukRecord[] = [];
+        snap.forEach((d) =>
+          list.push({ id: d.id, ...(d.data() as Omit<SuratMasukRecord, 'id'>) })
+        );
+        list.sort((a, b) => (a.tarikhSurat || '').localeCompare(b.tarikhSurat || ''));
+        setRecords(list);
+        try {
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list));
+        } catch {}
+        setLoading(false);
+      },
+      (err) => {
+        console.warn('Firestore listener fallback:', err);
+        setLoading(false);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  // 判断当前所选的 Tindakan 是否强制要求填写截止日期 (Untuk tindakan / Sila urus / Hantar laporan)
+  const isDeadlineMandatory = useMemo(() => {
+    return (
+      arahanTindakan === 'UNTUK_TINDAKAN' ||
+      arahanTindakan === 'SILA_URUS' ||
+      actionMode === 'UNTUK_TINDAKAN' ||
+      actionMode === 'SILA_URUS' ||
+      actionMode === 'HANTAR_LAPORAN' ||
+      actionMode === 'HADIR_DAN_TINDAKAN'
+    );
+  }, [arahanTindakan, actionMode]);
+
+  const isHadirActive = useMemo(() => {
+    return actionMode === 'PERLU_HADIR' || actionMode === 'HADIR_DAN_TINDAKAN';
+  }, [actionMode]);
+
+  // 同步 Arahan Tindakan 快捷按钮与下方 Automasi 模式
+  const handleSelectArahan = (arahan: ArahanTindakanType) => {
+    setArahanTindakan(arahan);
+    if (arahan === 'UNTUK_TINDAKAN') {
+      if (!isHadirActive) setActionMode('UNTUK_TINDAKAN');
+    } else if (arahan === 'SILA_URUS') {
+      if (!isHadirActive) setActionMode('SILA_URUS');
+    } else if (arahan === 'SILA_BINCANG_DENGAN_GB') {
+      setActionMode('SILA_BINCANG_GB');
+    } else if (arahan === 'UNTUK_DIPAMERKAN') {
+      setActionMode('UNTUK_DIPAMERKAN');
+    } else if (arahan === 'UNTUK_SIMPANAN_FAIL') {
+      setActionMode('UNTUK_SIMPANAN_FAIL');
+    }
+  };
+
+  const handleSelectActionMode = (mode: SuratActionMode) => {
+    setActionMode(mode);
+    if (mode === 'UNTUK_TINDAKAN') setArahanTindakan('UNTUK_TINDAKAN');
+    else if (mode === 'SILA_URUS') setArahanTindakan('SILA_URUS');
+    else if (mode === 'SILA_BINCANG_GB') setArahanTindakan('SILA_BINCANG_DENGAN_GB');
+    else if (mode === 'UNTUK_DIPAMERKAN') setArahanTindakan('UNTUK_DIPAMERKAN');
+    else if (mode === 'UNTUK_SIMPANAN_FAIL') setArahanTindakan('UNTUK_SIMPANAN_FAIL');
+    else if (mode === 'HANTAR_LAPORAN' || mode === 'HADIR_DAN_TINDAKAN') {
+      if (arahanTindakan !== 'UNTUK_TINDAKAN' && arahanTindakan !== 'SILA_URUS') {
+        setArahanTindakan('UNTUK_TINDAKAN');
+      }
+    }
+  };
+
+  const filteredRecords = useMemo(() => {
+    return records.filter((r) => {
+      const matchMonth = !selectedMonth || r.bulanTahunLabel === selectedMonth;
+      const q = searchQuery.toLowerCase().trim();
+      const matchQuery =
+        !q ||
+        (r.perkara || '').toLowerCase().includes(q) ||
+        (r.noRujukanLuar || '').toLowerCase().includes(q) ||
+        (r.noFailSekolah || '').toLowerCase().includes(q) ||
+        (r.tindakanCustomLabel || '').toLowerCase().includes(q);
+      return matchMonth && matchQuery;
+    });
+  }, [records, selectedMonth, searchQuery]);
+
+  const formattedMonthHeading = useMemo(() => {
+    if (!selectedMonth) return 'SURAT MASUK SEKOLAH';
+    const [yr, mo] = selectedMonth.split('-');
+    const mIdx = parseInt(mo, 10) - 1;
+    const mName = MALAY_MONTHS[mIdx] || mo;
+    return `SURAT MASUK BULAN ${mName} ${yr}`;
+  }, [selectedMonth]);
+
+  const handleSaveSuratMasuk = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!perkara.trim()) {
+      notify('Sila masukkan Perkara / Tajuk Surat.', 'warning');
+      return;
+    }
+
+    // 强制校验：当选择 Untuk tindakan 或 Sila urus 时，必须填写截止日期！
+    if (isDeadlineMandatory && !tarikhAkhirLaporan.trim()) {
+      notify(
+        'Wajib diisi: Sila tetapkan Tarikh Akhir (Deadline) bagi surat berstatus "Untuk tindakan" atau "Sila urus"!',
+        'warning'
+      );
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const safeUid = currentUid || auth.currentUser?.uid || 'PO_ADMIN';
+      const safeUserName =
+        currentUserName || auth.currentUser?.displayName || auth.currentUser?.email || 'Pembantu Operasi';
+
+      const suratId = `surat_${Date.now()}`;
+      const bulanLabel = (tarikhTerima || todayStr).slice(0, 7);
+
+      const selectedNames = selectedTeacherIds
+        .map((id) => activeTeachers.find((t) => t.teacherId === id)?.fullName)
+        .filter(Boolean) as string[];
+
+      const baseNames =
+        customTindakanText.trim() ||
+        (selectedNames.length > 0
+          ? selectedNames.join('\n')
+          : arahanTindakan === 'UNTUK_SIMPANAN_FAIL'
+          ? 'FAIL SEKOLAH'
+          : arahanTindakan === 'UNTUK_DIPAMERKAN'
+          ? 'PAPAN KENYATAAN'
+          : 'GURU BESAR');
+
+      const arahanLabelUpper = ARAHAN_LABELS[arahanTindakan].toUpperCase();
+      const deadlineSuffix =
+        isDeadlineMandatory && tarikhAkhirLaporan
+          ? `\n(TARIKH AKHIR: ${formatDotDate(tarikhAkhirLaporan)})`
+          : '';
+
+      const finalTindakanLabel = `${baseNames.toUpperCase()}\n[${arahanLabelUpper}]${deadlineSuffix}`;
+
+      const linkedMaklumanIds: string[] = [];
+      const linkedUnavailabilityIds: string[] = [];
+      let linkedReliefAlertId = '';
+
+      if (isHadirActive) {
+        linkedMaklumanIds.push(`makluman_hadir_${suratId}`);
+        selectedTeacherIds.forEach((tId) => {
+          linkedUnavailabilityIds.push(`unavail_${suratId}_${tId}`);
+        });
+        if (perluJadualGanti && selectedTeacherIds.length > 0) {
+          linkedReliefAlertId = `relief_surat_${suratId}`;
+        }
+      }
+
+      if (isDeadlineMandatory || actionMode === 'SILA_BINCANG_GB' || actionMode === 'UNTUK_DIPAMERKAN') {
+        linkedMaklumanIds.push(`makluman_tindakan_${suratId}`);
+      }
+
+      const newRecord: SuratMasukRecord = cleanFirestorePayload({
+        id: suratId,
+        tarikhSurat: tarikhSurat || todayStr,
+        tarikhTerima: tarikhTerima || todayStr,
+        bulanTahunLabel: bulanLabel,
+        perkara: perkara.trim().toUpperCase(),
+        noRujukanLuar: noRujukanLuar.trim(),
+        noFailSekolah: noFailSekolah.trim(),
+        tindakanTeacherIds: selectedTeacherIds,
+        arahanTindakan,
+        tindakanCustomLabel: finalTindakanLabel,
+        actionMode,
+        tarikhHadirMula: isHadirActive ? tarikhHadirMula : '',
+        tarikhHadirTamat: isHadirActive ? (tarikhHadirTamat || tarikhHadirMula) : '',
+        masaHadir: isHadirActive ? masaHadir : '',
+        lokasiHadir: isHadirActive ? lokasiHadir.trim() : '',
+        jenisKeberadaan: isHadirActive ? jenisKeberadaan : 'KURSUS',
+        perluJadualGanti: isHadirActive ? Boolean(perluJadualGanti) : false,
+        tarikhAkhirLaporan: isDeadlineMandatory ? tarikhAkhirLaporan : '',
+        catatanLaporan: catatanLaporan.trim(),
+        linkedMaklumanIds,
+        linkedUnavailabilityIds,
+        linkedReliefAlertId,
+        createdByUid: safeUid,
+        createdByName: safeUserName,
+        createdAt: new Date().toISOString(),
+      });
+
+      // 1. 立即更新前端状态与本地缓存
+      setRecords((prev) => {
+        const updated = [...prev, newRecord].sort((a, b) =>
+          (a.tarikhSurat || '').localeCompare(b.tarikhSurat || '')
+        );
+        try {
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      setSelectedMonth(bulanLabel);
+
+      // 2. 保存主记录至 Firestore
+      await setDoc(doc(db, 'surat_masuk_records', suratId), newRecord);
+
+      // 3. 若包含出席外出 (PERLU_HADIR / HADIR_DAN_TINDAKAN)
+      if (isHadirActive) {
+        const maklumanHadirId = `makluman_hadir_${suratId}`;
+        await setDoc(
+          doc(db, 'makluman_tasks', maklumanHadirId),
+          cleanFirestorePayload({
+            id: maklumanHadirId,
+            title: `[SURAT MASUK - HADIR] ${perkara.trim().toUpperCase()}`,
+            description: `No. Ruj: ${noRujukanLuar} (${noFailSekolah}) | Lokasi: ${lokasiHadir} | Arahan: ${ARAHAN_LABELS[arahanTindakan]}`,
+            domain: 'PENTADBIRAN',
+            category: jenisKeberadaan === 'KURSUS' ? 'KURSUS' : 'MESYUARAT',
+            source: 'AD_HOC',
+            dueDate: tarikhHadirMula,
+            dueTime: '08:00',
+            location: lokasiHadir.trim(),
+            tindakanLabel: finalTindakanLabel.replace(/\n/g, ' '),
+            priority: 'TINGGI',
+            targetType: selectedTeacherIds.length > 0 ? 'GURU_TERPILIH' : 'SEMUA_GURU',
+            targetTeacherIds: selectedTeacherIds,
+            completions: {},
+            whatsappLogs: {},
+            createdByTeacherId: safeUid,
+            createdByName: `${safeUserName} (Daftar Surat Masuk)`,
+            createdAt: new Date().toISOString(),
+          })
+        ).catch((err) => console.warn('Sync makluman_hadir warning:', err));
+
+        for (const tId of selectedTeacherIds) {
+          const noticeId = `unavail_${suratId}_${tId}`;
+          await setDoc(
+            doc(db, 'staff_unavailability', noticeId),
+            cleanFirestorePayload({
+              id: noticeId,
+              noticeId,
+              teacherId: tId,
+              startDate: tarikhHadirMula,
+              endDate: tarikhHadirTamat || tarikhHadirMula,
+              timeType: 'SEPANJANG_HARI',
+              startTime: '07:15',
+              endTime: '13:15',
+              reasonCode: jenisKeberadaan,
+              reasonText: `[SURAT MASUK] ${perkara.trim().toUpperCase()} (${noRujukanLuar})`,
+              notes: `Dijana automatik melalui Daftar Surat Masuk (${noFailSekolah}). Lokasi: ${lokasiHadir}`,
+              status: 'PUBLISHED',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              createdByUid: safeUid,
+            })
+          ).catch((err) => console.warn('Sync staff_unavailability warning:', err));
+        }
+
+        if (perluJadualGanti && selectedTeacherIds.length > 0) {
+          const affectedClasses = academicAssignments
+            .filter((asg) => selectedTeacherIds.includes(asg.teacherId) && asg.status !== 'INACTIVE')
+            .map((asg) => ({
+              teacherId: asg.teacherId || '',
+              classId: asg.classId || '',
+              className: asg.className || '',
+              subjectCode: asg.subjectCode || '',
+              subjectName: asg.subjectName || '',
+              weeklyPeriods: Number(asg.weeklyPeriods || 0),
+            }));
+
+          await setDoc(
+            doc(db, 'relief_alerts_from_surat', linkedReliefAlertId),
+            cleanFirestorePayload({
+              id: linkedReliefAlertId,
+              suratId,
+              perkara: perkara.trim().toUpperCase(),
+              noRujukanLuar: noRujukanLuar.trim(),
+              startDate: tarikhHadirMula,
+              endDate: tarikhHadirTamat || tarikhHadirMula,
+              absentTeacherIds: selectedTeacherIds,
+              affectedClasses,
+              status: 'PERLU_JADUAL_GANTI',
+              createdAt: new Date().toISOString(),
+            })
+          ).catch((err) => console.warn('Sync relief_alerts warning:', err));
+        }
+      }
+
+      // 4. 若为 Untuk tindakan / Sila urus / Hantar laporan / Sila bincang dengan GB / Untuk dipamerkan
+      if (isDeadlineMandatory || actionMode === 'SILA_BINCANG_GB' || actionMode === 'UNTUK_DIPAMERKAN') {
+        const maklumanTindakanId = `makluman_tindakan_${suratId}`;
+        const prefixTag =
+          actionMode === 'SILA_BINCANG_GB'
+            ? '[SILA BINCANG DENGAN GB]'
+            : actionMode === 'UNTUK_DIPAMERKAN'
+            ? '[UNTUK DIPAMERKAN]'
+            : `[${arahanLabelUpper}]`;
+
+        await setDoc(
+          doc(db, 'makluman_tasks', maklumanTindakanId),
+          cleanFirestorePayload({
+            id: maklumanTindakanId,
+            title: `${prefixTag} ${perkara.trim().toUpperCase()}`,
+            description: `Ruj. Surat: ${noRujukanLuar} (${noFailSekolah}) | Arahan: ${ARAHAN_LABELS[arahanTindakan]}${catatanLaporan ? ` | Catatan: ${catatanLaporan}` : ''}`,
+            domain: 'PENTADBIRAN',
+            category: 'TUGASAN',
+            source: 'AD_HOC',
+            dueDate: isDeadlineMandatory ? tarikhAkhirLaporan : todayStr,
+            dueTime: '16:00',
+            location: actionMode === 'SILA_BINCANG_GB' ? 'Bilik Guru Besar' : 'Pejabat Sekolah',
+            tindakanLabel: finalTindakanLabel.replace(/\n/g, ' '),
+            priority: 'TINGGI',
+            targetType: selectedTeacherIds.length > 0 ? 'GURU_TERPILIH' : 'SEMUA_GURU',
+            targetTeacherIds: selectedTeacherIds,
+            completions: {},
+            whatsappLogs: {},
+            createdByTeacherId: safeUid,
+            createdByName: `${safeUserName} (Daftar Surat Masuk)`,
+            createdAt: new Date().toISOString(),
+          })
+        ).catch((err) => console.warn('Sync makluman_tindakan warning:', err));
+      }
+
+      setIsModalOpen(false);
+      setPerkara('');
+      setCustomTindakanText('');
+      setSelectedTeacherIds([]);
+      notify(
+        `Surat Masuk [${ARAHAN_LABELS[arahanTindakan]}] berjaya disimpan & diselaraskan!`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Save Surat Masuk error:', err);
+      notify(`Disimpan dalam storan tempatan (${err.message})`, 'warning');
+      setIsModalOpen(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteSurat = async (id: string) => {
+    setRecords((prev) => {
+      const next = prev.filter((r) => r.id !== id);
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    try {
+      await deleteDoc(doc(db, 'surat_masuk_records', id));
+      notify('Rekod surat masuk telah dipadam.', 'info');
+    } catch (e) {
+      console.warn('Delete error:', e);
+    }
+  };
+
+  const handleWhatsAppForSurat = (rec: SuratMasukRecord) => {
+    const firstTeacher = activeTeachers.find((t) => rec.tindakanTeacherIds.includes(t.teacherId));
+    const cleanPhone = formatWhatsAppPhone(firstTeacher?.phone);
+
+    if (!cleanPhone) {
+      notify(
+        'Sila pilih guru yang mempunyai nombor telefon berdaftar untuk menghantar WhatsApp.',
+        'warning'
+      );
+      return;
+    }
+
+    const schoolName = schoolProfile?.schoolName || 'SJK(C) CHUNG HUA BALINGIAN';
+    const arahanText = ARAHAN_LABELS[rec.arahanTindakan || 'UNTUK_TINDAKAN'].toUpperCase();
+    const lines = [
+      `*[MAKLUMAN SURAT MASUK RASMI — ${schoolName}]*`,
+      `📌 *Perkara:* ${rec.perkara}`,
+      `📄 *No. Ruj. Surat:* ${rec.noRujukanLuar}`,
+      `📁 *No. Fail Sekolah:* ${rec.noFailSekolah}`,
+      `📅 *Tarikh Surat:* ${formatDotDate(rec.tarikhSurat)}`,
+      `📝 *Arahan / Minit:* *${arahanText}*`,
+      rec.tarikhAkhirLaporan
+        ? `⏰ *Tarikh Akhir Tindakan / Laporan:* *${formatDotDate(rec.tarikhAkhirLaporan)}*`
+        : '',
+      rec.tarikhHadirMula
+        ? `🗓️ *Tarikh Hadir:* ${rec.tarikhHadirMula} (${rec.lokasiHadir || '-'})`
+        : '',
+      ``,
+      `Sila semak dan tandakan selesai (✔) dalam Paparan Makluman iSEPADU. Terima kasih.`,
+    ].filter(Boolean);
+
+    window.open(
+      `https://wa.me/${cleanPhone}?text=${encodeURIComponent(lines.join('\n'))}`,
+      '_blank',
+      'noopener,noreferrer'
+    );
+  };
+
+  return (
+    <div className="flex-1 flex flex-col gap-6 max-w-6xl">
+      {bannerMsg && (
+        <div
+          className={`p-4 rounded-2xl border text-xs font-bold flex items-center justify-between ${
+            bannerMsg.type === 'warning'
+              ? 'bg-amber-950/80 border-amber-600 text-amber-200'
+              : 'bg-emerald-950/80 border-emerald-600 text-emerald-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{bannerMsg.text}</span>
+          </div>
+          <button onClick={() => setBannerMsg(null)} className="text-xs font-black">✕</button>
+        </div>
+      )}
+
+      {/* 顶部控制栏 */}
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col lg:flex-row lg:items-center justify-between gap-4 print:hidden">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-500/20 text-blue-300 border border-blue-500/30">
+              Pentadbiran Pejabat (MySG HR30 Pembantu Operasi)
+            </span>
+            <span className="text-xs text-slate-400">Penyegerakan Automatik 4-Hala</span>
+          </div>
+          <h2 className="text-xl sm:text-2xl font-black text-white mt-1 flex items-center gap-2.5">
+            <Mail className="w-6 h-6 text-blue-400" />
+            <span>Daftar Surat Masuk & Minit Tindakan (PO / PT / GB)</span>
+          </h2>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <input
+            type="month"
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="bg-slate-950 border border-slate-700 rounded-2xl px-3.5 py-2 text-xs font-bold text-white font-mono"
+          />
+
+          <div className="flex bg-slate-950 p-1 rounded-2xl border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setViewMode('SENARAI')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                viewMode === 'SENARAI'
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Senarai Pintar
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('CETAK_WORD')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                viewMode === 'CETAK_WORD'
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-slate-400 hover:text-emerald-300'
+              }`}
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Format Cetakan Word</span>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsModalOpen(true)}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-xs font-bold uppercase tracking-wider transition shadow-lg cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>+ Rekod Surat Masuk</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 视图 1：智能列表 */}
+      {viewMode === 'SENARAI' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4 print:hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+            <h3 className="text-sm font-black text-white uppercase tracking-wider">
+              {formattedMonthHeading} ({filteredRecords.length} Surat)
+            </h3>
+            <div className="relative w-full sm:w-72">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                placeholder="Cari perkara / no. rujukan / tindakan..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200"
+              />
+            </div>
+          </div>
+
+          {filteredRecords.length === 0 ? (
+            <div className="py-12 text-center space-y-2 text-slate-400 text-xs">
+              <FolderOpen className="w-8 h-8 text-slate-600 mx-auto" />
+              <p className="font-bold text-slate-300">Tiada rekod surat masuk bagi bulan ini.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-950 text-slate-400 uppercase font-mono text-[10px] border-b border-slate-800">
+                    <th className="py-3 px-3 w-12 text-center">Bil.</th>
+                    <th className="py-3 px-3 w-28">Tarikh Surat</th>
+                    <th className="py-3 px-4">Perkara & Status Automasi</th>
+                    <th className="py-3 px-4 w-56">Nama / No. Ruj. Fail</th>
+                    <th className="py-3 px-4 w-52">Tindakan & Arahan</th>
+                    <th className="py-3 px-3 w-28 text-right">Tindakan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/70">
+                  {filteredRecords.map((rec, index) => (
+                    <tr key={rec.id} className="hover:bg-slate-800/40 align-top">
+                      <td className="py-3.5 px-3 text-center font-mono font-bold text-slate-400">
+                        {index + 1}.
+                      </td>
+                      <td className="py-3.5 px-3 font-mono font-bold text-slate-200">
+                        {formatDotDate(rec.tarikhSurat)}
+                      </td>
+                      <td className="py-3.5 px-4 space-y-1.5">
+                        <div className="font-extrabold text-white">{rec.perkara}</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {rec.arahanTindakan && (
+                            <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-bold uppercase">
+                              📌 {ARAHAN_LABELS[rec.arahanTindakan]}
+                            </span>
+                          )}
+                          {rec.tarikhAkhirLaporan && (
+                            <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold">
+                              ⏰ Tarikh Akhir: {formatDotDate(rec.tarikhAkhirLaporan)}
+                            </span>
+                          )}
+                          {rec.tarikhHadirMula && (
+                            <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                              ✔ Hadir: {formatDotDate(rec.tarikhHadirMula)} ({rec.jenisKeberadaan})
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-[11px] space-y-1">
+                        <div className="text-slate-200 font-semibold">{rec.noRujukanLuar}</div>
+                        <div className="text-indigo-300">{rec.noFailSekolah}</div>
+                      </td>
+                      <td className="py-3.5 px-4 font-bold text-slate-100 whitespace-pre-line">
+                        {rec.tindakanCustomLabel}
+                      </td>
+                      <td className="py-3.5 px-3 text-right space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleWhatsAppForSurat(rec)}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                          title="Hantar WhatsApp kepada guru bertanggungjawab"
+                        >
+                          <Send className="w-3 h-3" />
+                          <span>WA</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSurat(rec.id)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-400 cursor-pointer"
+                          title="Padam Rekod"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 视图 2：Word 打印视图 */}
+      {viewMode === 'CETAK_WORD' && (
+        <div className="space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between print:hidden">
+            <span className="text-xs text-slate-300">
+              Format jadual rasmi Microsoft Word sekolah untuk cetakan A4 terus ke dalam Fail Surat Masuk.
+            </span>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 shadow-lg cursor-pointer"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Cetak Daftar Surat Masuk (A4)</span>
+            </button>
+          </div>
+
+          <div className="bg-white text-black p-8 sm:p-10 rounded-xl shadow-2xl max-w-4xl mx-auto print:shadow-none print:p-0 font-sans">
+            <h2 className="text-center font-bold text-sm uppercase underline mb-4 tracking-wide">
+              {formattedMonthHeading}
+            </h2>
+
+            <table className="w-full border-collapse border border-black text-[11px] leading-snug">
+              <thead>
+                <tr className="border-b border-black font-bold text-center">
+                  <th className="border border-black py-1.5 px-2 w-10">BIL.</th>
+                  <th className="border border-black py-1.5 px-2 w-24">TARIKH<br />SURAT</th>
+                  <th className="border border-black py-1.5 px-3">PERKARA</th>
+                  <th className="border border-black py-1.5 px-3 w-56">
+                    NAMA / NO. RUJ. FAIL<br />(PPDMKH/JPNSW/KPM)
+                  </th>
+                  <th className="border border-black py-1.5 px-2.5 w-44">Tindakan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRecords.map((rec, idx) => (
+                  <tr key={rec.id} className="align-top">
+                    <td className="border border-black py-2 px-2 text-center">
+                      {idx + 1}.
+                    </td>
+                    <td className="border border-black py-2 px-2 text-center">
+                      {formatDotDate(rec.tarikhSurat)}
+                    </td>
+                    <td className="border border-black py-2 px-3 uppercase">
+                      {rec.perkara}
+                    </td>
+                    <td className="border border-black py-2 px-3">
+                      <div>{rec.noRujukanLuar}</div>
+                      <div className="mt-3">{rec.noFailSekolah}</div>
+                    </td>
+                    <td className="border border-black py-2 px-2.5 font-semibold uppercase whitespace-pre-line">
+                      {rec.tindakanCustomLabel}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 弹窗：新增来信与批示 */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4 print:hidden">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="text-base font-black text-white">
+                  Daftar Surat Masuk & Arahan Tindakan
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Pilih arahan tindakan (Untuk tindakan / Sila urus wajib menetapkan Tarikh Akhir).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSuratMasuk} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">
+                    Tarikh Surat (Pada Surat Rasmi)
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={tarikhSurat}
+                    onChange={(e) => setTarikhSurat(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">
+                    Tarikh Terima (Penentu Bulan Daftar)
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={tarikhTerima}
+                    onChange={(e) => setTarikhTerima(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">
+                  Perkara / Tajuk Surat
+                </label>
+                <textarea
+                  rows={2}
+                  required
+                  value={perkara}
+                  onChange={(e) => setPerkara(e.target.value)}
+                  placeholder="cth: SHOWCASE INOVASI K-I-D..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white uppercase font-semibold"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">
+                    Nama / No. Ruj. Surat Luar (PPDMKH / JPNSW / KPM)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={noRujukanLuar}
+                    onChange={(e) => setNoRujukanLuar(e.target.value)}
+                    placeholder="cth: PPDMKH.500-5/3/4(21)"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">
+                    No. Ruj. Fail Sekolah
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={noFailSekolah}
+                    onChange={(e) => setNoFailSekolah(e.target.value)}
+                    placeholder="cth: Sjkcch.600-3/2/18"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* TINDAKAN 区域：人员选择 + 5 大公文批示快捷选择 */}
+              <div className="space-y-2.5 pt-2 border-t border-slate-800">
+                <label className="block font-bold text-slate-300">
+                  Pilih Pegawai / Guru Bertanggungjawab (Tindakan)
+                </label>
+                <div className="max-h-36 overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-2.5 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  {activeTeachers.map((t) => {
+                    const checked = selectedTeacherIds.includes(t.teacherId);
+                    return (
+                      <label
+                        key={t.teacherId}
+                        className="flex items-center gap-2 text-slate-200 cursor-pointer hover:bg-slate-900 p-1 rounded"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedTeacherIds((prev) => [...prev, t.teacherId]);
+                            } else {
+                              setSelectedTeacherIds((prev) =>
+                                prev.filter((id) => id !== t.teacherId)
+                              );
+                            }
+                          }}
+                        />
+                        <span className="truncate font-semibold">{t.fullName}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {/* 新增：5 项标准公文批示 (Arahan Tindakan / Minit GB) */}
+                <div>
+                  <label className="block font-bold text-indigo-300 mb-1.5">
+                    Kategori Arahan Tindakan (Minit Surat):
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(
+                      [
+                        { id: 'UNTUK_TINDAKAN', label: 'Untuk tindakan (Wajib Tarikh Akhir)' },
+                        { id: 'SILA_URUS', label: 'Sila urus (Wajib Tarikh Akhir)' },
+                        { id: 'SILA_BINCANG_DENGAN_GB', label: 'Sila bincang dengan GB' },
+                        { id: 'UNTUK_SIMPANAN_FAIL', label: 'Untuk simpanan fail' },
+                        { id: 'UNTUK_DIPAMERKAN', label: 'Untuk dipamerkan' },
+                      ] as { id: ArahanTindakanType; label: string }[]
+                    ).map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => handleSelectArahan(item.id)}
+                        className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition cursor-pointer ${
+                          arahanTindakan === item.id
+                            ? 'bg-indigo-600 text-white border-indigo-400 shadow'
+                            : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <input
+                  type="text"
+                  value={customTindakanText}
+                  onChange={(e) => setCustomTindakanText(e.target.value)}
+                  placeholder="Atau taip nama khas (cth: GB / HO HUI HUA / LIEW, jika kosong sistem guna nama guru dipilih)"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white"
+                />
+              </div>
+
+              {/* PILIH JENIS TINDAKAN & AUTOMASI SISTEM */}
+              <div className="pt-2 border-t border-slate-800 space-y-3">
+                <label className="block font-black text-indigo-300 uppercase tracking-wider">
+                  PILIH JENIS TINDAKAN & AUTOMASI SISTEM:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {[
+                    {
+                      id: 'UNTUK_TINDAKAN' as SuratActionMode,
+                      title: '1. Untuk Tindakan (Wajib Tarikh Akhir)',
+                      desc: 'Auto masuk Makluman Guru & Radar Tertunggak GB mengikut Tarikh Akhir',
+                    },
+                    {
+                      id: 'SILA_URUS' as SuratActionMode,
+                      title: '2. Sila Urus (Wajib Tarikh Akhir)',
+                      desc: 'Auto masuk Makluman Guru & Radar Tertunggak GB mengikut Tarikh Akhir',
+                    },
+                    {
+                      id: 'PERLU_HADIR' as SuratActionMode,
+                      title: '3. Perlu Hadir (Kursus / Mesyuarat Luar)',
+                      desc: 'Auto masuk Makluman + Auto Keberadaan Guru + Auto Jadual Ganti',
+                    },
+                    {
+                      id: 'HANTAR_LAPORAN' as SuratActionMode,
+                      title: '4. Perlu Hantar Laporan / Data (Wajib Tarikh Akhir)',
+                      desc: 'Auto masuk Makluman Guru & GB mengikut Tarikh Akhir Laporan',
+                    },
+                    {
+                      id: 'HADIR_DAN_TINDAKAN' as SuratActionMode,
+                      title: '5. Hadir & Perlu Tindakan / Laporan',
+                      desc: 'Aktifkan kesemua automasi kehadiran, relief & tarikh akhir tindakan',
+                    },
+                    {
+                      id: 'SILA_BINCANG_GB' as SuratActionMode,
+                      title: '6. Sila Bincang Dengan GB',
+                      desc: 'Auto maklum kepada Guru & GB untuk sesi perbincangan tindakan lanjut',
+                    },
+                    {
+                      id: 'UNTUK_DIPAMERKAN' as SuratActionMode,
+                      title: '7. Untuk Dipamerkan',
+                      desc: 'Rekod surat masuk & makluman untuk dipamerkan di papan kenyataan',
+                    },
+                    {
+                      id: 'UNTUK_SIMPANAN_FAIL' as SuratActionMode,
+                      title: '8. Untuk Simpanan Fail Sahaja',
+                      desc: 'Rekod dalam daftar surat masuk untuk simpanan fail & cetakan Word',
+                    },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => handleSelectActionMode(opt.id)}
+                      className={`p-3 rounded-2xl border text-left transition cursor-pointer ${
+                        actionMode === opt.id
+                          ? 'bg-indigo-600/25 border-indigo-400 text-white shadow-md'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="font-extrabold text-xs text-white">{opt.title}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 当选择 Untuk tindakan / Sila urus / Hantar laporan 时，强制显示必填的截止日期框 */}
+              {isDeadlineMandatory && (
+                <div className="p-4 rounded-2xl bg-rose-950/35 border-2 border-rose-500/50 space-y-3">
+                  <div className="font-black text-rose-300 text-xs uppercase flex items-center gap-1.5">
+                    <Clock className="w-4 h-4" />
+                    <span>
+                      WAJIB DIISI: Tetapan Tarikh Akhir ({ARAHAN_LABELS[arahanTindakan]})
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-rose-200 font-bold mb-1">
+                        Tarikh Akhir Tindakan / Laporan <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={tarikhAkhirLaporan}
+                        onChange={(e) => setTarikhAkhirLaporan(e.target.value)}
+                        className="w-full bg-slate-950 border border-rose-500/60 rounded-xl px-3 py-2 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 font-bold mb-1">
+                        Catatan / Arahan Lanjut
+                      </label>
+                      <input
+                        type="text"
+                        value={catatanLaporan}
+                        onChange={(e) => setCatatanLaporan(e.target.value)}
+                        placeholder="cth: Sila urus dan maklum balas sebelum tarikh akhir"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 当包含外出出席时，显示出席日期与自动排代课设置 */}
+              {isHadirActive && (
+                <div className="p-4 rounded-2xl bg-indigo-950/30 border border-indigo-500/30 space-y-3">
+                  <div className="font-black text-indigo-300 text-xs uppercase flex items-center gap-1.5">
+                    <UserCheck className="w-4 h-4" />
+                    <span>Tetapan Kehadiran Luar, Keberadaan Guru & Jadual Ganti (Relief)</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-slate-300 font-bold mb-1">Tarikh Mula Hadir</label>
+                      <input
+                        type="date"
+                        value={tarikhHadirMula}
+                        onChange={(e) => {
+                          setTarikhHadirMula(e.target.value);
+                          setTarikhHadirTamat(e.target.value);
+                        }}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 font-bold mb-1">Tarikh Tamat</label>
+                      <input
+                        type="date"
+                        value={tarikhHadirTamat}
+                        onChange={(e) => setTarikhHadirTamat(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 font-bold mb-1">Status Keberadaan</label>
+                      <select
+                        value={jenisKeberadaan}
+                        onChange={(e) => setJenisKeberadaan(e.target.value as 'KURSUS' | 'URUSAN_RASMI')}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-bold"
+                      >
+                        <option value="KURSUS">Kursus / Bengkel / Taklimat</option>
+                        <option value="URUSAN_RASMI">Urusan Rasmi / Mesyuarat</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-300 font-bold mb-1">Lokasi</label>
+                      <input
+                        type="text"
+                        value={lokasiHadir}
+                        onChange={(e) => setLokasiHadir(e.target.value)}
+                        placeholder="cth: DEWAN UTAMA, HOTEL LI HUA MUKAH"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white"
+                      />
+                    </div>
+                    <div className="flex items-center pt-5">
+                      <label className="flex items-center gap-2 cursor-pointer text-slate-200 font-bold">
+                        <input
+                          type="checkbox"
+                          checked={perluJadualGanti}
+                          onChange={(e) => setPerluJadualGanti(e.target.checked)}
+                        />
+                        <span>Jana Permintaan Jadual Ganti (Relief) Automatik</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-lg cursor-pointer"
+                >
+                  {saving ? 'Menyimpan & Menyelaras...' : 'Simpan & Aktifkan Automasi'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

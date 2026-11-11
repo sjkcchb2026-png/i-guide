@@ -1,0 +1,1321 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Bell,
+  Calendar,
+  Clock,
+  CheckCircle2,
+  AlertTriangle,
+  MessageSquare,
+  Send,
+  Plus,
+  Filter,
+  Search,
+  Award,
+  BookOpen,
+  Users,
+  FileText,
+  Sparkles,
+  ShieldAlert,
+  Download,
+  Printer,
+  Check,
+  X,
+  Phone,
+  History,
+  BarChart2
+} from 'lucide-react';
+import {
+  collection,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  orderBy
+} from 'firebase/firestore';
+import { db } from '../firebase';
+import { TeacherProfile, RoleAssignment } from '../types/admin';
+import { SchoolProfile } from '../types/schoolData';
+
+export type MaklumanCategory =
+  | 'TUGASAN'       // 日常/周期事务与报告
+  | 'KURSUS'        // 课程与培训 (LDP / SPLKPM)
+  | 'MESYUARAT'     // 会议与 PLC
+  | 'PERTANDINGAN'  // 比赛与 Koakademik/MSSD
+  | 'AKTIVITI';     // 学校活动与庆典
+
+export type TimeHorizonFilter =
+  | 'HARI_INI'
+  | 'ESOK'
+  | 'MINGGU_INI'
+  | 'BULAN_INI'
+  | 'TERTUNGGAK'
+  | 'SEMUA';
+
+export interface MaklumanTaskItem {
+  id: string;
+  title: string;
+  description: string;
+  category: MaklumanCategory;
+  dueDate: string;      // YYYY-MM-DD
+  dueTime?: string;     // HH:mm (optional, e.g. "14:00")
+  location?: string;
+  priority: 'TINGGI' | 'SEDERHANA' | 'BIASA';
+  targetType: 'SEMUA_GURU' | 'GURU_TERPILIH';
+  targetTeacherIds: string[];
+  relatedRoleCode?: string;
+  // Completion tracking per teacherId
+  completions: Record<
+    string,
+    {
+      completed: boolean;
+      completedAt: string;       // ISO timestamp
+      completedDateStr: string;  // YYYY-MM-DD
+      isLate: boolean;
+      daysLate: number;
+      remarks?: string;
+    }
+  >;
+  // WhatsApp Reminder tracking per teacherId (Evidence for Principal)
+  whatsappLogs: Record<
+    string,
+    {
+      count: number;
+      lastSentAt: string;
+      lastSentBy: string;
+      history: { sentAt: string; sentBy: string; noteType: 'REMINDER' | 'OVERDUE_WARN' }[];
+    }
+  >;
+  createdByTeacherId: string;
+  createdByName: string;
+  createdAt: string;
+}
+
+interface PaparanMaklumanViewProps {
+  currentTeacher: TeacherProfile | null;
+  allTeachers: TeacherProfile[];
+  roleAssignments: RoleAssignment[];
+  schoolProfile: SchoolProfile | null;
+  isPrincipalOrAdmin: boolean;
+  addToast: (msg: string, type?: 'info' | 'success' | 'warning') => void;
+}
+
+// Helper: Get local YYYY-MM-DD in Malaysia timezone
+const getMalaysiaDateStr = (offsetDays = 0): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+// Helper: Calculate difference in days between two YYYY-MM-DD strings (dateA - dateB)
+const diffDays = (dateA: string, dateB: string): number => {
+  const a = new Date(`${dateA}T00:00:00`);
+  const b = new Date(`${dateB}T00:00:00`);
+  return Math.round((a.getTime() - b.getTime()) / (1000 * 60 * 60 * 24));
+};
+
+// Helper: Normalize Malaysian phone number for wa.me link
+const formatWhatsAppPhone = (rawPhone?: string): string => {
+  if (!rawPhone) return '';
+  const digits = rawPhone.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('60')) return digits;
+  if (digits.startsWith('0')) return `6${digits}`;
+  return `60${digits}`;
+};
+
+const CATEGORY_META: Record<
+  MaklumanCategory,
+  { label: string; badgeClass: string; icon: React.FC<{ className?: string }> }
+> = {
+  TUGASAN: {
+    label: 'Tugasan & Laporan',
+    badgeClass: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
+    icon: FileText,
+  },
+  KURSUS: {
+    label: 'Kursus & Latihan (LDP)',
+    badgeClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+    icon: BookOpen,
+  },
+  MESYUARAT: {
+    label: 'Mesyuarat & PLC',
+    badgeClass: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
+    icon: Users,
+  },
+  PERTANDINGAN: {
+    label: 'Pertandingan & Koakademik',
+    badgeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+    icon: Award,
+  },
+  AKTIVITI: {
+    label: 'Aktiviti & Program Sekolah',
+    badgeClass: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
+    icon: Sparkles,
+  },
+};
+
+export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
+  currentTeacher,
+  allTeachers,
+  roleAssignments,
+  schoolProfile,
+  isPrincipalOrAdmin,
+  addToast,
+}) => {
+  const [items, setItems] = useState<MaklumanTaskItem[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  // View Tab: 'PEMBANTU_SAYA' (Teacher Assistant) vs 'PEMANTAUAN_GB' (Principal Overdue & PBPPP Evidence Radar)
+  const [viewMode, setViewMode] = useState<'PEMBANTU_SAYA' | 'PEMANTAUAN_GB'>('PEMBANTU_SAYA');
+  const [timeHorizon, setTimeHorizon] = useState<TimeHorizonFilter>('HARI_INI');
+  const [categoryFilter, setCategoryFilter] = useState<'ALL' | MaklumanCategory>('ALL');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Modal State for Creating New Makluman / Task / Event
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [formTitle, setFormTitle] = useState<string>('');
+  const [formDesc, setFormDesc] = useState<string>('');
+  const [formCategory, setFormCategory] = useState<MaklumanCategory>('TUGASAN');
+  const [formDueDate, setFormDueDate] = useState<string>(getMalaysiaDateStr(0));
+  const [formDueTime, setFormDueTime] = useState<string>('14:00');
+  const [formLocation, setFormLocation] = useState<string>('Bilik Mesyuarat / Dalam Talian');
+  const [formPriority, setFormPriority] = useState<'TINGGI' | 'SEDERHANA' | 'BIASA'>('TINGGI');
+  const [formTargetType, setFormTargetType] = useState<'SEMUA_GURU' | 'GURU_TERPILIH'>('SEMUA_GURU');
+  const [formSelectedTeachers, setFormSelectedTeachers] = useState<string[]>([]);
+
+  // Custom Direct WhatsApp Modal for Principal -> Any Teacher
+  const [directWaTeacher, setDirectWaTeacher] = useState<TeacherProfile | null>(null);
+  const [directWaMessage, setDirectWaMessage] = useState<string>('');
+
+  const todayStr = getMalaysiaDateStr(0);
+  const tomorrowStr = getMalaysiaDateStr(1);
+  const weekEndStr = getMalaysiaDateStr(7);
+  const currentMonthPrefix = todayStr.slice(0, 7); // YYYY-MM
+
+  const myTeacherId = currentTeacher?.teacherId || 'ADMIN';
+  const activeTeachers = useMemo(
+    () => allTeachers.filter((t) => t.status === 'ACTIVE'),
+    [allTeachers]
+  );
+
+  // 1. Real-time Firestore listener for `makluman_tasks`
+  useEffect(() => {
+    const q = query(collection(db, 'makluman_tasks'), orderBy('dueDate', 'asc'));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const loaded: MaklumanTaskItem[] = [];
+        snap.forEach((d) => loaded.push({ id: d.id, ...(d.data() as Omit<MaklumanTaskItem, 'id'>) }));
+        setItems(loaded);
+        setLoading(false);
+      },
+      (err) => {
+        console.error('Error loading makluman_tasks:', err);
+        setLoading(false);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  // 2. Determine if a task applies to a specific teacherId
+  const isTaskAssignedToTeacher = (item: MaklumanTaskItem, teacherId: string): boolean => {
+    if (item.targetType === 'SEMUA_GURU') return true;
+    return (item.targetTeacherIds || []).includes(teacherId);
+  };
+
+  // 3. Filter tasks relevant to the logged-in teacher
+  const myTasks = useMemo(() => {
+    return items.filter((item) => isTaskAssignedToTeacher(item, myTeacherId));
+  }, [items, myTeacherId]);
+
+  // Categorize myTasks by time horizon
+  const myHorizonCounts = useMemo(() => {
+    let hariIni = 0;
+    let esok = 0;
+    let mingguIni = 0;
+    let bulanIni = 0;
+    let tertunggak = 0;
+
+    myTasks.forEach((t) => {
+      const comp = t.completions?.[myTeacherId]?.completed || false;
+      if (!comp && t.dueDate < todayStr) {
+        tertunggak++;
+      }
+      if (t.dueDate === todayStr) hariIni++;
+      if (t.dueDate === tomorrowStr) esok++;
+      if (t.dueDate >= todayStr && t.dueDate <= weekEndStr) mingguIni++;
+      if (t.dueDate.startsWith(currentMonthPrefix)) bulanIni++;
+    });
+
+    return { hariIni, esok, mingguIni, bulanIni, tertunggak };
+  }, [myTasks, myTeacherId, todayStr, tomorrowStr, weekEndStr, currentMonthPrefix]);
+
+  const filteredMyTasks = useMemo(() => {
+    return myTasks.filter((t) => {
+      const isDone = t.completions?.[myTeacherId]?.completed || false;
+
+      // Horizon filter
+      if (timeHorizon === 'TERTUNGGAK' && (isDone || t.dueDate >= todayStr)) return false;
+      if (timeHorizon === 'HARI_INI' && t.dueDate !== todayStr) return false;
+      if (timeHorizon === 'ESOK' && t.dueDate !== tomorrowStr) return false;
+      if (timeHorizon === 'MINGGU_INI' && (t.dueDate < todayStr || t.dueDate > weekEndStr)) return false;
+      if (timeHorizon === 'BULAN_INI' && !t.dueDate.startsWith(currentMonthPrefix)) return false;
+
+      // Category filter
+      if (categoryFilter !== 'ALL' && t.category !== categoryFilter) return false;
+
+      // Search filter
+      if (
+        searchQuery.trim() &&
+        !t.title.toLowerCase().includes(searchQuery.toLowerCase()) &&
+        !t.description.toLowerCase().includes(searchQuery.toLowerCase())
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [myTasks, myTeacherId, timeHorizon, categoryFilter, searchQuery, todayStr, tomorrowStr, weekEndStr, currentMonthPrefix]);
+
+  // 4. Toggle Task Completion (with automatic On-Time vs Late calculation)
+  const handleToggleCompletion = async (item: MaklumanTaskItem, targetTeacherId: string) => {
+    try {
+      const currentComp = item.completions?.[targetTeacherId];
+      const nextCompleted = !currentComp?.completed;
+      const nowIso = new Date().toISOString();
+      const nowDateStr = getMalaysiaDateStr(0);
+      const lateDays = Math.max(0, diffDays(nowDateStr, item.dueDate));
+      const isLate = nowDateStr > item.dueDate;
+
+      const updatedCompletions = { ...(item.completions || {}) };
+      if (nextCompleted) {
+        updatedCompletions[targetTeacherId] = {
+          completed: true,
+          completedAt: nowIso,
+          completedDateStr: nowDateStr,
+          isLate,
+          daysLate: lateDays,
+        };
+      } else {
+        delete updatedCompletions[targetTeacherId];
+      }
+
+      await updateDoc(doc(db, 'makluman_tasks', item.id), {
+        completions: updatedCompletions,
+      });
+
+      addToast(
+        nextCompleted
+          ? isLate
+            ? `Ditandakan selesai (Direkod lewat ${lateDays} hari).`
+            : 'Syabas! Tugasan ditandakan selesai mengikut masa.'
+          : 'Tanda selesai telah dibatalkan.',
+        nextCompleted ? (isLate ? 'warning' : 'success') : 'info'
+      );
+    } catch (err: any) {
+      console.error('Failed to toggle completion:', err);
+      addToast(`Ralat menyimpan status: ${err.message}`, 'warning');
+    }
+  };
+
+  // 5. Send WhatsApp Reminder & Log into Firestore as PBPPP Evidence
+  const handleSendWhatsAppReminder = async (
+    item: MaklumanTaskItem,
+    teacher: TeacherProfile,
+    noteType: 'REMINDER' | 'OVERDUE_WARN'
+  ) => {
+    const cleanPhone = formatWhatsAppPhone(teacher.phone);
+    if (!cleanPhone) {
+      addToast(
+        `Tiada nombor telefon bagi ${teacher.fullName}. Sila kemas kini di Senarai Kakitangan.`,
+        'warning'
+      );
+      return;
+    }
+
+    const schoolName = schoolProfile?.schoolName || 'SJK(C) CHUNG HUA BALINGIAN';
+    const catLabel = CATEGORY_META[item.category].label;
+    const lateDays = Math.max(0, diffDays(todayStr, item.dueDate));
+
+    const messageLines =
+      noteType === 'OVERDUE_WARN'
+        ? [
+            `*[NOTIS TERTUNGGAK iSEPADU — ${schoolName}]*`,
+            `Selamat sejahtera Cikgu *${teacher.fullName}*,`,
+            ``,
+            `Sistem mengesan perkara berikut telah *melepasi tarikh akhir (${lateDays} hari lewat)* dan masih belum ditandakan selesai:`,
+            `📌 *Perkara:* ${item.title}`,
+            `📂 *Kategori:* ${catLabel}`,
+            `📅 *Tarikh Akhir:* ${item.dueDate}${item.dueTime ? ` (${item.dueTime})` : ''}`,
+            `📝 *Butiran:* ${item.description || '-'}`,
+            ``,
+            `Mohon ambil tindakan segera dan tandakan selesai (✔) dalam Paparan Makluman iSEPADU. Rekod ketepatan masa ini disimpan secara automatik dalam sistem pengurusan sekolah. Terima kasih.`,
+          ]
+        : [
+            `*[PERINGATAN MESRA iSEPADU — ${schoolName}]*`,
+            `Selamat sejahtera Cikgu *${teacher.fullName}*,`,
+            ``,
+            `Berikut adalah peringatan mesra bagi perkara/aktiviti yang perlu diambil perhatian:`,
+            `📌 *Perkara:* ${item.title}`,
+            `📂 *Kategori:* ${catLabel}`,
+            `📅 *Tarikh / Masa:* ${item.dueDate}${item.dueTime ? ` (${item.dueTime})` : ''}`,
+            item.location ? `📍 *Lokasi:* ${item.location}` : '',
+            `📝 *Butiran:* ${item.description || '-'}`,
+            ``,
+            `Sila tandakan selesai (✔) dalam Paparan Makluman iSEPADU sebaik sahaja selesai. Terima kasih!`,
+          ].filter(Boolean);
+
+    const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(messageLines.join('\n'))}`;
+    window.open(waUrl, '_blank', 'noopener,noreferrer');
+
+    // Record the WhatsApp reminder in Firestore as permanent audit evidence
+    try {
+      const existingLog = item.whatsappLogs?.[teacher.teacherId] || {
+        count: 0,
+        lastSentAt: '',
+        lastSentBy: '',
+        history: [],
+      };
+      const nowIso = new Date().toISOString();
+      const senderName = currentTeacher?.fullName || 'Guru Besar / Pentadbir';
+
+      const updatedLogs = {
+        ...(item.whatsappLogs || {}),
+        [teacher.teacherId]: {
+          count: existingLog.count + 1,
+          lastSentAt: nowIso,
+          lastSentBy: senderName,
+          history: [
+            ...(existingLog.history || []),
+            { sentAt: nowIso, sentBy: senderName, noteType },
+          ],
+        },
+      };
+
+      await updateDoc(doc(db, 'makluman_tasks', item.id), {
+        whatsappLogs: updatedLogs,
+      });
+
+      addToast(`Peringatan WhatsApp kepada ${teacher.fullName} telah direkodkan.`, 'success');
+    } catch (err) {
+      console.error('Error logging WhatsApp reminder:', err);
+    }
+  };
+
+  // 6. Send Custom Direct WhatsApp Message from Principal to Teacher
+  const handleSendDirectWhatsApp = () => {
+    if (!directWaTeacher || !directWaMessage.trim()) return;
+    const cleanPhone = formatWhatsAppPhone(directWaTeacher.phone);
+    if (!cleanPhone) {
+      addToast(`Tiada nombor telefon bagi ${directWaTeacher.fullName}.`, 'warning');
+      return;
+    }
+    const schoolName = schoolProfile?.schoolName || 'SJK(C) CHUNG HUA BALINGIAN';
+    const fullText = [
+      `*[MAKLUMAN PENTADBIRAN — ${schoolName}]*`,
+      `Kepada: Cikgu *${directWaTeacher.fullName}*`,
+      ``,
+      directWaMessage.trim(),
+      ``,
+      `— _Pentadbiran ${schoolName} melalui iSEPADU_`,
+    ].join('\n');
+
+    const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(fullText)}`;
+    window.open(waUrl, '_blank', 'noopener,noreferrer');
+    setDirectWaTeacher(null);
+    setDirectWaMessage('');
+    addToast('Mesej WhatsApp dibuka.', 'success');
+  };
+
+  // 7. Create New Makluman / Task / Event
+  const handleCreateMakluman = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formTitle.trim()) return;
+
+    try {
+      const newId = `makluman_${Date.now()}`;
+      const payload: MaklumanTaskItem = {
+        id: newId,
+        title: formTitle.trim(),
+        description: formDesc.trim(),
+        category: formCategory,
+        dueDate: formDueDate,
+        dueTime: formDueTime,
+        location: formLocation.trim(),
+        priority: formPriority,
+        targetType: formTargetType,
+        targetTeacherIds: formTargetType === 'SEMUA_GURU' ? [] : formSelectedTeachers,
+        completions: {},
+        whatsappLogs: {},
+        createdByTeacherId: myTeacherId,
+        createdByName: currentTeacher?.fullName || 'Pentadbir Sekolah',
+        createdAt: new Date().toISOString(),
+      };
+
+      await setDoc(doc(db, 'makluman_tasks', newId), payload);
+      setIsModalOpen(false);
+      setFormTitle('');
+      setFormDesc('');
+      addToast('Makluman / Tugasan baharu berjaya diterbitkan!', 'success');
+    } catch (err: any) {
+      addToast(`Gagal menambah makluman: ${err.message}`, 'warning');
+    }
+  };
+
+  // 8. Principal's Overdue & PBPPP Compliance Evidence Analytics
+  const teacherComplianceStats = useMemo(() => {
+    return activeTeachers.map((teacher) => {
+      const assignedItems = items.filter((item) => isTaskAssignedToTeacher(item, teacher.teacherId));
+      let completedOnTime = 0;
+      let completedLate = 0;
+      let overduePending = 0;
+      let activePending = 0;
+      let totalWaReminders = 0;
+
+      const overdueList: { item: MaklumanTaskItem; daysLate: number; waCount: number }[] = [];
+
+      assignedItems.forEach((item) => {
+        const comp = item.completions?.[teacher.teacherId];
+        const waLog = item.whatsappLogs?.[teacher.teacherId];
+        if (waLog?.count) {
+          totalWaReminders += waLog.count;
+        }
+
+        if (comp?.completed) {
+          if (comp.isLate) {
+            completedLate++;
+          } else {
+            completedOnTime++;
+          }
+        } else {
+          if (item.dueDate < todayStr) {
+            overduePending++;
+            overdueList.push({
+              item,
+              daysLate: diffDays(todayStr, item.dueDate),
+              waCount: waLog?.count || 0,
+            });
+          } else {
+            activePending++;
+          }
+        }
+      });
+
+      const totalEvaluated = completedOnTime + completedLate + overduePending;
+      // Compliance score formula: On-Time = 100%, Completed Late = 60%, Overdue Unfinished = 0%
+      const complianceScore =
+        totalEvaluated === 0
+          ? 100
+          : Math.round(((completedOnTime * 1.0 + completedLate * 0.6) / totalEvaluated) * 100);
+
+      return {
+        teacher,
+        totalAssigned: assignedItems.length,
+        completedOnTime,
+        completedLate,
+        overduePending,
+        activePending,
+        totalWaReminders,
+        complianceScore,
+        overdueList,
+      };
+    });
+  }, [activeTeachers, items, todayStr]);
+
+  // Export PBPPP Compliance Evidence to CSV
+  const handleExportEvidenceCsv = () => {
+    const headers = [
+      'ID Guru',
+      'Nama Guru',
+      'No. Telefon',
+      'Jumlah Tugasan/Makluman',
+      'Selesai Ikut Masa',
+      'Selesai Lewat',
+      'Masih Tertunggak (Overdue)',
+      'Bil. Peringatan WhatsApp Dikeluarkan',
+      'Skor Pematuhan & Ketepatan Masa (%)',
+    ];
+    const rows = teacherComplianceStats.map((s) => [
+      s.teacher.teacherId,
+      `"${s.teacher.fullName}"`,
+      s.teacher.phone || '-',
+      s.totalAssigned,
+      s.completedOnTime,
+      s.completedLate,
+      s.overduePending,
+      s.totalWaReminders,
+      `${s.complianceScore}%`,
+    ]);
+
+    const csvContent =
+      'data:text/csv;charset=utf-8,\uFEFF' +
+      [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Bukti_Pematuhan_PBPPP_${todayStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    addToast('Laporan Bukti Penilaian (CSV) berjaya dimuat turun.', 'success');
+  };
+
+  return (
+    <div className="flex-1 flex flex-col gap-6 max-w-6xl">
+      {/* Top Banner & Mode Switcher */}
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              Pembantu Pintar & Pemantauan iSEPADU
+            </span>
+            <span className="text-xs text-slate-400 font-mono">Tarikh: {todayStr}</span>
+          </div>
+          <h2 className="text-xl sm:text-2xl font-black text-white mt-1 flex items-center gap-2.5">
+            <Bell className="w-6 h-6 text-indigo-400" />
+            <span>Paparan Makluman, Tugasan & Peringatan WhatsApp</span>
+          </h2>
+          <p className="text-xs text-slate-400 mt-1">
+            Senarai semak harian/mingguan/bulanan bagi tugasan, kursus, mesyuarat, pertandingan dan aktiviti sekolah berserta rekod bukti penilaian.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Mode Switcher for Principal / PK */}
+          {isPrincipalOrAdmin && (
+            <div className="flex bg-slate-950 p-1 rounded-2xl border border-slate-800">
+              <button
+                onClick={() => setViewMode('PEMBANTU_SAYA')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  viewMode === 'PEMBANTU_SAYA'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Pembantu Guru
+              </button>
+              <button
+                onClick={() => setViewMode('PEMANTAUAN_GB')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  viewMode === 'PEMANTAUAN_GB'
+                    ? 'bg-rose-600 text-white shadow'
+                    : 'text-slate-400 hover:text-rose-300'
+                }`}
+              >
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>Radar Tertunggak & Bukti PBPPP</span>
+              </button>
+            </div>
+          )}
+
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-indigo-600/25 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Tambah Makluman / Tugasan</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ===================================================================== */}
+      {/* VIEW 1: TEACHER'S SMART ASSISTANT (PEMBANTU PINTAR GURU)               */}
+      {/* ===================================================================== */}
+      {viewMode === 'PEMBANTU_SAYA' && (
+        <div className="space-y-6">
+          {/* 5 Horizon Summary Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {[
+              {
+                id: 'HARI_INI' as TimeHorizonFilter,
+                label: 'Hari Ini',
+                sub: 'Perlu Diurus',
+                count: myHorizonCounts.hariIni,
+                color: 'border-indigo-500/40 bg-indigo-950/30 text-indigo-300',
+              },
+              {
+                id: 'ESOK' as TimeHorizonFilter,
+                label: 'Esok',
+                sub: 'Persediaan Awal',
+                count: myHorizonCounts.esok,
+                color: 'border-sky-500/40 bg-sky-950/30 text-sky-300',
+              },
+              {
+                id: 'MINGGU_INI' as TimeHorizonFilter,
+                label: 'Minggu Ini',
+                sub: '7 Hari Terdekat',
+                count: myHorizonCounts.mingguIni,
+                color: 'border-emerald-500/40 bg-emerald-950/30 text-emerald-300',
+              },
+              {
+                id: 'BULAN_INI' as TimeHorizonFilter,
+                label: 'Bulan Ini',
+                sub: currentMonthPrefix,
+                count: myHorizonCounts.bulanIni,
+                color: 'border-purple-500/40 bg-purple-950/30 text-purple-300',
+              },
+              {
+                id: 'TERTUNGGAK' as TimeHorizonFilter,
+                label: 'Tertunggak!',
+                sub: 'Melepasi Tarikh',
+                count: myHorizonCounts.tertunggak,
+                color:
+                  myHorizonCounts.tertunggak > 0
+                    ? 'border-rose-500 bg-rose-950/60 text-rose-300 animate-pulse'
+                    : 'border-slate-800 bg-slate-900/60 text-slate-400',
+              },
+              {
+                id: 'SEMUA' as TimeHorizonFilter,
+                label: 'Semua Rekod',
+                sub: 'Keseluruhan',
+                count: myTasks.length,
+                color: 'border-slate-800 bg-slate-900/60 text-slate-300',
+              },
+            ].map((card) => (
+              <button
+                key={card.id}
+                onClick={() => setTimeHorizon(card.id)}
+                className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+                  timeHorizon === card.id
+                    ? `${card.color} ring-2 ring-indigo-400/60 shadow-lg`
+                    : 'bg-slate-900/60 border-slate-800/80 hover:border-slate-700 text-slate-300'
+                }`}
+              >
+                <div className="text-[10px] font-mono uppercase tracking-wider opacity-80">
+                  {card.sub}
+                </div>
+                <div className="flex items-baseline justify-between mt-1">
+                  <span className="text-sm font-extrabold">{card.label}</span>
+                  <span className="text-xl font-black font-mono">{card.count}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Category Filter Pills & Search Bar */}
+          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setCategoryFilter('ALL')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                  categoryFilter === 'ALL'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                Semua Kategori
+              </button>
+              {(Object.keys(CATEGORY_META) as MaklumanCategory[]).map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setCategoryFilter(cat)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    categoryFilter === cat
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  {CATEGORY_META[cat].label}
+                </button>
+              ))}
+            </div>
+
+            <div className="relative w-full md:w-64">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                placeholder="Cari mesyuarat / kursus / tugasan..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+          </div>
+
+          {/* Checklist Cards */}
+          <div className="space-y-3">
+            {loading ? (
+              <div className="p-12 text-center text-slate-400 text-xs font-mono">
+                Memuatkan senarai makluman...
+              </div>
+            ) : filteredMyTasks.length === 0 ? (
+              <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-12 text-center space-y-2">
+                <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto opacity-80" />
+                <p className="text-sm font-bold text-slate-200">
+                  Tiada perkara tertunggak atau terjadual dalam paparan ini.
+                </p>
+                <p className="text-xs text-slate-400">
+                  Semua tugasan, kursus, mesyuarat dan aktiviti anda berada dalam keadaan terkawal!
+                </p>
+              </div>
+            ) : (
+              filteredMyTasks.map((item) => {
+                const myComp = item.completions?.[myTeacherId];
+                const isDone = myComp?.completed || false;
+                const isOverdue = !isDone && item.dueDate < todayStr;
+                const lateDays = isOverdue ? diffDays(todayStr, item.dueDate) : 0;
+                const CatIcon = CATEGORY_META[item.category].icon;
+
+                return (
+                  <div
+                    key={item.id}
+                    className={`p-5 rounded-3xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+                      isDone
+                        ? 'bg-slate-900/40 border-slate-800/60 opacity-75'
+                        : isOverdue
+                        ? 'bg-rose-950/25 border-rose-500/40 shadow-lg shadow-rose-950/20'
+                        : 'bg-slate-900 border-slate-800 hover:border-indigo-500/40 shadow-md'
+                    }`}
+                  >
+                    <div className="flex items-start gap-4 min-w-0">
+                      {/* Interactive Tick Checkbox */}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCompletion(item, myTeacherId)}
+                        className={`mt-1 w-7 h-7 rounded-xl flex items-center justify-center shrink-0 border-2 transition-all cursor-pointer ${
+                          isDone
+                            ? 'bg-emerald-600 border-emerald-500 text-white'
+                            : isOverdue
+                            ? 'bg-rose-950 border-rose-400 hover:bg-rose-900 text-transparent'
+                            : 'bg-slate-950 border-slate-600 hover:border-indigo-400 text-transparent'
+                        }`}
+                        title={isDone ? 'Klik untuk batal tanda selesai' : 'Tandakan selesai (✔)'}
+                      >
+                        <Check className="w-4 h-4 stroke-[3]" />
+                      </button>
+
+                      <div className="space-y-1.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase border flex items-center gap-1 ${CATEGORY_META[item.category].badgeClass}`}
+                          >
+                            <CatIcon className="w-3 h-3" />
+                            <span>{CATEGORY_META[item.category].label}</span>
+                          </span>
+
+                          <span className="text-xs font-mono font-bold text-slate-300 flex items-center gap-1">
+                            <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                            {item.dueDate}
+                            {item.dueTime && ` • ${item.dueTime}`}
+                          </span>
+
+                          {item.location && (
+                            <span className="text-xs text-slate-400 font-medium">
+                              📍 {item.location}
+                            </span>
+                          )}
+
+                          {isOverdue && (
+                            <span className="px-2 py-0.5 rounded-lg bg-rose-600 text-white text-[10px] font-black uppercase tracking-wider">
+                              LEWAT {lateDays} HARI!
+                            </span>
+                          )}
+
+                          {isDone && (
+                            <span
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase ${
+                                myComp?.isLate
+                                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              }`}
+                            >
+                              {myComp?.isLate
+                                ? `Selesai Lewat (${myComp.daysLate} Hari)`
+                                : `Selesai Ikut Masa (${myComp?.completedDateStr})`}
+                            </span>
+                          )}
+                        </div>
+
+                        <h4
+                          className={`text-base font-extrabold ${
+                            isDone ? 'line-through text-slate-400' : 'text-white'
+                          }`}
+                        >
+                          {item.title}
+                        </h4>
+
+                        {item.description && (
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            {item.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right-side Quick Actions */}
+                    <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                      {currentTeacher && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSendWhatsAppReminder(
+                              item,
+                              currentTeacher,
+                              isOverdue ? 'OVERDUE_WARN' : 'REMINDER'
+                            )
+                          }
+                          className="px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                          title="Hantar nota peringatan ke WhatsApp saya sendiri"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span>WhatsApp Saya</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* VIEW 2: PRINCIPAL'S OVERDUE RADAR & PBPPP EVIDENCE TRACKER             */}
+      {/* ===================================================================== */}
+      {viewMode === 'PEMANTAUAN_GB' && isPrincipalOrAdmin && (
+        <div className="space-y-6">
+          {/* Section A: Real-time Overdue Radar (Senarai Tugasan Tertunggak Semasa) */}
+          <div className="bg-slate-900 border border-rose-500/30 rounded-3xl p-6 shadow-xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-base font-black text-rose-400 uppercase tracking-wider flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5" />
+                  <span>Pengesan Tugasan & Laporan Tertunggak (Overdue Detector)</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Guru yang belum menandakan selesai selepas tarikh akhir. Klik butang WhatsApp untuk menghantar peringatan rasmi (direkodkan sebagai bukti).
+                </p>
+              </div>
+            </div>
+
+            {(() => {
+              const allOverdueEntries: {
+                teacher: TeacherProfile;
+                item: MaklumanTaskItem;
+                daysLate: number;
+                waCount: number;
+              }[] = [];
+
+              teacherComplianceStats.forEach((stat) => {
+                stat.overdueList.forEach((ov) => {
+                  allOverdueEntries.push({
+                    teacher: stat.teacher,
+                    item: ov.item,
+                    daysLate: ov.daysLate,
+                    waCount: ov.waCount,
+                  });
+                });
+              });
+
+              if (allOverdueEntries.length === 0) {
+                return (
+                  <div className="py-8 text-center text-xs text-emerald-400 font-bold">
+                    Tiada sebarang tugasan tertunggak dikesan bagi semua guru setakat hari ini ({todayStr}).
+                  </div>
+                );
+              }
+
+              return (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-950 text-slate-400 uppercase font-mono text-[10px] border-b border-slate-800">
+                        <th className="py-3 px-4">Nama Guru</th>
+                        <th className="py-3 px-4">Perkara / Laporan Tertunggak</th>
+                        <th className="py-3 px-3">Kategori</th>
+                        <th className="py-3 px-3 text-center">Tarikh Akhir</th>
+                        <th className="py-3 px-3 text-center">Hari Lewat</th>
+                        <th className="py-3 px-3 text-center">Rekod Peringatan WA</th>
+                        <th className="py-3 px-4 text-right">Tindakan Guru Besar</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/70">
+                      {allOverdueEntries.map((entry, idx) => (
+                        <tr key={`${entry.item.id}_${entry.teacher.teacherId}_${idx}`} className="hover:bg-slate-800/40">
+                          <td className="py-3 px-4 font-bold text-white">
+                            <div>{entry.teacher.fullName}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              {entry.teacher.phone || 'Tiada No. Tel'}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 font-semibold text-slate-200">
+                            {entry.item.title}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${CATEGORY_META[entry.item.category].badgeClass}`}>
+                              {CATEGORY_META[entry.item.category].label}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center font-mono text-slate-300">
+                            {entry.item.dueDate}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <span className="px-2 py-0.5 rounded-full bg-rose-600/20 text-rose-300 border border-rose-500/40 font-mono font-black">
+                              +{entry.daysLate} hari
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center font-mono">
+                            {entry.waCount > 0 ? (
+                              <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
+                                Dihantar {entry.waCount}x
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">Belum</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSendWhatsAppReminder(entry.item, entry.teacher, 'OVERDUE_WARN')
+                              }
+                              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow cursor-pointer transition"
+                            >
+                              <Send className="w-3.5 h-3.5" />
+                              <span>WhatsApp Teguran</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Section B: Year-End PBPPP Compliance & Punctuality Evidence Table */}
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-base font-black text-white uppercase tracking-wider flex items-center gap-2">
+                  <BarChart2 className="w-5 h-5 text-indigo-400" />
+                  <span>Rekod Bukti Penilaian Akhir Tahun (PBPPP Compliance & Punctuality Scorecard)</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Data objektif ketepatan masa penghantaran laporan, pelaksanaan tugas dan rekod peringatan WhatsApp bagi setiap guru.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleExportEvidenceCsv}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Eksport Bukti CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Cetak Laporan</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-950 text-slate-400 uppercase font-mono text-[10px] border-b border-slate-800">
+                    <th className="py-3 px-4">Nama Guru</th>
+                    <th className="py-3 px-3 text-center">Jumlah Tugasan</th>
+                    <th className="py-3 px-3 text-center text-emerald-400">Selesai Ikut Masa</th>
+                    <th className="py-3 px-3 text-center text-amber-400">Selesai Lewat</th>
+                    <th className="py-3 px-3 text-center text-rose-400">Masih Tertunggak</th>
+                    <th className="py-3 px-3 text-center">Peringatan WA</th>
+                    <th className="py-3 px-3 text-center">Skor Pematuhan</th>
+                    <th className="py-3 px-4 text-right">Mesej Pantas WhatsApp</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 font-mono">
+                  {teacherComplianceStats.map((stat) => (
+                    <tr key={stat.teacher.teacherId} className="hover:bg-slate-800/40">
+                      <td className="py-3 px-4 font-sans font-bold text-white">
+                        <div>{stat.teacher.fullName}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {stat.teacher.teacherId} • {stat.teacher.phone || 'Tiada No. Tel'}
+                        </div>
+                      </td>
+                      <td className="py-3 px-3 text-center font-bold text-slate-200">
+                        {stat.totalAssigned}
+                      </td>
+                      <td className="py-3 px-3 text-center font-bold text-emerald-400">
+                        {stat.completedOnTime}
+                      </td>
+                      <td className="py-3 px-3 text-center font-bold text-amber-400">
+                        {stat.completedLate}
+                      </td>
+                      <td className="py-3 px-3 text-center font-bold text-rose-400">
+                        {stat.overduePending}
+                      </td>
+                      <td className="py-3 px-3 text-center text-slate-300">
+                        {stat.totalWaReminders} kali
+                      </td>
+                      <td className="py-3 px-3 text-center">
+                        <span
+                          className={`px-2.5 py-1 rounded-lg text-xs font-black ${
+                            stat.complianceScore >= 85
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              : stat.complianceScore >= 65
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                              : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                          }`}
+                        >
+                          {stat.complianceScore}%
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right font-sans">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectWaTeacher(stat.teacher);
+                            setDirectWaMessage(
+                              `Sila semak senarai tugasan/laporan anda dalam sistem iSEPADU (Skor ketepatan masa semasa: ${stat.complianceScore}%, Tertunggak: ${stat.overduePending}).`
+                            );
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-emerald-600 text-slate-200 hover:text-white border border-slate-700 text-xs font-bold inline-flex items-center gap-1.5 transition cursor-pointer"
+                        >
+                          <Phone className="w-3.5 h-3.5" />
+                          <span>WhatsApp Guru</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL 1: CREATE NEW MAKLUMAN / TASK / COURSE / MEETING / COMPETITION  */}
+      {/* ===================================================================== */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-xl w-full p-6 space-y-5 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-base font-black text-white">
+                Tambah Makluman / Tugasan / Acara Baharu
+              </h3>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateMakluman} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Kategori Makluman</label>
+                <select
+                  value={formCategory}
+                  onChange={(e) => setFormCategory(e.target.value as MaklumanCategory)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white font-bold"
+                >
+                  <option value="TUGASAN">📋 Tugasan & Laporan (eSPKWS / Aset / PBD / Panitia)</option>
+                  <option value="KURSUS">🎓 Kursus & Latihan (LDP / SPLKPM)</option>
+                  <option value="MESYUARAT">👥 Mesyuarat, Taklimat & PLC</option>
+                  <option value="PERTANDINGAN">🏆 Pertandingan Koakademik & Sukan</option>
+                  <option value="AKTIVITI">🎉 Aktiviti & Program Sekolah</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Tajuk Perkara / Acara</label>
+                <input
+                  type="text"
+                  required
+                  value={formTitle}
+                  onChange={(e) => setFormTitle(e.target.value)}
+                  placeholder="cth: Penghantaran Laporan Sukuan Aset Suku Ke-4 / Mesyuarat Kurikulum Bil. 4"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">Tarikh Akhir / Tarikh Acara</label>
+                  <input
+                    type="date"
+                    required
+                    value={formDueDate}
+                    onChange={(e) => setFormDueDate(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">Masa (Pilihan)</label>
+                  <input
+                    type="time"
+                    value={formDueTime}
+                    onChange={(e) => setFormDueTime(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Lokasi / Platform</label>
+                <input
+                  type="text"
+                  value={formLocation}
+                  onChange={(e) => setFormLocation(e.target.value)}
+                  placeholder="cth: Bilik Mesyuarat / Google Meet / Portal eSPKWS"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Sasaran Guru</label>
+                <div className="flex gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setFormTargetType('SEMUA_GURU')}
+                    className={`flex-1 py-2 rounded-xl font-bold border cursor-pointer ${
+                      formTargetType === 'SEMUA_GURU'
+                        ? 'bg-indigo-600 text-white border-indigo-500'
+                        : 'bg-slate-950 text-slate-400 border-slate-800'
+                    }`}
+                  >
+                    Semua Guru
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormTargetType('GURU_TERPILIH')}
+                    className={`flex-1 py-2 rounded-xl font-bold border cursor-pointer ${
+                      formTargetType === 'GURU_TERPILIH'
+                        ? 'bg-indigo-600 text-white border-indigo-500'
+                        : 'bg-slate-950 text-slate-400 border-slate-800'
+                    }`}
+                  >
+                    Guru Terpilih Sahaja
+                  </button>
+                </div>
+
+                {formTargetType === 'GURU_TERPILIH' && (
+                  <div className="max-h-36 overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-2.5 space-y-1.5">
+                    {activeTeachers.map((t) => {
+                      const checked = formSelectedTeachers.includes(t.teacherId);
+                      return (
+                        <label
+                          key={t.teacherId}
+                          className="flex items-center gap-2 text-slate-200 cursor-pointer hover:bg-slate-900 p-1 rounded"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setFormSelectedTeachers((prev) => [...prev, t.teacherId]);
+                              } else {
+                                setFormSelectedTeachers((prev) =>
+                                  prev.filter((id) => id !== t.teacherId)
+                                );
+                              }
+                            }}
+                          />
+                          <span className="font-semibold">{t.fullName}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Butiran / Catatan Tindakan</label>
+                <textarea
+                  rows={3}
+                  value={formDesc}
+                  onChange={(e) => setFormDesc(e.target.value)}
+                  placeholder="Isikan arahan lanjut atau pautan rujukan..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-lg"
+                >
+                  Terbitkan Makluman
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL 2: DIRECT WHATSAPP MESSAGE FROM PRINCIPAL TO TEACHER            */}
+      {/* ===================================================================== */}
+      {directWaTeacher && (
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <Phone className="w-4 h-4 text-emerald-400" />
+                <span>WhatsApp Kepada: {directWaTeacher.fullName}</span>
+              </h3>
+              <button
+                onClick={() => setDirectWaTeacher(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="text-xs space-y-2">
+              <p className="text-slate-400">
+                No. Telefon: <strong className="text-white font-mono">{directWaTeacher.phone || 'Tiada'}</strong>
+              </p>
+              <textarea
+                rows={4}
+                value={directWaMessage}
+                onChange={(e) => setDirectWaMessage(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-xs"
+                placeholder="Tulis mesej peringatan atau arahan rasmi kepada guru..."
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDirectWaTeacher(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleSendDirectWhatsApp}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Buka WhatsApp & Hantar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

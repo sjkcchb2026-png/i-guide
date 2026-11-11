@@ -1,0 +1,77 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Admins registry: Readable by authenticated users; Client writes are STRICTLY PROHIBITED.
+    // Admins are created exclusively by the server backend with SETUP_TOKEN.
+    match /admins/{userId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // School Settings: Readable by public portal and staff; Client writes are STRICTLY PROHIBITED.
+    match /school_settings/{settingId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Staff accounts: Staff can only read their own profile; Principal can list all profiles.
+    // Client writes are STRICTLY PROHIBITED (managed solely by server backend with Principal auth).
+    match /users/{userId} {
+      allow get: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    // Attendance Records: Staff can only read their own records; Principal can read all.
+    // Client writes are STRICTLY PROHIBITED. All punches are executed by backend transactions.
+    match /attendance/{recordId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // Isolated GPS Coordinates: Readable EXCLUSIVELY by Principal. Staff and public cannot read.
+    // Client writes are STRICTLY PROHIBITED.
+    match /attendance_geo/{recordId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // User Attendance State: Readable by owner or Principal. Client writes prohibited.
+    match /user_attendance_state/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow write: if false;
+    }
+
+    // School Calendar & Holidays: Readable by authenticated users; Principal can write.
+    match /school_calendar/{calId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Absence / Leave / Official Duty Records: Readable by owner or Principal; Principal can write.
+    match /absence_records/{recordId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+  }
+}

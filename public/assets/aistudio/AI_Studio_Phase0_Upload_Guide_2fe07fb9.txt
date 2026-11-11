@@ -1,0 +1,11 @@
+iSEPADU AI — GOOGLE AI STUDIO PHASE 0 UPLOAD GUIDE
+==================================================
+
+Upload these THREE plain-text files instead of ZIP/XLSX:
+1. iSEPADU_Core_Phase0_Audit_Pack.txt
+2. Staff_Attendance_Phase0_Audit_Pack.txt
+3. Student_Master_Import_Schema_Reference.txt
+
+Then paste the Phase 0 master directive from ChatGPT.
+Do not upload the raw student workbook for the architecture audit; the schema reference is sufficient and safer.
+The packs preserve original source paths and contain the critical files needed for the requested audit.

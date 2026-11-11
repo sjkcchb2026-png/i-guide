@@ -1,0 +1,246 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.email == 'sjkcchb2026@gmail.com';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isSuperAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Health / Connection probes
+    match /test/{docId} {
+      allow read: if true;
+    }
+    match /_connection_test_/{docId} {
+      allow read: if true;
+    }
+
+    // Admins registry: Readable by authenticated users; Client writes restricted to SuperAdmin
+    match /admins/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    // School Settings: Publicly readable for school branding; Admin write
+    match /school_settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Institutional Configuration (Sessions, scale config, master locks)
+    match /school_config/{configId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Staff accounts: Staff can only read their own profile; Principal / Admin can list all
+    match /users/{userId} {
+      allow get: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow write: if isAdmin() || isOwner(userId);
+    }
+
+    // Master Data: Personnel SSOT
+    match /personnel/{personnelId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Academic Teachers
+    match /teachers/{teacherId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Academic Years
+    match /academic_years/{yearId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Classes / Cohorts
+    match /classes/{classId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Subject Teacher Allocations
+    match /subject_allocations/{allocId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // School Timetable Matrix and Schedule Grids
+    match /school_timetables/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Governance & Portfolios
+    match /governance_assignments/{gaId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Permanent Student Master Record
+    match /student_master/{studentId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Active Year Student Class Enrollment
+    match /students/{enrollmentId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Import Audit Sessions & Rollback Records
+    match /import_sessions/{sessionId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /rollback_records/{recordId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Audit Trail: Appendable by signed-in actors; readable by Admin
+    match /audit_trail/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+
+    // Academic PBD Results: Readable by signed-in staff; Updatable by staff / Admin
+    match /pbd_results/{resultId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Academic UASA Results: Readable by signed-in staff; Updatable by staff / Admin
+    match /uasa_results/{resultId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Academic OPR Reports (One Page Reporting - Aktiviti Panitia & PLC)
+    match /academic_opr_reports/{reportId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Makluman Tasks, Checklists & WhatsApp Evidence
+    match /makluman_tasks/{taskId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Kokurikulum Entities
+    match /koko_memberships/{memberId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /koko_groups/{groupId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /koko_attendance/{attId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /koko_committees/{commId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /koko_settings/{settingId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /koko_activities/{actId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /bulletins/{bulletinId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Attendance Records: Staff can read their own records; Admin can read all
+    match /attendance/{recordId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+    }
+
+    // Isolated GPS Coordinates: Readable by Admin; Writable by Admin or user punch
+    match /attendance_geo/{recordId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+    }
+
+    // User Attendance State
+    match /user_attendance_state/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // School Calendar & Holidays
+    match /school_calendar/{calId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Absence / Leave / Official Duty Records
+    match /absence_records/{recordId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+    }
+
+    // Surat Masuk (Incoming Letters by Pembantu Operasi / Clerk / Admin)
+    match /surat_masuk_records/{suratId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Staff Unavailability (Auto-generated by Surat Masuk for Kursus / Urusan Rasmi)
+    match /staff_unavailability/{unavailId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Relief Alerts (Auto-generated by Surat Masuk for absent teachers needing substitute teachers)
+    match /relief_alerts_from_surat/{alertId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Relief Schedules (Assigned substitute teachers per period)
+    match /relief_schedules/{scheduleId} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}
