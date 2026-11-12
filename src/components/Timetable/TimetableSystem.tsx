@@ -11,6 +11,8 @@ import { ClassTimetableView } from './ClassTimetableView';
 import { BilikGuruReliefView } from './BilikGuruReliefView';
 import { TeacherTimetableView } from './TeacherTimetableView';
 import { ReliefSchedulingView } from '../ReliefSchedulingView';
+import { OFFICIAL_TEACHERS, generateTeacherShortCode } from '../../constants/officialRoster';
+import { buildDefaultCurriculumMatrix, getDefaultClassTeachers } from '../../constants/defaultCurriculumMatrix';
 import { 
   ScheduleGrid, 
   TimetableClash 
@@ -33,7 +35,8 @@ import {
   CheckCircle2, 
   ToggleLeft, 
   ToggleRight,
-  Bell
+  Bell,
+  Calendar
 } from 'lucide-react';
 
 export type TimetableTab = 
@@ -58,13 +61,11 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
   initialTab = 'AGIHAN',
 }) => {
   const [activeTab, setActiveTab] = useState<TimetableTab>(initialTab);
-  const [selectedYear, setSelectedYear] = useState<string>(activeAcademicYear);
+  const [selectedYear, setSelectedYear] = useState<string>(activeAcademicYear || '2027');
   const [displayMode, setDisplayMode] = useState<'NUMBER' | 'CODE'>('CODE');
   const [personnelList, setPersonnelList] = useState<PersonnelProfile[]>([]);
-  const [matrixData, setMatrixData] = useState<SubjectAllocationRow[]>([]);
-  const [classTeachers, setClassTeachers] = useState<Record<number, string>>({
-    1: '', 2: '', 3: '', 4: '', 5: '', 6: '',
-  });
+  const [matrixData, setMatrixData] = useState<SubjectAllocationRow[]>(() => buildDefaultCurriculumMatrix(activeAcademicYear || '2027'));
+  const [classTeachers, setClassTeachers] = useState<Record<number, string>>(() => getDefaultClassTeachers());
 
   const [schedule, setSchedule] = useState<ScheduleGrid>(createEmptyScheduleGrid());
   const [clashes, setClashes] = useState<TimetableClash[]>([]);
@@ -82,28 +83,50 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     let isMounted = true;
     async function loadData() {
       try {
-        // 1. Load Personnel (Strictly teachers with g- email; exclude AKP)
-        const pSnap = await getDocs(collection(db, 'personnel'));
+        // 1. Load Personnel (Strictly teachers; exclude AKP)
+        const pSnap = await getDocs(collection(db, 'personnel')).catch(() => null);
         const teachers: PersonnelProfile[] = [];
-        pSnap.forEach((d) => {
-          const data = d.data();
-          if (isTeacherForTimetable(data)) {
-            teachers.push({ id: d.id, ...data } as PersonnelProfile);
+        if (pSnap && !pSnap.empty) {
+          pSnap.forEach((d) => {
+            const data = d.data();
+            if (isTeacherForTimetable(data)) {
+              teachers.push({ id: d.id, ...data } as PersonnelProfile);
+            }
+          });
+        }
+
+        // Merge official teachers if any are missing (ensures Muhammad Fahim Amar & all 14 teachers are present)
+        OFFICIAL_TEACHERS.forEach((ot) => {
+          const exists = teachers.some(
+            (p) =>
+              (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
+              (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
+          );
+          if (!exists) {
+            teachers.push(ot as any);
           }
         });
+
         if (isMounted) setPersonnelList(teachers);
 
-        // 2. Load Matrix Data
+        // 2. Load Matrix Data (Fallback to official default curriculum allocation if not yet saved)
         const matrixDocRef = doc(db, 'school_timetables', `matrix_${selectedYear}`);
         const matrixSnap = await getDoc(matrixDocRef);
         if (matrixSnap.exists()) {
           const mData = matrixSnap.data();
-          if (Array.isArray(mData.matrixData) && isMounted) {
+          if (Array.isArray(mData.matrixData) && mData.matrixData.length > 0 && isMounted) {
             setMatrixData(mData.matrixData);
+          } else if (isMounted) {
+            setMatrixData(buildDefaultCurriculumMatrix(selectedYear));
           }
-          if (mData.classTeachers && isMounted) {
+          if (mData.classTeachers && Object.values(mData.classTeachers).filter(Boolean).length > 0 && isMounted) {
             setClassTeachers(mData.classTeachers);
+          } else if (isMounted) {
+            setClassTeachers(getDefaultClassTeachers());
           }
+        } else if (isMounted) {
+          setMatrixData(buildDefaultCurriculumMatrix(selectedYear));
+          setClassTeachers(getDefaultClassTeachers());
         }
 
         // 3. Load Schedule Grid
@@ -136,22 +159,44 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
 
   // Teacher Mapping for code & num resolution
   const teacherMapping = useMemo(() => {
-    const list = personnelList.slice(0, 50).map((t, idx) => {
+    const sourceList: PersonnelProfile[] = [...personnelList];
+
+    // Ensure all 14 official teachers exist in the list
+    OFFICIAL_TEACHERS.forEach((ot) => {
+      const exists = sourceList.some(
+        (p) =>
+          (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
+          (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
+      );
+      if (!exists) {
+        sourceList.push({
+          id: ot.id,
+          name: ot.name,
+          email: ot.email,
+          category: ot.category,
+          role: ot.role,
+          position: ot.position,
+        } as any);
+      }
+    });
+
+    const list = sourceList.slice(0, 50).map((t, idx) => {
       const num = idx + 1;
-      const code =
-        (t as any).code ||
-        (t.name || '')
-          .split(' ')
-          .filter(Boolean)
-          .map((w) => w[0])
-          .join('')
-          .toUpperCase()
-          .slice(0, 4);
+      let cleanName = (t.name || '').replace(/\s+/g, ' ').trim();
+      if (cleanName.toUpperCase().includes('FAHIM') && cleanName.toUpperCase().includes('AMAR')) {
+        cleanName = 'MUHAMMAD FAHIM AMAR';
+      } else if (cleanName.toUpperCase().includes('STEPHANIE') && cleanName.toUpperCase().includes('WONG')) {
+        cleanName = 'STEPHANIE WONG ENG HEE';
+      }
+
+      // Generate short form (rule: 4 words -> 2 initials, e.g. Stephanie Wong Eng Hee -> SW)
+      const code = (t as any).code || generateTeacherShortCode(cleanName);
+
       return {
         id: t.id,
         num,
         code,
-        name: t.name || '',
+        name: cleanName,
       };
     });
 
@@ -165,27 +210,55 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     setClashes(foundClashes);
   };
 
-  // Auto Schedule Generation
+  // Auto Schedule Generation (Self-healing with official curriculum fallback)
   const handleRunAutoScheduler = () => {
-    if (matrixData.length === 0) {
-      alert('Sila lengkapkan agihan waktu dan guru di tab AGIHAN terlebih dahulu.');
-      return;
+    let currentMatrix = matrixData;
+    let currentClassTeachers = classTeachers;
+
+    if (!currentMatrix || currentMatrix.length === 0) {
+      currentMatrix = buildDefaultCurriculumMatrix(selectedYear);
+      setMatrixData(currentMatrix);
     }
 
-    const { grid, clashes: newClashes, unplaced } = generateAutoSchedule(
-      matrixData,
-      classTeachers,
-      selectedYear
-    );
+    if (!currentClassTeachers || Object.values(currentClassTeachers).filter(Boolean).length === 0) {
+      currentClassTeachers = getDefaultClassTeachers();
+      setClassTeachers(currentClassTeachers);
+    }
 
-    setSchedule(grid);
-    setClashes(newClashes);
+    try {
+      setSaveStatus('Sedang menjana jadual waktu secara automatik...');
+      const { grid, clashes: newClashes, unplaced } = generateAutoSchedule(
+        currentMatrix,
+        currentClassTeachers,
+        selectedYear
+      );
 
-    if (unplaced.length > 0) {
-      alert(`Jadual dijana dengan ${unplaced.length} subjek memerlukan pelarasan manual.`);
-    } else {
-      setSaveStatus('Jadual waktu berjaya dijana secara automatik tanpa pertembungan!');
-      setTimeout(() => setSaveStatus(null), 4000);
+      setSchedule(grid);
+      setClashes(newClashes);
+
+      // Persist generated schedule to Firestore
+      const scheduleDocRef = doc(db, 'school_timetables', `schedule_${selectedYear}`);
+      setDoc(
+        scheduleDocRef,
+        {
+          academicYear: selectedYear,
+          schedule: grid,
+          classTeachers: currentClassTeachers,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch((err) => console.warn('Auto-save schedule notice:', err));
+
+      if (unplaced.length > 0) {
+        setSaveStatus(`Jadual waktu berjaya dijana! (${unplaced.length} waktu memerlukan pelarasan manual)`);
+      } else {
+        setSaveStatus('Jadual waktu berjaya dijana secara automatik dengan sifar pertembungan!');
+      }
+      setTimeout(() => setSaveStatus(null), 5000);
+    } catch (err: any) {
+      console.error('Auto scheduler error:', err);
+      setSaveStatus(`Ralat penjanaan jadual: ${err.message || 'Sila semak semula agihan subjek'}`);
+      setTimeout(() => setSaveStatus(null), 6000);
     }
   };
 
@@ -318,8 +391,24 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           </button>
         </div>
 
-        {/* Global Controls: Mode Toggle & Save Schedule */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Global Controls: Year Selector, Mode Toggle & Save Schedule */}
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          {/* Academic Year Selector */}
+          <div className="flex items-center gap-1.5 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-700">
+            <Calendar className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-[11px] font-bold text-slate-400">Sesi:</span>
+            <select
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(e.target.value)}
+              className="bg-transparent text-white font-black text-xs outline-none cursor-pointer"
+            >
+              <option value="2026" className="bg-slate-900 text-white">2026 / 2027</option>
+              <option value="2027" className="bg-slate-900 text-white">2027 / 2028</option>
+              <option value="2028" className="bg-slate-900 text-white">2028 / 2029</option>
+              <option value="2029" className="bg-slate-900 text-white">2029 / 2030</option>
+            </select>
+          </div>
+
           <button
             onClick={() => setDisplayMode(displayMode === 'CODE' ? 'NUMBER' : 'CODE')}
             className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-xs font-bold text-slate-300 border border-slate-700 transition cursor-pointer"
@@ -374,6 +463,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             displayMode={displayMode}
             classTeachers={classTeachers}
             academicYear={selectedYear}
+            onYearChange={(newYear) => setSelectedYear(newYear)}
           />
         )}
 

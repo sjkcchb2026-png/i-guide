@@ -55,7 +55,10 @@ export interface SubjectAssignment {
   className: string;
   canonicalSubjectCode: string;
   subjectName: string;
-  teacherId: string;
+  teacherId: string; // Guru 1 (Guru Utama)
+  secondaryTeacherId?: string; // Guru 2 (Guru Bersama / Co-Teacher)
+  coTeacherId?: string;
+  isTeamTeaching?: boolean;
   effectiveWeeklyPeriods: number;
   assignmentType?: 'PBM' | 'PMT' | string;
   isPemulihan?: boolean;
@@ -64,6 +67,12 @@ export interface SubjectAssignment {
 // --------------------------------------------------------------------------
 // 1. 科目特征识别辅助函数
 // --------------------------------------------------------------------------
+export function isAMSubject(code?: string, name?: string): boolean {
+  const c = (code || '').trim().toUpperCase();
+  const n = (name || '').trim().toUpperCase();
+  return c === 'AM' || n.includes('ALAM DAN MANUSIA');
+}
+
 export function isPairedMoralIslam(code?: string): 'PM' | 'PAI' | null {
   const c = (code || '').trim().toUpperCase();
   if (c === 'PM' || c === 'MORAL') return 'PM';
@@ -170,7 +179,7 @@ export function canTeacherTakeSlot(
 }
 
 // --------------------------------------------------------------------------
-// 4. TASMIK 跨班合班 (GABUNG KELAS) 冲突白名单
+// 4. TASMIK 跨班合班 (GABUNG KELAS) 与 协同教学 (CO-TEACHING) 冲突白名单
 // --------------------------------------------------------------------------
 export function isTimetableConflict(
   existingLesson: any,
@@ -185,6 +194,16 @@ export function isTimetableConflict(
     existingLesson.periodNumber === newLessonCandidate.periodNumber
   ) {
     // 判定为合法合班（Kelas Gabungan），豁免冲突！
+    return false;
+  }
+
+  // 协同教学 (Co-Teaching: AM / PM/PAI) 豁免自身关联的同一槽位
+  if (
+    existingLesson.day === newLessonCandidate.day &&
+    existingLesson.periodNumber === newLessonCandidate.periodNumber &&
+    (existingLesson.id === newLessonCandidate.parentTimetableSlotId ||
+      newLessonCandidate.id === existingLesson.parentTimetableSlotId)
+  ) {
     return false;
   }
 
@@ -309,6 +328,7 @@ export function runTimetableEngine(params: {
       !isTasmikSubject(a.canonicalSubjectCode, a.subjectName) &&
       !isPemulihanSubject(a.canonicalSubjectCode, a.subjectName) &&
       !isPKARSubject(a.canonicalSubjectCode, a.subjectName) &&
+      !isAMSubject(a.canonicalSubjectCode, a.subjectName) &&
       !a.isPemulihan
   );
 
@@ -591,6 +611,108 @@ export function runTimetableEngine(params: {
       scheduledPerAssignment.set(pmAsg.assignmentId, scheduled);
       scheduledPerAssignment.set(paiAsg.assignmentId, scheduled);
     }
+  });
+
+  // --------------------------------------------------------------------------
+  // STEP 2B: SCHEDULE ALAM DAN MANUSIA (AM) WITH CO-TEACHING (2 TEACHERS SIMULTANEOUSLY)
+  // --------------------------------------------------------------------------
+  nonPrasekolahClasses.forEach((cls) => {
+    const classAmAssignments = normalizedAssignments.filter(
+      (a) => a.classId === cls.classId && isAMSubject(a.canonicalSubjectCode, a.subjectName)
+    );
+
+    classAmAssignments.forEach((asg) => {
+      const teacherId1 = asg.teacherId;
+      const teacherId2 = (asg as any).secondaryTeacherId || (asg as any).coTeacherId;
+      const required = asg.effectiveWeeklyPeriods || 3;
+      let scheduled = scheduledPerAssignment.get(asg.assignmentId) || 0;
+
+      if (scheduled >= required) return;
+
+      const t1 = teacherMap.get(teacherId1);
+      const t2 = teacherId2 ? teacherMap.get(teacherId2) : null;
+      const combinedTeacherName = t2
+        ? `${t1?.fullName || teacherId1} / ${t2.fullName || teacherId2}`
+        : (t1?.fullName || teacherId1);
+
+      for (const day of DAYS_OF_WEEK) {
+        if (scheduled >= required) break;
+        const maxP = getDailyMaxPeriods(day);
+
+        for (let p = 1; p <= maxP; p++) {
+          if (scheduled >= required) break;
+
+          const cKey = `${cls.classId}_${day}_${p}`;
+          const t1Key = `${teacherId1}_${day}_${p}`;
+          const t2Key = teacherId2 ? `${teacherId2}_${day}_${p}` : null;
+
+          // 必须班级有空，且老师 1 和老师 2 都有空
+          const classFree = !classSlotOccupied.has(cKey);
+          const t1Free = !teacherSlotOccupied.has(t1Key);
+          const t2Free = t2Key ? !teacherSlotOccupied.has(t2Key) : true;
+
+          // 检查两位老师当天是否未满 8 节且符合休息规则
+          const t1Lessons = getTeacherPeriodsOnDay(teacherId1, day);
+          const t2Lessons = teacherId2 ? getTeacherPeriodsOnDay(teacherId2, day) : [];
+          const t1Valid = canTeacherTakeSlot(teacherId1, day, p, t1Lessons);
+          const t2Valid = teacherId2 ? canTeacherTakeSlot(teacherId2, day, p, t2Lessons) : true;
+
+          if (classFree && t1Free && t2Free && t1Valid && t2Valid) {
+            // 1. 锁定班级与两位老师的时段
+            classSlotOccupied.add(cKey);
+            teacherSlotOccupied.add(t1Key);
+            incTeacherDayCount(teacherId1, day);
+            addTeacherPeriodOnDay(teacherId1, day, p);
+
+            if (t2Key && teacherId2) {
+              teacherSlotOccupied.add(t2Key);
+              incTeacherDayCount(teacherId2, day);
+              addTeacherPeriodOnDay(teacherId2, day, p);
+            }
+
+            recordSubjectPeriod(cls.classId, 'AM', day, p);
+            scheduled++;
+
+            const lessonId = `am_${cls.classId}_${day}_P${p}`;
+
+            // 班级课表条目（显示两位老师名字）
+            lessons.push({
+              id: lessonId,
+              day,
+              periodNumber: p,
+              classId: cls.classId,
+              className: cls.className,
+              subjectCode: 'AM',
+              subjectName: 'Alam dan Manusia',
+              teacherId: teacherId1,
+              teacherName: combinedTeacherName,
+              countsAsClassPeriod: true,
+              countsAsTeacherPeriod: true, // 计入老师 1 节数
+            });
+
+            // 老师 2 专属条目（计入老师 2 个人课表与执教节数）
+            if (teacherId2 && t2) {
+              lessons.push({
+                id: `co_am_${cls.classId}_${day}_P${p}`,
+                day,
+                periodNumber: p,
+                classId: cls.classId,
+                className: cls.className,
+                subjectCode: 'AM',
+                subjectName: 'Alam dan Manusia (Co-Teaching)',
+                teacherId: teacherId2,
+                teacherName: t2.fullName,
+                parentTimetableSlotId: lessonId,
+                countsAsClassPeriod: false, // 班级不重复计节
+                countsAsTeacherPeriod: true, // 计入老师 2 节数
+              });
+            }
+          }
+        }
+      }
+
+      scheduledPerAssignment.set(asg.assignmentId, scheduled);
+    });
   });
 
   // --------------------------------------------------------------------------

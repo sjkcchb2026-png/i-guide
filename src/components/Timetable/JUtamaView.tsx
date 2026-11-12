@@ -36,6 +36,17 @@ export const JUtamaView: React.FC<JUtamaViewProps> = ({
 
   const getTeacherLabel = (code: string) => {
     if (!code) return '';
+    if (code.includes('/')) {
+      return code
+        .split('/')
+        .map((c) => {
+          const trimmed = c.trim();
+          if (displayMode === 'CODE') return trimmed;
+          const found = teacherMapping.list.find((t) => t.code === trimmed);
+          return found ? String(found.num) : trimmed;
+        })
+        .join(' / ');
+    }
     if (displayMode === 'CODE') return code;
     const found = teacherMapping.list.find((t) => t.code === code);
     return found ? String(found.num) : code;

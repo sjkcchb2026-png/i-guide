@@ -113,6 +113,7 @@ export function detectScheduleClashes(grid: ScheduleGrid): TimetableClash[] {
     // Collect all assignments on this day with exact start and end minute
     const dayAssignments: Array<{
       teacherCode: string;
+      subjectCode: string;
       grade: number;
       slotId: string;
       startMin: number;
@@ -128,6 +129,7 @@ export function detectScheduleClashes(grid: ScheduleGrid): TimetableClash[] {
         if (cell && cell.teacherCode && cell.teacherCode.trim() !== '') {
           dayAssignments.push({
             teacherCode: cell.teacherCode.trim(),
+            subjectCode: cell.subjectCode || '',
             grade,
             slotId: s.slotId,
             startMin: s.startMinutes,
@@ -143,10 +145,22 @@ export function detectScheduleClashes(grid: ScheduleGrid): TimetableClash[] {
       for (let j = i + 1; j < dayAssignments.length; j++) {
         const a = dayAssignments[i];
         const b = dayAssignments[j];
-        if (a.teacherCode === b.teacherCode && a.grade !== b.grade) {
+        // Whitelist: PN and TASMIK (Gabung Kelas) are intentionally concurrent
+        if (a.subjectCode === 'PN' || b.subjectCode === 'PN') continue;
+        if ((a.subjectCode === 'TASMIK' || a.subjectCode === 'TAS') && (b.subjectCode === 'TASMIK' || b.subjectCode === 'TAS')) continue;
+
+        // If it's the exact same grade and slot, continue (not a cross-grade collision)
+        if (a.grade === b.grade && a.slotId === b.slotId) continue;
+
+        const aTeachers = a.teacherCode.split('/').map((c) => c.trim()).filter(Boolean);
+        const bTeachers = b.teacherCode.split('/').map((c) => c.trim()).filter(Boolean);
+
+        const overlappingTeacher = aTeachers.find((at) => bTeachers.includes(at));
+
+        if (overlappingTeacher && a.grade !== b.grade) {
           if (checkIntervalOverlap(a.startMin, a.endMin, b.startMin, b.endMin)) {
             clashes.push({
-              teacherCode: a.teacherCode,
+              teacherCode: overlappingTeacher,
               day,
               gradeA: a.grade,
               slotA: a.slotId,
@@ -154,7 +168,7 @@ export function detectScheduleClashes(grid: ScheduleGrid): TimetableClash[] {
               gradeB: b.grade,
               slotB: b.slotId,
               timeB: b.timeStr,
-              message: `Guru [${a.teacherCode}] bertembung pada hari ${day}: T.${a.grade} (${a.slotId} ${a.timeStr}) & T.${b.grade} (${b.slotId} ${b.timeStr})`,
+              message: `Guru [${overlappingTeacher}] bertembung pada hari ${day}: T.${a.grade} (${a.slotId} ${a.timeStr}) & T.${b.grade} (${b.slotId} ${b.timeStr})`,
             });
           }
         }
@@ -176,6 +190,9 @@ export function generateAutoSchedule(
   const grid = createEmptyScheduleGrid();
   const unplaced: string[] = [];
 
+  // Deep clone matrixData to prevent mutating shared references across calls
+  const cleanMatrix: SubjectAllocationRow[] = JSON.parse(JSON.stringify(matrixData));
+
   // Helper to check if a grade uses KP2027
   const isKP = (g: number) => {
     const yr = parseInt(academicYear, 10) || 2027;
@@ -186,7 +203,7 @@ export function generateAutoSchedule(
   // 1. PLACE MANDATORY LOCKED SLOTS
   // (a) Perhimpunan (PN): Tuesday (SELASA) W1 for all grades 1 to 6
   [1, 2, 3, 4, 5, 6].forEach((grade) => {
-    const pnRow = matrixData.find((r) => r.subjectCode.toUpperCase() === 'PN');
+    const pnRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'PN');
     const teacher = pnRow?.teachers[grade] || classTeachers[grade] || '';
     grid[grade]['SELASA']['W1'] = {
       subjectId: 'pn',
@@ -211,8 +228,8 @@ export function generateAutoSchedule(
 
       DAYS_OF_WEEK.forEach((day) => {
         const subCode = dayCodes[day];
-        const dayRow = matrixData.find((r) => r.subjectCode.toUpperCase() === subCode);
-        const legacyRow = matrixData.find((r) => r.subjectCode.toUpperCase() === 'PKAR');
+        const dayRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === subCode);
+        const legacyRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'PKAR');
         const teacher = dayRow?.teachers[grade] || legacyRow?.teachers[grade] || classTeachers[grade] || '';
 
         grid[grade][day]['PKAR'] = {
@@ -234,10 +251,11 @@ export function generateAutoSchedule(
       row: SubjectAllocationRow;
       periods: number;
       teacherCode: string;
+      secondaryTeacherCode?: string;
       blocks: number[];
     }> = [];
 
-    matrixData.forEach((row) => {
+    cleanMatrix.forEach((row) => {
       // PN and PKAR already scheduled
       if (row.subjectCode.toUpperCase() === 'PN' || row.subjectCode.toUpperCase().startsWith('PKAR')) {
         return;
@@ -246,10 +264,16 @@ export function generateAutoSchedule(
       const pCount = Number(row.periods[grade] || 0);
       if (pCount > 0) {
         const blocks = getSubjectBlockDistribution(row.subjectCode, pCount);
+        const t1 = row.teachers[grade] || '';
+        const t2 = row.secondaryTeachers?.[grade] || '';
+        const isAm = row.subjectCode.toUpperCase() === 'AM';
+        const combinedCode = isAm && t2 ? `${t1}/${t2}` : t1;
+
         subjectList.push({
           row,
           periods: pCount,
-          teacherCode: row.teachers[grade] || '',
+          teacherCode: combinedCode,
+          secondaryTeacherCode: t2,
           blocks,
         });
       }
@@ -300,11 +324,11 @@ export function generateAutoSchedule(
         if (blocks.length >= 3) {
           // Triplet pattern: ISNIN, RABU, JUMAAT (1, 3, 5) or ISNIN, SELASA, KHAMIS (1, 2, 4)
           targetDays = ['ISNIN', 'RABU', 'JUMAAT'];
-        } else if (blocks.length === 2) {
-          targetDays = ['SELASA', pairedPjPkDay];
         } else {
           targetDays = [pairedPjPkDay];
         }
+      } else if (code === 'AM') {
+        targetDays = ['ISNIN', 'RABU', 'KHAMIS'];
       } else if (code === 'TASMIK' || code === 'TAS') {
         // Tasmik 2 periods: Pick 2 days from Wednesday, Thursday, Friday
         targetDays = ['RABU', 'KHAMIS'];
@@ -342,7 +366,9 @@ export function generateAutoSchedule(
           const teacher = sub.teacherCode;
           let teacherHasCollision = false;
 
-          if (teacher && teacher.trim() !== '') {
+          const currentTeachers = teacher.split('/').map((c) => c.trim()).filter(Boolean);
+
+          if (currentTeachers.length > 0) {
             for (const cand of candidateSlots) {
               // Check against existing assignments in other grades
               for (const otherGrade of [1, 2, 3, 4, 5, 6]) {
@@ -351,10 +377,23 @@ export function generateAutoSchedule(
                 for (const os of otherSlots) {
                   if (os.isRecess) continue;
                   const otherCell = grid[otherGrade][day][os.slotId];
-                  if (otherCell && otherCell.teacherCode === teacher) {
-                    if (checkIntervalOverlap(cand.startMinutes, cand.endMinutes, os.startMinutes, os.endMinutes)) {
-                      teacherHasCollision = true;
-                      break;
+                  if (otherCell && otherCell.teacherCode) {
+                    const otherTeachers = otherCell.teacherCode.split('/').map((c) => c.trim()).filter(Boolean);
+
+                    // TASMIK is a combined class (gabung kelas) across grades after school
+                    if (
+                      (code === 'TASMIK' || code === 'TAS') &&
+                      (otherCell.subjectCode.toUpperCase() === 'TASMIK' || otherCell.subjectCode.toUpperCase() === 'TAS')
+                    ) {
+                      continue;
+                    }
+
+                    const sharesTeacher = currentTeachers.some((ct) => otherTeachers.includes(ct));
+                    if (sharesTeacher) {
+                      if (checkIntervalOverlap(cand.startMinutes, cand.endMinutes, os.startMinutes, os.endMinutes)) {
+                        teacherHasCollision = true;
+                        break;
+                      }
                     }
                   }
                 }
@@ -368,11 +407,14 @@ export function generateAutoSchedule(
 
           // 3. Place block in these candidate slots
           candidateSlots.forEach((cs) => {
+            const isAm = sub.row.subjectCode.toUpperCase() === 'AM';
             grid[grade][day][cs.slotId] = {
               subjectId: sub.row.id,
               subjectCode: sub.row.subjectCode,
-              subjectName: sub.row.subjectName,
+              subjectName: isAm && sub.secondaryTeacherCode ? 'ALAM DAN MANUSIA (CO-TEACHING)' : sub.row.subjectName,
               teacherCode: sub.teacherCode,
+              secondaryTeacherCode: sub.secondaryTeacherCode,
+              isCoTeaching: isAm && Boolean(sub.secondaryTeacherCode),
               periodLength: 1,
             };
           });
@@ -391,11 +433,14 @@ export function generateAutoSchedule(
               if (!allFree) continue;
 
               candidateSlots.forEach((cs) => {
+                const isAm = sub.row.subjectCode.toUpperCase() === 'AM';
                 grid[grade][altDay][cs.slotId] = {
                   subjectId: sub.row.id,
                   subjectCode: sub.row.subjectCode,
-                  subjectName: sub.row.subjectName,
+                  subjectName: isAm && sub.secondaryTeacherCode ? 'ALAM DAN MANUSIA (CO-TEACHING)' : sub.row.subjectName,
                   teacherCode: sub.teacherCode,
+                  secondaryTeacherCode: sub.secondaryTeacherCode,
+                  isCoTeaching: isAm && Boolean(sub.secondaryTeacherCode),
                   periodLength: 1,
                 };
               });

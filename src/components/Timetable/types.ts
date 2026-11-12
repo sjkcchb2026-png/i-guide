@@ -21,7 +21,9 @@ export interface TimetableCell {
   subjectId: string;    // e.g. 'bc', 'bm', 'pn', 'pkar', etc.
   subjectCode: string;  // e.g. 'BC', 'BM', 'PN', 'PKAR'
   subjectName: string;  // e.g. 'BAHASA CINA'
-  teacherCode: string;  // e.g. 'GB' or '1'
+  teacherCode: string;  // e.g. 'GB' or '1' or 'NCY/VY'
+  secondaryTeacherCode?: string; // Guru 2 (Guru Bersama / Co-Teacher)
+  isCoTeaching?: boolean; // Flagged for team teaching
   teacherName?: string; // e.g. 'GURU BESAR'
   periodLength?: number;// 1 (30m) or 0.5 (15m for PKAR) or 2 (60m)
   isLocked?: boolean;   // Monday W1 PN or daily 09:30 PKAR

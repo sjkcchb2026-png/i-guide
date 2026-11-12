@@ -282,9 +282,14 @@ export function determineStaffCategory(email: string): StaffCategory {
 
 /**
  * 校验教职员是否为教师（用于排课系统）：
- * 规则：如果是老师，email 是g开头的。只要没有g-开始，否则都是akp。akp不需要加入时间表处。
+ * 规则：
+ * 1. 严格排除 AKP（Pembantu Tadbir, Pembantu Operasi, PPM, PKA, Kerani）。
+ * 2. 认可所有教师，包括具有 moe-dl.edu.my 账号的伊斯兰宗教教师（如 Muhammad Fahim Amar BIN Abdul Rahim）。
+ * 3. 认可 category/role 为 GURU 或 PRINCIPAL，或职称包含 GPI / GAB / GP / GB / PK / GPM 的教职员。
  */
 export function isTeacherForTimetable(profile: {
+  name?: string;
+  nama?: string;
   email?: string;
   emel?: string;
   category?: string;
@@ -292,25 +297,57 @@ export function isTeacherForTimetable(profile: {
   position?: string;
   jawatan?: string;
 }): boolean {
+  const name = (profile.name || (profile as any).nama || '').toUpperCase();
   const email = (profile.email || profile.emel || '').trim().toLowerCase();
-  // 必须以 g- 或 g. 开头才算教师
-  if (!email.startsWith('g-') && !email.startsWith('g.')) {
-    return false;
-  }
   const category = (profile.category || '').toUpperCase();
   const role = (profile.role || '').toUpperCase();
   const position = (profile.position || profile.jawatan || '').toUpperCase();
+
+  // 1. 明确排除非教学行政支援人员 (AKP)
   if (
     category === 'AKP' ||
     role === 'AKP' ||
     role === 'CLERK' ||
     role === 'STAFF_AKP' ||
     position.includes('PEMBANTU TADBIR') ||
-    position.includes('PEMBANTU OPERASI')
+    position.includes('PEMBANTU OPERASI') ||
+    position.includes('PKA') ||
+    position.includes('PPM') ||
+    position.includes('PT(') ||
+    position === 'PT'
   ) {
     return false;
   }
-  return true;
+
+  // 2. 明确白名单：MUHAMMAD FAHIM AMAR (GPI)
+  if (name.includes('FAHIM') || name.includes('AMAR') || email.includes('muhammadfahimamar')) {
+    return true;
+  }
+
+  // 3. 明确教师分类与角色
+  if (category === 'GURU' || category === 'PRINCIPAL' || role === 'GURU' || role === 'PRINCIPAL') {
+    return true;
+  }
+
+  // 4. 教学职称 (GPI, GAB, GP, GB, PK, GPM, GURU)
+  if (
+    position.includes('GURU') ||
+    position.includes('GPI') ||
+    position.includes('GAB') ||
+    position.includes('GPM') ||
+    position.includes('GP') ||
+    position.includes('GB') ||
+    position.startsWith('PK')
+  ) {
+    return true;
+  }
+
+  // 5. 教师 DELIMa 账号 (g- 或 g. 或 @moe-dl.edu.my)
+  if (email.startsWith('g-') || email.startsWith('g.') || email.endsWith('@moe-dl.edu.my')) {
+    return true;
+  }
+
+  return false;
 }
 
 // ==========================================

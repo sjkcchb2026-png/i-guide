@@ -36,6 +36,17 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
 
   const getTeacherDisplay = (code: string) => {
     if (!code) return '';
+    if (code.includes('/')) {
+      return code
+        .split('/')
+        .map((c) => {
+          const trimmed = c.trim();
+          if (displayMode === 'CODE') return trimmed;
+          const found = teacherMapping.list.find((t) => t.code === trimmed);
+          return found ? String(found.num) : trimmed;
+        })
+        .join(' / ');
+    }
     if (displayMode === 'CODE') return code;
     const found = teacherMapping.list.find((t) => t.code === code);
     return found ? String(found.num) : code;
@@ -43,6 +54,16 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
 
   const getTeacherFullName = (code: string) => {
     if (!code) return '';
+    if (code.includes('/')) {
+      return code
+        .split('/')
+        .map((c) => {
+          const trimmed = c.trim();
+          const found = teacherMapping.list.find((t) => t.code === trimmed);
+          return found ? found.name : trimmed;
+        })
+        .join(' / ');
+    }
     const found = teacherMapping.list.find((t) => t.code === code);
     return found ? found.name : code;
   };
@@ -198,14 +219,18 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
               .filter((r) => (r.periods[selectedGrade] || 0) > 0)
               .map((r) => {
                 const tCode = r.teachers[selectedGrade] || '';
+                const secCode = r.secondaryTeachers?.[selectedGrade] || '';
+                const combinedCode = secCode ? `${tCode} / ${secCode}` : tCode;
                 return (
                   <div key={r.id} className="p-2 bg-slate-50 rounded-xl border border-slate-200 flex flex-col justify-between">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900 font-sans">{r.subjectCode}</span>
+                      <span className="font-bold text-slate-900 font-sans">
+                        {r.subjectCode} {secCode && <span className="text-[9px] text-purple-600 font-bold">(Co-Teaching)</span>}
+                      </span>
                       <span className="text-[10px] font-mono text-slate-500">{r.periods[selectedGrade]}w</span>
                     </div>
-                    <div className="text-[11px] text-blue-700 font-semibold truncate mt-1" title={getTeacherFullName(tCode)}>
-                      {tCode ? `${getTeacherDisplay(tCode)} - ${getTeacherFullName(tCode)}` : '(Belum Ditugaskan)'}
+                    <div className="text-[11px] text-blue-700 font-semibold truncate mt-1" title={getTeacherFullName(combinedCode)}>
+                      {combinedCode ? `${getTeacherDisplay(combinedCode)} - ${getTeacherFullName(combinedCode)}` : '(Belum Ditugaskan)'}
                     </div>
                   </div>
                 );

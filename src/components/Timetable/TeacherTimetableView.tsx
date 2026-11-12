@@ -60,7 +60,12 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
         gradeSlots.forEach((gs) => {
           if (gs.isRecess) return;
           const cell = schedule[grade]?.[day]?.[gs.slotId];
-          if (cell && cell.teacherCode === tCode) {
+          const isAssigned =
+            cell &&
+            (cell.teacherCode === tCode ||
+              (cell.teacherCode && cell.teacherCode.split('/').map((c) => c.trim()).includes(tCode)));
+
+          if (cell && isAssigned) {
             // Find slot key
             let slotKey = gs.slotId;
             // Map T1 W5 (which is 10:15-10:45) to reference W6
@@ -71,10 +76,18 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
               else if (gs.slotId === 'W8') slotKey = 'W9';
               else if (gs.slotId === 'W9') slotKey = 'W10';
             }
+
+            let subjCode = cell.subjectCode;
+            let subjName = cell.subjectName;
+            if (tCode === 'MFA' && cell.teacherCode?.includes('/') && subjCode.includes('PAI')) {
+              subjCode = 'PAI';
+              subjName = 'PENDIDIKAN ISLAM';
+            }
+
             data[day][slotKey] = {
               grade,
-              subjectCode: cell.subjectCode,
-              subjectName: cell.subjectName,
+              subjectCode: subjCode,
+              subjectName: subjName,
               time: `${gs.startTime}–${gs.endTime}`,
             };
           }

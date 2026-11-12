@@ -4,6 +4,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
 import { PersonnelProfile } from '../../types';
 import { isTeacherForTimetable } from '../../utils/checkoutRules';
+import { OFFICIAL_TEACHERS, generateTeacherShortCode } from '../../constants/officialRoster';
 import { 
   Users, 
   Save, 
@@ -22,7 +23,8 @@ export interface SubjectAllocationRow {
   subjectName: string;
   subjectCode: string;
   periods: Record<number, number>; // grade (1-6) -> periods (preset by curriculum, editable)
-  teachers: Record<number, string>; // grade (1-6) -> teacher code (strictly blank by default)
+  teachers: Record<number, string>; // grade (1-6) -> teacher code (Guru Utama)
+  secondaryTeachers?: Record<number, string>; // grade (1-6) -> co-teacher code (Guru Bersama / Co-Teacher)
 }
 
 interface SchoolTimetableMatrixProps {
@@ -208,13 +210,14 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         category: 'KP2027_ONLY',
         subjectName: 'ALAM DAN MANUSIA: PEMBELAJARAN BERSEPADU',
         subjectCode: 'AM',
-        // KP2027 Tahap I (T1 & T2) 专属 3 节
+        // KP2027 Tahap I (T1 & T2) 专属 3 节 (双师协同教学 Co-Teaching)
         periods: {
           1: kp(1) ? 3 : 0,
           2: kp(2) ? 3 : 0,
           3: 0, 4: 0, 5: 0, 6: 0,
         },
         teachers: emptyTeachers(),
+        secondaryTeachers: emptyTeachers(),
       },
       {
         id: 'pkar_1',
@@ -483,14 +486,29 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     async function fetchMasterDataAndSavedMatrix() {
       try {
         setLoading(true);
-        const pSnap = await getDocs(collection(db, 'personnel'));
+        const pSnap = await getDocs(collection(db, 'personnel')).catch(() => null);
         const teachers: PersonnelProfile[] = [];
-        pSnap.forEach((d) => {
-          const data = d.data();
-          if (isTeacherForTimetable(data)) {
-            teachers.push({ id: d.id, ...data } as PersonnelProfile);
+        if (pSnap && !pSnap.empty) {
+          pSnap.forEach((d) => {
+            const data = d.data();
+            if (isTeacherForTimetable(data)) {
+              teachers.push({ id: d.id, ...data } as PersonnelProfile);
+            }
+          });
+        }
+
+        // 融合官方名册（确保包括伊斯兰教教师 Muhammad Fahim Amar 及全部 14 位正规教师）
+        OFFICIAL_TEACHERS.forEach((ot) => {
+          const exists = teachers.some(
+            (p) =>
+              (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
+              (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
+          );
+          if (!exists) {
+            teachers.push(ot as any);
           }
         });
+
         if (isMounted) setPersonnelList(teachers);
 
         const matrixDocRef = doc(db, 'school_timetables', `matrix_${selectedYear}`);
@@ -548,24 +566,46 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     };
   }, [selectedYear]);
 
-  // 动态生成教师 번호 (1..50) 与 缩写代号 (Kod Singkatan)
+  // 动态生成教师 编号 (1..50) 与 缩写代号 (Kod Singkatan)
   const dynamicTeacherMapping = useMemo(() => {
-    const list = personnelList.slice(0, 50).map((t, idx) => {
+    const sourceList: PersonnelProfile[] = [...personnelList];
+
+    // 确保包含全部 14 位官方教师
+    OFFICIAL_TEACHERS.forEach((ot) => {
+      const exists = sourceList.some(
+        (p) =>
+          (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
+          (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
+      );
+      if (!exists) {
+        sourceList.push({
+          id: ot.id,
+          name: ot.name,
+          email: ot.email,
+          category: ot.category,
+          role: ot.role,
+          position: ot.position,
+        } as any);
+      }
+    });
+
+    const list = sourceList.slice(0, 50).map((t, idx) => {
       const num = idx + 1;
-      const code =
-        (t as any).code ||
-        (t.name || '')
-          .split(' ')
-          .filter(Boolean)
-          .map((w) => w[0])
-          .join('')
-          .toUpperCase()
-          .slice(0, 4);
+      let cleanName = (t.name || '').replace(/\s+/g, ' ').trim();
+      if (cleanName.toUpperCase().includes('FAHIM') && cleanName.toUpperCase().includes('AMAR')) {
+        cleanName = 'MUHAMMAD FAHIM AMAR';
+      } else if (cleanName.toUpperCase().includes('STEPHANIE') && cleanName.toUpperCase().includes('WONG')) {
+        cleanName = 'STEPHANIE WONG ENG HEE';
+      }
+
+      // 生成代号：4个词的名字只取前2个字母缩写（例如 Stephanie Wong Eng Hee -> SW）
+      const code = (t as any).code || generateTeacherShortCode(cleanName);
+
       return {
         id: t.id,
         num,
         code,
-        name: t.name || '',
+        name: cleanName,
       };
     });
 
@@ -583,12 +623,23 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     );
   };
 
-  // 修改任课老师
+  // 修改任课老师 (Guru 1 / Guru Utama)
   const handleTeacherChange = (rowId: string, grade: number, teacherCode: string) => {
     setMatrixData((prev) =>
       prev.map((r) =>
         r.id === rowId
           ? { ...r, teachers: { ...r.teachers, [grade]: teacherCode } }
+          : r
+      )
+    );
+  };
+
+  // 修改协同教学副老师 (Guru 2 / Guru Bersama / Co-Teacher)
+  const handleSecondaryTeacherChange = (rowId: string, grade: number, teacherCode: string) => {
+    setMatrixData((prev) =>
+      prev.map((r) =>
+        r.id === rowId
+          ? { ...r, secondaryTeachers: { ...(r.secondaryTeachers || {}), [grade]: teacherCode } }
           : r
       )
     );
@@ -614,7 +665,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     return totals;
   }, [matrixData]);
 
-  // 实时累加每位真实教师的总节数
+  // 实时累加每位真实教师的总节数（包含主配课及 AM 协同教学双师，两位老师均计入全额执教工作量）
   const teacherWorkloads = useMemo(() => {
     const loads: Record<string, number> = {};
     matrixData.forEach((row) => {
@@ -623,6 +674,12 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         const pCount = Number(row.periods[grade] || 0);
         if (tCode && pCount > 0) {
           loads[tCode] = (loads[tCode] || 0) + pCount;
+        }
+
+        // 协同教学 Co-Teacher (Guru 2 / Bersama) 同样计入全额执教节数 (+3 节)
+        const secCode = row.secondaryTeachers?.[grade];
+        if (secCode && pCount > 0) {
+          loads[secCode] = (loads[secCode] || 0) + pCount;
         }
       });
     });
@@ -838,30 +895,74 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                               />
                             </td>
 
-                            {/* 教师选择下拉框（纯正单一显示模式：纯数字 或 纯代号） */}
+                            {/* 教师选择下拉框（普通科目单一选择；AM 协同教学提供 Guru 1 与 Guru 2 双师选择） */}
                             <td className="py-1.5 px-1 text-center">
-                              <select
-                                value={currentTeacher}
-                                onChange={(e) => handleTeacherChange(row.id, grade, e.target.value)}
-                                disabled={!isAssigned}
-                                className={`w-full py-1 px-1 rounded-lg text-[11px] font-bold outline-none transition cursor-pointer text-center ${
-                                  !isAssigned
-                                    ? 'bg-transparent text-transparent border-transparent cursor-default'
-                                    : currentTeacher
-                                    ? 'bg-blue-950/60 border border-blue-600/40 text-blue-200'
-                                    : 'bg-slate-950 border border-slate-800 text-slate-500'
-                                }`}
-                              >
-                                <option value="">-</option>
-                                {dynamicTeacherMapping.list.map((t) => {
-                                  const cellDisplay = displayMode === 'CODE' ? t.code : String(t.num);
-                                  return (
-                                    <option key={t.id} value={t.code}>
-                                      {cellDisplay}
-                                    </option>
-                                  );
-                                })}
-                              </select>
+                              {row.subjectCode === 'AM' && isAssigned ? (
+                                <div className="flex flex-col gap-1 w-full min-w-[110px]">
+                                  {/* Guru 1 (Guru Utama) */}
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[9px] font-black px-1 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 shrink-0" title="Guru 1 (Guru Utama)">
+                                      G1
+                                    </span>
+                                    <select
+                                      value={currentTeacher}
+                                      onChange={(e) => handleTeacherChange(row.id, grade, e.target.value)}
+                                      className="w-full py-0.5 px-1 rounded text-[10px] font-bold outline-none bg-blue-950/70 border border-blue-600/40 text-blue-200 cursor-pointer"
+                                      title="Guru 1 (Guru Utama)"
+                                    >
+                                      <option value="">- G1 -</option>
+                                      {dynamicTeacherMapping.list.map((t) => (
+                                        <option key={t.id} value={t.code}>
+                                          {displayMode === 'CODE' ? t.code : String(t.num)} ({t.code})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  {/* Guru 2 (Guru Bersama / Co-Teacher) */}
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[9px] font-black px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0" title="Guru 2 (Guru Bersama / Co-Teacher)">
+                                      G2
+                                    </span>
+                                    <select
+                                      value={row.secondaryTeachers?.[grade] || ''}
+                                      onChange={(e) => handleSecondaryTeacherChange(row.id, grade, e.target.value)}
+                                      className="w-full py-0.5 px-1 rounded text-[10px] font-bold outline-none bg-purple-950/70 border border-purple-600/40 text-purple-200 cursor-pointer"
+                                      title="Guru 2 (Guru Bersama / Co-Teacher)"
+                                    >
+                                      <option value="">- G2 (Co) -</option>
+                                      {dynamicTeacherMapping.list.map((t) => (
+                                        <option key={t.id} value={t.code}>
+                                          {displayMode === 'CODE' ? t.code : String(t.num)} ({t.code})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+                              ) : (
+                                <select
+                                  value={currentTeacher}
+                                  onChange={(e) => handleTeacherChange(row.id, grade, e.target.value)}
+                                  disabled={!isAssigned}
+                                  className={`w-full py-1 px-1 rounded-lg text-[11px] font-bold outline-none transition cursor-pointer text-center ${
+                                    !isAssigned
+                                      ? 'bg-transparent text-transparent border-transparent cursor-default'
+                                      : currentTeacher
+                                      ? 'bg-blue-950/60 border border-blue-600/40 text-blue-200'
+                                      : 'bg-slate-950 border border-slate-800 text-slate-500'
+                                  }`}
+                                >
+                                  <option value="">-</option>
+                                  {dynamicTeacherMapping.list.map((t) => {
+                                    const cellDisplay = displayMode === 'CODE' ? t.code : String(t.num);
+                                    return (
+                                      <option key={t.id} value={t.code}>
+                                        {cellDisplay}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              )}
                             </td>
                           </React.Fragment>
                         );
