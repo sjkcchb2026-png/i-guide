@@ -276,11 +276,12 @@ export function canAssignYear1Period4(
   ).length;
 
   if (strictMode) {
-    // 严格模式：周一至周五每天的第 4 节必须是完全不同的科目和不同的老师（每人最多带 1 次 PKAR +0.5）
-    return sameSubjectCount === 0 && sameTeacherCount === 0;
+    // 严格模式：优先轮转不同老师分担 PKAR (+0.5) 负担，一周内每位老师带 PKAR 最多 2 次
+    if (sameSubjectCount === 0 && sameTeacherCount === 0) return true;
+    return sameTeacherCount < 2;
   } else {
-    // 次选模式：即使某位老师教两门课，一周内最多也只能排入一年级第 4 节不超过 2 次
-    return sameSubjectCount === 0 && sameTeacherCount < 2;
+    // 次选保底模式：保证第 4 节不留空缺
+    return sameTeacherCount < 3;
   }
 }
 
@@ -594,17 +595,21 @@ export function scoreDoubleSlotCandidate(
 // 2. 体育课 PJ 候选配置
 // --------------------------------------------------------------------------
 export const validPJ3DayTriplets: Array<[string, string, string]> = [
-  ['ISNIN', 'RABU', 'JUMAAT'],   // 星期 1, 3, 5
-  ['ISNIN', 'SELASA', 'KHAMIS'], // 星期 1, 2, 4
+  ['ISNIN', 'RABU', 'JUMAAT'],   // 星期 1, 3, 5 (优先非连续日组合)
+  ['ISNIN', 'SELASA', 'KHAMIS'], // 星期 1, 2, 4 (一年级豁免 1 天间隔限制)
   ['ISNIN', 'RABU', 'KHAMIS'],   // 星期 1, 3, 4
+  ['SELASA', 'KHAMIS', 'JUMAAT'],// 星期 2, 4, 5
+  ['ISNIN', 'KHAMIS', 'JUMAAT'], // 星期 1, 4, 5
+  ['SELASA', 'RABU', 'JUMAAT'],  // 星期 2, 3, 5
 ];
 
 export const validPJ2DayPairs: Array<[string, string]> = [
-  ['ISNIN', 'RABU'],             // 星期 1, 3
-  ['SELASA', 'KHAMIS'],          // 星期 2, 4
-  ['RABU', 'JUMAAT'],            // 星期 3, 5
-  ['ISNIN', 'KHAMIS'],           // 星期 1, 4
-  ['SELASA', 'JUMAAT'],          // 星期 2, 5
+  ['ISNIN', 'RABU'],             // 星期 1, 3 (严格间隔 >= 1 天)
+  ['SELASA', 'KHAMIS'],          // 星期 2, 4 (严格间隔 >= 1 天)
+  ['RABU', 'JUMAAT'],            // 星期 3, 5 (严格间隔 >= 1 天)
+  ['ISNIN', 'KHAMIS'],           // 星期 1, 4 (严格间隔 >= 2 天)
+  ['SELASA', 'JUMAAT'],          // 星期 2, 5 (严格间隔 >= 2 天)
+  ['ISNIN', 'JUMAAT'],           // 星期 1, 5 (严格间隔 >= 3 天)
 ];
 
 // 每个交易日在上午下课前可排 PJ 的节次（周二第1节固定为 PN 周会，PJ 严格排入第2节；其他日期严格限制在第1节或第2节，优先第1节）
@@ -631,11 +636,21 @@ export function canTeacherTakeSlot(
   day: string,
   targetPeriod: number,
   currentTeacherLessonsOnDay: number[], // 当天已排入的节次列表
-  currentTeacherWorkloadDay: number = 0 // 包含 0.5 节 PKAR 的实际工作量
+  currentTeacherWorkloadDay: number = 0, // 包含 0.5 节 PKAR 的实际工作量
+  periodsToAdd: number = 1,
+  strictBreaks: boolean = true
 ): boolean {
-  // 规则 2A: 一天最多 8 节课 (含 0.5 节 PKAR)
-  if (currentTeacherLessonsOnDay.length >= 8 || currentTeacherWorkloadDay + 1 > 8) {
+  // 规则 2A: 绝对硬性上限：一天最多 8.0 节课 (含周二 PN 1.0 节、一年级 PKAR 0.5 节与所有常规课，绝不妥协)
+  if (
+    currentTeacherLessonsOnDay.length + periodsToAdd > 8 ||
+    currentTeacherWorkloadDay + periodsToAdd > 8.0
+  ) {
     return false;
+  }
+
+  // 若处于宽限模式 (strictBreaks = false)，仅放宽上下午空档要求，但单日 8.0 节硬性上限绝对不得突破！
+  if (!strictBreaks) {
+    return true;
   }
 
   const { preRecessPeriod, teachingPeriods } = getDayPeriodConfig(day);
@@ -756,6 +771,10 @@ export function runTimetableEngine(params: {
   const incTeacherDayCount = (teacherId: string, day: string, delta: number = 1) => {
     const key = `${teacherId}_${day}`;
     teacherDayPeriodCounts.set(key, (teacherDayPeriodCounts.get(key) || 0) + delta);
+  };
+
+  const getTeacherDayWorkload = (teacherId: string, day: string): number => {
+    return teacherDayPeriodCounts.get(`${teacherId}_${day}`) || 0;
   };
 
   const getTeacherPeriodsOnDay = (teacherId: string, day: string): number[] => {
@@ -899,63 +918,73 @@ export function runTimetableEngine(params: {
       for (const pattern of dayPatterns) {
         if (scheduled >= requiredPeriods) break;
 
-        // 为 pattern 中的每一天寻找 1 个可用上午节次（每天仅 1 节）
-        const chosenSlots: { day: string; period: number }[] = [];
+        // PJ Period 1 Priority with Period 2 Overflow:
+        // Pass 1: Try strictly placing in Period 1 (or Period 2 on Tuesday where Period 1 is PN)
+        // Pass 2: Only if Period 1 has a collision or is occupied, allow Period 2 overflow
+        for (const allowPeriod2Overflow of [false, true]) {
+          if (scheduled >= requiredPeriods) break;
 
-        for (const day of pattern) {
-          const pCandidates = getMorningPJCandidates(day);
-          let foundPeriod: number | null = null;
+          const chosenSlots: { day: string; period: number }[] = [];
 
-          for (const p of pCandidates) {
-            const cKey = `${cls.classId}_${day}_${p}`;
-            const tKey = `${asg.teacherId}_${day}_${p}`;
-            const existingPjOnDay = getSubjectPeriodsOnDay(cls.classId, asg.canonicalSubjectCode, day);
-            const teacherLessonsOnDay = getTeacherPeriodsOnDay(asg.teacherId, day);
+          for (const day of pattern) {
+            // SELASA Period 1 is locked for PN, so PJ is in Period 2.
+            // On other days, try Period 1 first; only try Period 2 if allowPeriod2Overflow is true
+            const pCandidates = day === 'SELASA' ? [2] : (allowPeriod2Overflow ? [1, 2] : [1]);
+            let foundPeriod: number | null = null;
 
-            if (
-              existingPjOnDay.length === 0 && // 严格保证当天只有 1 节 PJ
-              !classSlotOccupied.has(cKey) &&
-              !teacherSlotOccupied.has(tKey) &&
-              canTeacherTakeSlot(asg.teacherId, day, p, teacherLessonsOnDay)
-            ) {
-              foundPeriod = p;
-              break;
+            for (const p of pCandidates) {
+              const cKey = `${cls.classId}_${day}_${p}`;
+              const tKey = `${asg.teacherId}_${day}_${p}`;
+              const existingPjOnDay = getSubjectPeriodsOnDay(cls.classId, asg.canonicalSubjectCode, day);
+              const teacherLessonsOnDay = getTeacherPeriodsOnDay(asg.teacherId, day);
+              const currentLoad = getTeacherDayWorkload(asg.teacherId, day);
+
+              if (
+                existingPjOnDay.length === 0 && // 严格保证当天只有 1 节 PJ
+                currentLoad + 1 <= 8.0 && // 绝对硬性上限：一天最多 8.0 节
+                !classSlotOccupied.has(cKey) &&
+                !teacherSlotOccupied.has(tKey) &&
+                canTeacherTakeSlot(asg.teacherId, day, p, teacherLessonsOnDay, currentLoad, 1, true)
+              ) {
+                foundPeriod = p;
+                break;
+              }
+            }
+
+            if (foundPeriod !== null) {
+              chosenSlots.push({ day, period: foundPeriod });
             }
           }
 
-          if (foundPeriod !== null) {
-            chosenSlots.push({ day, period: foundPeriod });
-          }
-        }
+          // 若该组星期组合全部找到合规空位，立即锁定！
+          if (chosenSlots.length === pattern.length) {
+            const teacherObj = teacherMap.get(asg.teacherId);
+            chosenSlots.forEach(({ day, period }) => {
+              classSlotOccupied.add(`${cls.classId}_${day}_${period}`);
+              teacherSlotOccupied.add(`${asg.teacherId}_${day}_${period}`);
+              incTeacherDayCount(asg.teacherId, day);
+              addTeacherPeriodOnDay(asg.teacherId, day, period);
+              recordSubjectPeriod(cls.classId, asg.canonicalSubjectCode, day, period);
 
-        // 若该组星期组合（如 1,3,5 或 1,2,4 或 1,3,4）全部找到空位，立即锁定！
-        if (chosenSlots.length === pattern.length) {
-          const teacherObj = teacherMap.get(asg.teacherId);
-          chosenSlots.forEach(({ day, period }) => {
-            classSlotOccupied.add(`${cls.classId}_${day}_${period}`);
-            teacherSlotOccupied.add(`${asg.teacherId}_${day}_${period}`);
-            incTeacherDayCount(asg.teacherId, day);
-            addTeacherPeriodOnDay(asg.teacherId, day, period);
-            recordSubjectPeriod(cls.classId, asg.canonicalSubjectCode, day, period);
-
-            lessons.push({
-              id: `pj_${cls.classId}_${day}_P${period}`,
-              day,
-              periodNumber: period,
-              classId: cls.classId,
-              className: cls.className,
-              subjectCode: 'PJ',
-              subjectName: asg.subjectName || 'Pendidikan Jasmani',
-              teacherId: asg.teacherId,
-              teacherName: teacherObj?.fullName || asg.teacherId,
-              countsAsClassPeriod: true,
-              countsAsTeacherPeriod: true,
+              lessons.push({
+                id: `pj_${cls.classId}_${day}_P${period}`,
+                day,
+                periodNumber: period,
+                classId: cls.classId,
+                className: cls.className,
+                subjectCode: 'PJ',
+                subjectName: asg.subjectName || 'Pendidikan Jasmani',
+                teacherId: asg.teacherId,
+                teacherName: teacherObj?.fullName || asg.teacherId,
+                countsAsClassPeriod: true,
+                countsAsTeacherPeriod: true,
+              });
             });
-          });
 
-          scheduled += chosenSlots.length;
-          scheduledPerAssignment.set(asg.assignmentId, scheduled);
-          break;
+            scheduled += chosenSlots.length;
+            scheduledPerAssignment.set(asg.assignmentId, scheduled);
+            break;
+          }
         }
       }
     });
@@ -986,6 +1015,13 @@ export function runTimetableEngine(params: {
         for (let p = 1; p <= maxP - blockLen + 1; p++) {
           if (blockLen === 2 && !isAdjacentPeriod(p, p + 1)) continue;
 
+          // Double-block exact check against 8.0 daily period hard cap
+          const pmLoad = getTeacherDayWorkload(pmAsg.teacherId, day);
+          const paiLoad = getTeacherDayWorkload(paiAsg.teacherId, day);
+          if (pmLoad + blockLen > 8.0 || paiLoad + blockLen > 8.0) {
+            continue;
+          }
+
           const periodsToBook = blockLen === 2 ? [p, p + 1] : [p];
           const canBookAll = periodsToBook.every((per, idx) => {
             const cKey = `${cls.classId}_${day}_${per}`;
@@ -1003,13 +1039,19 @@ export function runTimetableEngine(params: {
               pmAsg.teacherId,
               day,
               per,
-              idx === 0 ? pmDayPeriods : [...pmDayPeriods, periodsToBook[0]]
+              idx === 0 ? pmDayPeriods : [...pmDayPeriods, periodsToBook[0]],
+              pmLoad + idx,
+              1,
+              true
             );
             const paiCan = canTeacherTakeSlot(
               paiAsg.teacherId,
               day,
               per,
-              idx === 0 ? paiDayPeriods : [...paiDayPeriods, periodsToBook[0]]
+              idx === 0 ? paiDayPeriods : [...paiDayPeriods, periodsToBook[0]],
+              paiLoad + idx,
+              1,
+              true
             );
 
             return pmCan && paiCan;
@@ -1112,11 +1154,17 @@ export function runTimetableEngine(params: {
           const t1Free = !teacherSlotOccupied.has(t1Key);
           const t2Free = t2Key ? !teacherSlotOccupied.has(t2Key) : true;
 
+          const t1Load = getTeacherDayWorkload(teacherId1, day);
+          const t2Load = teacherId2 ? getTeacherDayWorkload(teacherId2, day) : 0;
+          if (t1Load + 1 > 8.0 || (teacherId2 && t2Load + 1 > 8.0)) {
+            continue;
+          }
+
           // 检查两位老师当天是否未满 8 节且符合休息规则
           const t1Lessons = getTeacherPeriodsOnDay(teacherId1, day);
           const t2Lessons = teacherId2 ? getTeacherPeriodsOnDay(teacherId2, day) : [];
-          const t1Valid = canTeacherTakeSlot(teacherId1, day, p, t1Lessons);
-          const t2Valid = teacherId2 ? canTeacherTakeSlot(teacherId2, day, p, t2Lessons) : true;
+          const t1Valid = canTeacherTakeSlot(teacherId1, day, p, t1Lessons, t1Load, 1, true);
+          const t2Valid = teacherId2 ? canTeacherTakeSlot(teacherId2, day, p, t2Lessons, t2Load, 1, true) : true;
 
           if (classFree && t1Free && t2Free && t1Valid && t2Valid) {
             // 1. 锁定班级与两位老师的时段
@@ -1247,12 +1295,32 @@ export function runTimetableEngine(params: {
           }
 
           const maxP = getDailyMaxPeriods(day, classLevel);
+          const preRecessPeriod = classLevel === 1 ? 4 : 5;
 
           for (let p = 1; p <= maxP - blockLen + 1; p++) {
+            // 保证上午课业紧凑，严禁跨越空档跳按下课后时段（若当前课节 p > preRecessPeriod，当天上午必须已排满无空档）
+            if (p > preRecessPeriod) {
+              const hasEmptyMorningSlot = Array.from({ length: preRecessPeriod }, (_, i) => i + 1).some(
+                (morningP) => !classSlotOccupied.has(`${asg.classId}_${day}_${morningP}`)
+              );
+              if (hasEmptyMorningSlot) {
+                continue;
+              }
+            }
+
             const periodsToBook = Array.from({ length: blockLen }, (_, i) => p + i);
 
+            // Double-block exact check and PKAR upfront check against 8.0 daily period hard cap
+            const currentLoad = getTeacherDayWorkload(asg.teacherId, day);
+            const isYear1P4 = classLevel === 1 && periodsToBook.includes(4);
+            const pkarExtra = isYear1P4 ? 0.5 : 0;
+
+            if (currentLoad + blockLen + pkarExtra > 8.0) {
+              continue;
+            }
+
             // 一年级第 4 节 (紧邻 PKAR 0.5节) 防重复科任老师校验
-            if (classLevel === 1 && periodsToBook.includes(4)) {
+            if (isYear1P4) {
               const existingYear1P4Lessons = lessons
                 .filter(
                   (l) =>
@@ -1283,14 +1351,16 @@ export function runTimetableEngine(params: {
               if (classSlotOccupied.has(cKey) || teacherSlotOccupied.has(tKey)) {
                 return false;
               }
-              if (!strictBreaks) return true;
               const current = getTeacherPeriodsOnDay(asg.teacherId, day);
               const bookedSoFar = periodsToBook.slice(0, idx);
               return canTeacherTakeSlot(
                 asg.teacherId,
                 day,
                 per,
-                [...current, ...bookedSoFar]
+                [...current, ...bookedSoFar],
+                currentLoad + idx + pkarExtra,
+                1,
+                strictBreaks
               );
             });
 
@@ -1374,12 +1444,15 @@ export function runTimetableEngine(params: {
           (cand) => cand.day === l1.day && cand.periodNumber === l1.periodNumber + 1 && isAdjacentPeriod(l1.periodNumber, cand.periodNumber)
         );
         if (l2) {
-          const tKey1 = `${pAsg.teacherId}_${l1.day}_${l1.periodNumber}`;
-          const tKey2 = `${pAsg.teacherId}_${l2.day}_${l2.periodNumber}`;
-          if (!teacherSlotOccupied.has(tKey1) && !teacherSlotOccupied.has(tKey2)) {
-            selectedSlots.push(l1, l2);
-            dayAllocationCount.set(l1.day, 2);
-            break;
+          const pemLoad = getTeacherDayWorkload(pAsg.teacherId, l1.day);
+          if (pemLoad + 2 <= 8.0) {
+            const tKey1 = `${pAsg.teacherId}_${l1.day}_${l1.periodNumber}`;
+            const tKey2 = `${pAsg.teacherId}_${l2.day}_${l2.periodNumber}`;
+            if (!teacherSlotOccupied.has(tKey1) && !teacherSlotOccupied.has(tKey2)) {
+              selectedSlots.push(l1, l2);
+              dayAllocationCount.set(l1.day, 2);
+              break;
+            }
           }
         }
       }
@@ -1388,6 +1461,9 @@ export function runTimetableEngine(params: {
       for (const l of parentLessons) {
         if (selectedSlots.length >= 4) break;
         if (dayAllocationCount.has(l.day)) continue; // 严防 2+2，已排过的天不再排
+
+        const pemLoad = getTeacherDayWorkload(pAsg.teacherId, l.day);
+        if (pemLoad + 1 > 8.0) continue;
 
         // 核心法则：如果这天是连堂，优先抽第二节，避免打乱科任老师导课
         const isFirstOfDouble = parentLessons.some(
@@ -1410,6 +1486,8 @@ export function runTimetableEngine(params: {
       for (const l of parentLessons) {
         if (selectedSlots.length >= required) break;
         if (selectedSlots.some((s) => s.id === l.id)) continue;
+        const pemLoad = getTeacherDayWorkload(pAsg.teacherId, l.day);
+        if (pemLoad + 1 > 8.0) continue;
         const tKey = `${pAsg.teacherId}_${l.day}_${l.periodNumber}`;
         if (!teacherSlotOccupied.has(tKey)) {
           selectedSlots.push(l);
