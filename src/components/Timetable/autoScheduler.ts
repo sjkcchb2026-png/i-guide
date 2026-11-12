@@ -15,6 +15,25 @@ import {
   checkIntervalOverlap, 
   getGradeDaySlots 
 } from './types';
+import {
+  decomposeSubjectBlocks,
+  canClassAcceptSubjectOnDay,
+  getMaxDailyPeriodsForSubject,
+  canAssignYear1Period4,
+  computeScheduleSignature,
+  isSignificantlyDifferentFromPrevious,
+  getPreviousScheduleSignature,
+  setPreviousScheduleSignature,
+  resetScheduleSignature,
+} from '../../utils/timetableEngine';
+
+export {
+  computeScheduleSignature,
+  isSignificantlyDifferentFromPrevious,
+  getPreviousScheduleSignature,
+  setPreviousScheduleSignature,
+  resetScheduleSignature,
+};
 
 // --------------------------------------------------------------------------
 // 1. 真实时钟重叠检测器：彻底杜绝 T.1 (W8 11:45-12:15) 与 T.6 (W9 11:45-12:15) 错位撞课
@@ -84,52 +103,7 @@ export interface SubjectDayRequirement {
  */
 export function getSubjectBlockDistribution(subjectCode: string, totalPeriods: number): number[] {
   if (totalPeriods <= 0) return [];
-
-  // Special rule for PJ in KP2027 (3 periods -> 3 separate 1-period days: 1 + 1 + 1)
-  if (subjectCode.toUpperCase() === 'PJ' && totalPeriods === 3) {
-    return [1, 1, 1];
-  }
-
-  switch (totalPeriods) {
-    case 1:
-      return [1];
-    case 2:
-      return [2];
-    case 3:
-      return [2, 1];
-    case 4:
-      return [2, 2];
-    case 5:
-      return [2, 2, 1];
-    case 6:
-      return [2, 2, 2];
-    case 7:
-      return [2, 2, 2, 1];
-    case 8:
-      return [2, 2, 2, 2];
-    case 9:
-      return [2, 2, 2, 2, 1];
-    case 10:
-      return [2, 2, 2, 2, 2];
-    case 11:
-      return [2, 2, 2, 2, 2, 1];
-    case 12:
-      return [2, 2, 2, 2, 2, 2];
-    default: {
-      const blocks: number[] = [];
-      let rem = totalPeriods;
-      while (rem > 0) {
-        if (rem >= 2) {
-          blocks.push(2);
-          rem -= 2;
-        } else {
-          blocks.push(1);
-          rem -= 1;
-        }
-      }
-      return blocks;
-    }
-  }
+  return decomposeSubjectBlocks(subjectCode, totalPeriods);
 }
 
 /**
@@ -340,7 +314,8 @@ interface BlockToSchedule {
 export function generateAutoSchedule(
   matrixData: SubjectAllocationRow[],
   classTeachers: Record<number, string> = {},
-  academicYear: string = '2027'
+  academicYear: string = '2027',
+  variationSeed: number = 0
 ): { grid: ScheduleGrid; clashes: TimetableClash[]; unplaced: string[] } {
   const grid = createEmptyScheduleGrid();
   const unplacedBlocks: string[] = [];
@@ -542,7 +517,26 @@ export function generateAutoSchedule(
       });
     }
 
-    // 2. Year 1 AM Co-Teaching (Guru 1 & Guru 2 simultaneous)
+    // 2. PJ (Morning slots only, W1 or W2, max 1 period/day; strictly highest morning priority)
+    const pjRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'PJ');
+    const pjPeriods = Number(pjRow?.periods[grade] || 0);
+    if (pjPeriods > 0) {
+      const t = pjRow?.teachers[grade] || '';
+      for (let i = 0; i < pjPeriods; i++) {
+        blocks.push({
+          id: `pj_${grade}_${i}`,
+          grade,
+          subjectCode: 'PJ',
+          subjectName: 'PENDIDIKAN JASMANI',
+          teacherCode: t,
+          length: 1,
+          priority: 2,
+          isMorningOnly: true,
+        });
+      }
+    }
+
+    // 3. Year 1 AM Co-Teaching (Guru 1 & Guru 2 simultaneous)
     if (grade === 1) {
       const amRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'AM');
       const amPeriods = Number(amRow?.periods[1] || 0);
@@ -557,7 +551,7 @@ export function generateAutoSchedule(
           teacherCode: `${t1}/${t2}`,
           secondaryTeacherCode: t2,
           length: 2,
-          priority: 2,
+          priority: 3,
         });
         blocks.push({
           id: 'am_1_1p',
@@ -567,77 +561,13 @@ export function generateAutoSchedule(
           teacherCode: `${t1}/${t2}`,
           secondaryTeacherCode: t2,
           length: 1,
-          priority: 2,
-        });
-      }
-    }
-
-    // 3. PJ (Morning slots only, max 1 period/day)
-    const pjRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'PJ');
-    const pjPeriods = Number(pjRow?.periods[grade] || 0);
-    if (pjPeriods > 0) {
-      const t = pjRow?.teachers[grade] || '';
-      for (let i = 0; i < pjPeriods; i++) {
-        blocks.push({
-          id: `pj_${grade}_${i}`,
-          grade,
-          subjectCode: 'PJ',
-          subjectName: 'PENDIDIKAN JASMANI',
-          teacherCode: t,
-          length: 1,
           priority: 3,
-          isMorningOnly: true,
         });
       }
     }
 
-    // 4. PK (Pendidikan Kesihatan)
-    const pkRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'PK');
-    const pkPeriods = Number(pkRow?.periods[grade] || 0);
-    if (pkPeriods > 0) {
-      blocks.push({
-        id: `pk_${grade}`,
-        grade,
-        subjectCode: 'PK',
-        subjectName: 'PENDIDIKAN KESIHATAN',
-        teacherCode: pkRow?.teachers[grade] || '',
-        length: 1,
-        priority: 4,
-      });
-    }
-
-    // 5. MZ (Muzik)
-    const mzRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'MZ');
-    const mzPeriods = Number(mzRow?.periods[grade] || 0);
-    if (mzPeriods > 0) {
-      blocks.push({
-        id: `mz_${grade}`,
-        grade,
-        subjectCode: 'MZ',
-        subjectName: 'PENDIDIKAN MUZIK',
-        teacherCode: mzRow?.teachers[grade] || '',
-        length: 1,
-        priority: 5,
-      });
-    }
-
-    // 6. PSV (Seni Visual)
-    const psvRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'PSV');
-    const psvPeriods = Number(psvRow?.periods[grade] || 0);
-    if (psvPeriods > 0) {
-      blocks.push({
-        id: `psv_${grade}`,
-        grade,
-        subjectCode: 'PSV',
-        subjectName: 'PENDIDIKAN SENI VISUAL',
-        teacherCode: psvRow?.teachers[grade] || '',
-        length: psvPeriods,
-        priority: 5,
-      });
-    }
-
-    // 7. Core subjects: BI, BC, BM, MT, SN, SEJ, RBT
-    const otherCodes = ['BI', 'BC', 'BM', 'MT', 'SN', 'SEJ', 'RBT'];
+    // 4. Core subjects: BI, BC, BM, MT, SN, SEJ, RBT
+    const otherCodes = ['BC', 'BM', 'BI', 'MT', 'SN', 'SEJ', 'RBT'];
     otherCodes.forEach((code) => {
       const row = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === code);
       if (!row) return;
@@ -651,14 +581,15 @@ export function generateAutoSchedule(
         teacher === 'LCI' ||
         teacher === 'NCY' ||
         teacher === 'VY';
-      const basePri = isBottleneck ? 6 : 8;
 
-      let rem = pCount;
-      let bIdx = 0;
-      while (rem > 0) {
-        const len = rem >= 2 ? 2 : 1;
+      // Heavy language subjects (BC 12/10, BM 10) require slots on every single day (5 days/week)
+      const isHeavyLanguage = (code === 'BC' || code === 'BM') && pCount >= 10;
+      const basePri = isHeavyLanguage ? 4 : pCount >= 6 ? 5 : isBottleneck ? 6 : 7;
+
+      const subBlocks = decomposeSubjectBlocks(code, pCount);
+      subBlocks.forEach((len, bIdx) => {
         blocks.push({
-          id: `${code.toLowerCase()}_${grade}_${bIdx++}`,
+          id: `${code.toLowerCase()}_${grade}_${bIdx}`,
           grade,
           subjectCode: code,
           subjectName: row.subjectName,
@@ -666,9 +597,53 @@ export function generateAutoSchedule(
           length: len,
           priority: basePri,
         });
-        rem -= len;
-      }
+      });
     });
+
+    // 5. PK (Pendidikan Kesihatan)
+    const pkRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'PK');
+    const pkPeriods = Number(pkRow?.periods[grade] || 0);
+    if (pkPeriods > 0) {
+      blocks.push({
+        id: `pk_${grade}`,
+        grade,
+        subjectCode: 'PK',
+        subjectName: 'PENDIDIKAN KESIHATAN',
+        teacherCode: pkRow?.teachers[grade] || '',
+        length: 1,
+        priority: 6,
+      });
+    }
+
+    // 6. MZ (Muzik)
+    const mzRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'MZ');
+    const mzPeriods = Number(mzRow?.periods[grade] || 0);
+    if (mzPeriods > 0) {
+      blocks.push({
+        id: `mz_${grade}`,
+        grade,
+        subjectCode: 'MZ',
+        subjectName: 'PENDIDIKAN MUZIK',
+        teacherCode: mzRow?.teachers[grade] || '',
+        length: 1,
+        priority: 6,
+      });
+    }
+
+    // 7. PSV (Seni Visual)
+    const psvRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'PSV');
+    const psvPeriods = Number(psvRow?.periods[grade] || 0);
+    if (psvPeriods > 0) {
+      blocks.push({
+        id: `psv_${grade}`,
+        grade,
+        subjectCode: 'PSV',
+        subjectName: 'PENDIDIKAN SENI VISUAL',
+        teacherCode: psvRow?.teachers[grade] || '',
+        length: psvPeriods,
+        priority: 6,
+      });
+    }
   });
 
   // 1. Calculate global teacher workloads from matrix to enforce Heaviest-Workload Teacher First
@@ -718,7 +693,7 @@ export function generateAutoSchedule(
     const block = blocks[bIndex];
     let placed = false;
 
-    // Day ordering: prefer days with fewer blocks of this subject
+    // Day ordering: prefer days with fewer blocks of this subject to spread evenly across the week
     const daysOrder = [...DAYS_OF_WEEK].sort((a, b) => {
       const aCount = getGradeSubjectDayCount(block.grade, block.subjectCode, a);
       const bCount = getGradeSubjectDayCount(block.grade, block.subjectCode, b);
@@ -731,26 +706,47 @@ export function generateAutoSchedule(
       for (const day of daysOrder) {
         if (placed) break;
 
+        // Hard gatekeeper: strictly enforce daily cap (forbid > 2 periods/day for <=10w, forbid > 3 periods/day for 11/12w)
+        const existingClassDayLessons = Object.entries(grid[block.grade][day])
+          .filter(([_, cell]) => cell && cell.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())
+          .map(([_, cell]) => ({ subjectCode: cell!.subjectCode }));
+
+        const totalWeeklyForSubject = Number(
+          cleanMatrix.find((r) => r.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())?.periods[block.grade] || 0
+        );
+
+        if (!canClassAcceptSubjectOnDay(existingClassDayLessons, block.subjectCode, totalWeeklyForSubject, block.length)) {
+          continue;
+        }
+
         const allSlots = getGradeDaySlots(block.grade, day);
         const candidateSlots = allSlots.filter((s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK');
         let validSlots = candidateSlots;
         if (block.subjectCode === 'PJ') {
           // PJ: Strictly Period 1 or Period 2 only (prefer Period 1; use Period 2 if P1 has a collision or on Tuesday where P1 is PN)
-          validSlots = candidateSlots.filter((s) => s.slotId === 'W1' || s.slotId === 'W2');
+          validSlots = block.grade === 1 ? [candidateSlots.find(s => s.slotId === "W2"), candidateSlots.find(s => s.slotId === "W1")].filter(Boolean) as any : candidateSlots.filter((s) => s.slotId === "W1" || s.slotId === "W2");
         } else if (block.isMorningOnly) {
           validSlots = candidateSlots.filter((s) => s.endMinutes <= 585);
         }
 
-        for (let sIdx = 0; sIdx <= validSlots.length - block.length; sIdx++) {
+        const numCandidates = validSlots.length - block.length + 1;
+        if (numCandidates <= 0) continue;
+        const slotIndices = Array.from({ length: numCandidates }, (_, i) => i);
+        if (variationSeed !== 0 && block.priority >= 5) {
+          const shift = (variationSeed * 3 + bIndex) % numCandidates;
+          slotIndices.push(...slotIndices.splice(0, shift));
+        }
+
+        for (const sIdx of slotIndices) {
           const slotGroup = validSlots.slice(sIdx, sIdx + block.length);
           const allFreeInGrade = slotGroup.every((s) => grid[block.grade][day][s.slotId] === null);
           if (!allFreeInGrade) continue;
 
           // In Tier 1: do not cross recess
-          if (tier === 1 && block.length === 2) {
+          if (tier === 1 && block.length >= 2) {
             const s1 = slotGroup[0];
-            const s2 = slotGroup[1];
-            if (s1.endMinutes <= 585 && s2.startMinutes >= 615) {
+            const sEnd = slotGroup[slotGroup.length - 1];
+            if (s1.endMinutes <= 585 && sEnd.startMinutes >= 615) {
               continue;
             }
           }
@@ -758,6 +754,30 @@ export function generateAutoSchedule(
           // Strict non-collision check!
           if (!isSlotFreeForTeacher(block.teacherCode, day, slotGroup, block.subjectCode, tier)) {
             continue;
+          }
+
+          // Year 1 Period 4 (W4) teacher anti-repetition check (spread PKAR +0.5 workload across different teachers)
+          if (block.grade === 1 && slotGroup.some((s) => s.slotId === 'W4')) {
+            const existingYear1W4 = DAYS_OF_WEEK.map((d) => {
+              const cell = grid[1]?.[d]?.['W4'];
+              return cell
+                ? { day: d, subjectCode: cell.subjectCode, teacherId: cell.teacherCode }
+                : null;
+            }).filter(Boolean) as Array<{ day: string; subjectCode: string; teacherId: string }>;
+
+            const isStrict = tier <= 2;
+            if (
+              !canAssignYear1Period4(
+                1,
+                4,
+                block.subjectCode,
+                block.teacherCode,
+                existingYear1W4,
+                isStrict
+              )
+            ) {
+              continue;
+            }
           }
 
           bookSlots(block.grade, day, slotGroup, {
@@ -793,10 +813,25 @@ export function generateAutoSchedule(
         for (let sIdx = 0; sIdx <= validSlots.length - block.length; sIdx++) {
           const slotGroup = validSlots.slice(sIdx, sIdx + block.length);
           const cells = slotGroup.map((s) => grid[block.grade][day][s.slotId]);
-          if (cells.some((c) => !c || c.isLocked)) continue;
+          // Strict: never evict locked cells, empty cells, or cells of the same subject!
+          if (cells.some((c) => !c || c.isLocked || c.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())) continue;
 
           // Temporarily unbook current cells
           unbookSlots(block.grade, day, slotGroup);
+
+          const currentClassDayLessons = Object.entries(grid[block.grade][day])
+            .filter(([sId, cell]) => !slotGroup.some((sg) => sg.slotId === sId) && cell && cell.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())
+            .map(([_, cell]) => ({ subjectCode: cell!.subjectCode }));
+          const totalWeeklyForSubject = Number(
+            cleanMatrix.find((r) => r.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())?.periods[block.grade] || 0
+          );
+          if (!canClassAcceptSubjectOnDay(currentClassDayLessons, block.subjectCode, totalWeeklyForSubject, block.length)) {
+            // Re-book back
+            slotGroup.forEach((s, idx) => {
+              if (cells[idx]) bookSlots(block.grade, day, [s], cells[idx]!);
+            });
+            continue;
+          }
 
           const teacherCanTakeHere = isSlotFreeForTeacher(
             block.teacherCode,
@@ -813,7 +848,7 @@ export function generateAutoSchedule(
             continue;
           }
 
-          // Try moving evicted cells to other free slots
+          // Try moving evicted cells to other free slots on OTHER days
           let allEvictedMoved = true;
           const movedCells: Array<{ day: DayOfWeek; slot: SlotTimeInfo; cell: TimetableCell }> = [];
 
@@ -823,12 +858,26 @@ export function generateAutoSchedule(
 
             for (const altDay of DAYS_OF_WEEK) {
               if (evictedPlaced) break;
+              if (altDay === day) continue; // Evicted cell MUST move to a different day!
+
               const altSlots = getGradeDaySlots(block.grade, altDay).filter(
-                (s) => !s.isRecess && s.slotId !== 'PKAR'
+                (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
               );
               for (const altS of altSlots) {
-                if (altDay === day && slotGroup.some((sg) => sg.slotId === altS.slotId)) continue;
                 if (grid[block.grade][altDay][altS.slotId] !== null) continue;
+
+                // PJ morning restriction
+                if (evictedCell.subjectCode === 'PJ' && altS.slotId !== 'W1' && altS.slotId !== 'W2') continue;
+
+                const currentAltLessons = Object.entries(grid[block.grade][altDay])
+                  .filter(([_, cell]) => cell && cell.subjectCode.toUpperCase() === evictedCell.subjectCode.toUpperCase())
+                  .map(([_, cell]) => ({ subjectCode: cell!.subjectCode }));
+                const totalWeeklyEvicted = Number(
+                  cleanMatrix.find((r) => r.subjectCode.toUpperCase() === evictedCell.subjectCode.toUpperCase())?.periods[block.grade] || 0
+                );
+                if (!canClassAcceptSubjectOnDay(currentAltLessons, evictedCell.subjectCode, totalWeeklyEvicted, 1)) {
+                  continue;
+                }
 
                 if (isSlotFreeForTeacher(evictedCell.teacherCode, altDay, [altS], evictedCell.subjectCode, 4)) {
                   bookSlots(block.grade, altDay, [altS], evictedCell);
@@ -842,6 +891,17 @@ export function generateAutoSchedule(
             if (!evictedPlaced) {
               allEvictedMoved = false;
               break;
+            }
+          }
+
+          // Final verification before committing: ensure target day still complies with daily caps
+          if (allEvictedMoved) {
+            const remainingOnDay = Object.entries(grid[block.grade][day])
+              .filter(([_, cell]) => cell && cell.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())
+              .map(([_, cell]) => ({ subjectCode: cell!.subjectCode }));
+
+            if (!canClassAcceptSubjectOnDay(remainingOnDay, block.subjectCode, totalWeeklyForSubject, block.length)) {
+              allEvictedMoved = false;
             }
           }
 
@@ -869,15 +929,116 @@ export function generateAutoSchedule(
       }
     }
 
-    // Tier 4: If still not placed and length === 2, split into two 1-period blocks
-    if (!placed && block.length === 2) {
+    // Tier 4: If still not placed and length > 1, split
+    if (!placed && block.length === 3) {
       blocks.splice(
         bIndex + 1,
         0,
-        { ...block, id: `${block.id}_split1`, length: 1, priority: block.priority + 1 },
-        { ...block, id: `${block.id}_split2`, length: 1, priority: block.priority + 1 }
+        { ...block, id: `${block.id}_split2`, length: 2, priority: block.priority },
+        { ...block, id: `${block.id}_split1`, length: 1, priority: block.priority }
       );
       placed = true;
+    } else if (!placed && block.length === 2) {
+      blocks.splice(
+        bIndex + 1,
+        0,
+        { ...block, id: `${block.id}_split1`, length: 1, priority: block.priority },
+        { ...block, id: `${block.id}_split2`, length: 1, priority: block.priority }
+      );
+      placed = true;
+    }
+
+    if (!placed) {
+      // Step 3.5: 1-Hop Augmenting Swap for unplaced blocks
+      for (const targetDay of DAYS_OF_WEEK) {
+        if (placed) break;
+        const targetAllSlots = getGradeDaySlots(block.grade, targetDay).filter(
+          (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
+        );
+
+        for (const emptySlot of targetAllSlots) {
+          if (placed) break;
+          if (grid[block.grade][targetDay][emptySlot.slotId] !== null) continue;
+
+          // Check if block can directly fit in emptySlot
+          const targetDayLessons = Object.entries(grid[block.grade][targetDay])
+            .filter(([_, cell]) => cell && cell.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())
+            .map(([_, cell]) => ({ subjectCode: cell!.subjectCode }));
+          const totalWeeklyForSubject = Number(
+            cleanMatrix.find((r) => r.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())?.periods[block.grade] || 0
+          );
+
+          if (canClassAcceptSubjectOnDay(targetDayLessons, block.subjectCode, totalWeeklyForSubject, block.length) &&
+              isSlotFreeForTeacher(block.teacherCode, targetDay, [emptySlot], block.subjectCode, 4)) {
+            bookSlots(block.grade, targetDay, [emptySlot], {
+              subjectId: block.id,
+              subjectCode: block.subjectCode,
+              subjectName: block.subjectName,
+              teacherCode: block.teacherCode,
+            });
+            incGradeSubjectDay(block.grade, block.subjectCode, targetDay);
+            placed = true;
+            break;
+          }
+
+          // 1-Hop Swap: find an existing lesson candCell in this grade that can move to emptySlot,
+          // freeing candSlot for block!
+          for (const candDay of DAYS_OF_WEEK) {
+            if (placed) break;
+            const candSlots = getGradeDaySlots(block.grade, candDay).filter(
+              (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
+            );
+
+            for (const candSlot of candSlots) {
+              const candCell = grid[block.grade][candDay][candSlot.slotId];
+              if (!candCell || candCell.isLocked || candCell.subjectCode.toUpperCase() === block.subjectCode.toUpperCase()) continue;
+
+              const targetDayCandLessons = Object.entries(grid[block.grade][targetDay])
+                .filter(([sId, cell]) => sId !== emptySlot.slotId && cell && cell.subjectCode.toUpperCase() === candCell.subjectCode.toUpperCase())
+                .map(([_, cell]) => ({ subjectCode: cell!.subjectCode }));
+              const totalWeeklyCand = Number(
+                cleanMatrix.find((r) => r.subjectCode.toUpperCase() === candCell.subjectCode.toUpperCase())?.periods[block.grade] || 0
+              );
+
+              if (candDay !== targetDay && !canClassAcceptSubjectOnDay(targetDayCandLessons, candCell.subjectCode, totalWeeklyCand, 1)) {
+                continue;
+              }
+              if (candCell.subjectCode === 'PJ' && emptySlot.slotId !== 'W1' && emptySlot.slotId !== 'W2') {
+                continue;
+              }
+              if (!isSlotFreeForTeacher(candCell.teacherCode, targetDay, [emptySlot], candCell.subjectCode, 4)) {
+                continue;
+              }
+
+              // Temporarily move candCell to emptySlot
+              unbookSlots(block.grade, candDay, [candSlot]);
+              bookSlots(block.grade, targetDay, [emptySlot], candCell);
+
+              // Check if block can now take candSlot on candDay
+              const candDayLessonsAfterMove = Object.entries(grid[block.grade][candDay])
+                .filter(([sId, cell]) => sId !== candSlot.slotId && cell && cell.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())
+                .map(([_, cell]) => ({ subjectCode: cell!.subjectCode }));
+
+              if (canClassAcceptSubjectOnDay(candDayLessonsAfterMove, block.subjectCode, totalWeeklyForSubject, block.length) &&
+                  isSlotFreeForTeacher(block.teacherCode, candDay, [candSlot], block.subjectCode, 4)) {
+                bookSlots(block.grade, candDay, [candSlot], {
+                  subjectId: block.id,
+                  subjectCode: block.subjectCode,
+                  subjectName: block.subjectName,
+                  teacherCode: block.teacherCode,
+                });
+                incGradeSubjectDay(block.grade, block.subjectCode, candDay);
+                placed = true;
+                break;
+              } else {
+                // Rollback move
+                unbookSlots(block.grade, targetDay, [emptySlot]);
+                bookSlots(block.grade, candDay, [candSlot], candCell);
+              }
+            }
+          }
+        }
+      }
     }
 
     if (!placed) {
@@ -903,6 +1064,26 @@ export function generateAutoSchedule(
     toSlot: SlotTimeInfo,
     grade: number
   ): boolean => {
+    // PJ is strictly Period 1 or Period 2 only
+    if (cell.subjectCode === 'PJ' && toSlot.slotId !== 'W1' && toSlot.slotId !== 'W2') {
+      return false;
+    }
+
+    // Strictly enforce daily subject cap when moving across different days
+    if (fromDay !== toDay) {
+      const existingLessonsOnToDay = Object.entries(grid[grade][toDay])
+        .filter(([sId, c]) => sId !== toSlot.slotId && c && c.subjectCode.toUpperCase() === cell.subjectCode.toUpperCase())
+        .map(([_, c]) => ({ subjectCode: c!.subjectCode }));
+
+      const totalWeekly = Number(
+        cleanMatrix.find((r) => r.subjectCode.toUpperCase() === cell.subjectCode.toUpperCase())?.periods[grade] || 0
+      );
+
+      if (!canClassAcceptSubjectOnDay(existingLessonsOnToDay, cell.subjectCode, totalWeekly, 1)) {
+        return false;
+      }
+    }
+
     if (!cell.teacherCode) return true;
     const tList = cell.teacherCode.split('/').map((t) => t.trim()).filter(Boolean);
     for (const t of tList) {

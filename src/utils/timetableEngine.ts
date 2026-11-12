@@ -153,6 +153,242 @@ export function getDayPeriodConfig(day: string, classLevel: number = 2) {
   }
 }
 
+// 每日正课全额开放排课，放学后额外附加 1 个 Tasmik 手动点击格
+export function getDayScheduleBounds(day: string, classLevel: number) {
+  const isTahap2 = classLevel >= 4; // 四至六年级
+
+  switch (day.toUpperCase()) {
+    case 'ISNIN':
+    case 'SELASA':
+      return {
+        maxAutoPeriod: 11,      // 第 1 至 11 节全部排正课
+        preRecessPeriod: 5,     // 第 5 节为下课前最后一节 (自动绑定 PKAR)
+        manualTasmikSlot: 12,   // 放学后附加格，仅供手动点击排 Tasmik
+      };
+    case 'RABU':
+    case 'KHAMIS':
+      return {
+        maxAutoPeriod: 10,      // 第 1 至 10 节全部排正课
+        preRecessPeriod: 5,
+        manualTasmikSlot: 11,   // 放学后附加格，仅供手动点击排 Tasmik
+      };
+    case 'JUMAAT':
+      return {
+        maxAutoPeriod: isTahap2 ? 8 : 7, // 一至三年级 1~7 节，四至六年级 1~8 节全部排正课
+        preRecessPeriod: 5,
+        manualTasmikSlot: isTahap2 ? 9 : 8, // 放学后附加格，仅供手动点击排 Tasmik
+      };
+    default:
+      return { maxAutoPeriod: 10, preRecessPeriod: 5, manualTasmikSlot: 11 };
+  }
+}
+
+// 自动排课队列彻底过滤掉 TASMIK 与 Program Membaca（留作纯手动编排）
+export function filterAutoSchedulableAssignments(assignments: any[]) {
+  return assignments.filter((asg) => {
+    const code = String(asg.canonicalSubjectCode || asg.subjectCode || '').toUpperCase();
+    // TASMIK、MEMBACA、以及自动跟随下课前老师的 PKAR 均不进入常规抢格队列
+    return code !== 'TASMIK' && code !== 'MEMBACA' && !code.startsWith('PKAR');
+  });
+}
+
+// 严格按周总节数计算单日最高允许节数：仅 11 节和 12 节允许单日 3 节，其余一律最多 2 节
+export function getMaxDailyPeriodsForSubject(weeklyPeriods: number, subjectCode: string): number {
+  const code = subjectCode.toUpperCase();
+  if (code === 'PJ') return 1; // 体育每天最多 1 节
+  if (weeklyPeriods >= 11) return 3; // 只有 11 节和 12 节的科目，允许单日最多 3 节
+  return 2; // 10 节及以下的所有科目，单日绝对最多 2 节！
+}
+
+// 精确拆分 1~12 节课（确保每一块分配到不同的上课日，绝不叠加成 4 节）
+export function decomposeSubjectBlocks(subjectCode: string, weeklyPeriods: number): number[] {
+  const code = subjectCode.toUpperCase();
+  const total = Math.round(weeklyPeriods);
+
+  if (code === 'PJ') return Array(total).fill(1); // PJ 拆为独立单节
+  if ((code === 'PSV' || code === 'RBT' || code === 'SEJ') && total === 2) return [2];
+
+  switch (total) {
+    case 12: return [3, 3, 2, 2, 2]; // 2天3节 + 3天2节 (分布于5天)
+    case 11: return [3, 2, 2, 2, 2]; // 1天3节 + 4天2节 (分布于5天)
+    case 10: return [2, 2, 2, 2, 2]; // 5天每天2节
+    case 9:  return [2, 2, 2, 2, 1]; // 4天2节 + 1天1节
+    case 8:  return [2, 2, 2, 1, 1]; // 3天2节 + 2天1节
+    case 7:  return [2, 2, 2, 1];    // 3天2节 + 1天1节
+    case 6:  return [2, 2, 2];       // 3天2节
+    case 5:  return [2, 2, 1];       // 2天2节 + 1天1节
+    case 4:  return [2, 2];          // 2天2节
+    case 3:  return [2, 1];          // 1天2节 + 1天1节
+    case 2:  return [2];
+    case 1:  return [1];
+    default: return [1];
+  }
+}
+
+// 全局硬性守门员：在所有排课层级（含保底循环）强制拦截超标排课
+export function canClassAcceptSubjectOnDay(
+  currentClassDayLessons: any[], // 该班当天已排的所有课
+  subjectCode: string,
+  weeklyPeriodsForThisSubject: number,
+  periodsToAdd: number // 本次准备排入的节数 (1, 2, 或 3)
+): boolean {
+  const normalizedCode = subjectCode.toUpperCase();
+
+  // 统计该班当天已经排了多少节这门课（排除 Pemulihan 覆盖层）
+  const existingCountOnDay = currentClassDayLessons.filter(
+    (l) => !l.isPemulihan && l.subjectCode.toUpperCase() === normalizedCode
+  ).length;
+
+  const maxAllowedPerDay = getMaxDailyPeriodsForSubject(weeklyPeriodsForThisSubject, normalizedCode);
+
+  // 核心拦截：原有节数 + 新增节数 严禁超过单日上限（彻底封死 4 节，<=10节封死 3 节）
+  if (existingCountOnDay + periodsToAdd > maxAllowedPerDay) {
+    return false;
+  }
+
+  // 防止同一科目在同一天被分成两个不相连的块（除非是 11/12 节课的 2+1 组合）
+  if (existingCountOnDay > 0 && weeklyPeriodsForThisSubject <= 10) {
+    return false; // 10节及以下科目，一天只能排一次（1组连堂或1个单节），严禁同天二次塞入
+  }
+
+  return true;
+}
+
+// --------------------------------------------------------------------------
+// 一年级第 4 节 (紧邻 PKAR 0.5节) 防重复科任老师校验：每天换不同科目与老师，分摊负担
+// --------------------------------------------------------------------------
+export function canAssignYear1Period4(
+  classLevel: number,
+  targetPeriod: number,
+  subjectCode: string,
+  teacherId: string,
+  existingYear1Period4Lessons: Array<{ day: string; subjectCode: string; teacherId: string }>,
+  strictMode: boolean = true
+): boolean {
+  // 仅针对一年级 (Tahun 1) 的第 4 节 (PKAR 前置绑定节次)
+  if (classLevel !== 1 || targetPeriod !== 4) return true;
+
+  const sameSubjectCount = existingYear1Period4Lessons.filter(
+    (l) => l.subjectCode === subjectCode
+  ).length;
+  const sameTeacherCount = existingYear1Period4Lessons.filter(
+    (l) => l.teacherId === teacherId
+  ).length;
+
+  if (strictMode) {
+    // 严格模式：周一至周五每天的第 4 节必须是完全不同的科目和不同的老师（每人最多带 1 次 PKAR +0.5）
+    return sameSubjectCount === 0 && sameTeacherCount === 0;
+  } else {
+    // 次选模式：即使某位老师教两门课，一周内最多也只能排入一年级第 4 节不超过 2 次
+    return sameSubjectCount === 0 && sameTeacherCount < 2;
+  }
+}
+
+// --------------------------------------------------------------------------
+// 星期五放学后手动排 Tasmik 时刻配置：
+// 一至三年级星期五 11:15 - 11:45 (第 8 节, 与高年级第 8 节时刻同步) 放学后手动排 Tasmik
+// 四至六年级星期五 11:45 - 12:15 (第 9 节) 放学后手动排 Tasmik
+// --------------------------------------------------------------------------
+export function getFridayTasmikSlotMeta(classLevel: number) {
+  const isTahap2 = classLevel >= 4;
+  if (!isTahap2) {
+    // 一至三年级 (Tahap 1): 第 8 节, 11:15 - 11:45 (与高年级第 8 节时刻同步)
+    return {
+      periodNumber: 8,
+      timeLabel: '11:15 - 11:45',
+      startMinutes: 675,
+      endMinutes: 705,
+      isManualTasmik: true,
+    };
+  } else {
+    // 四至六年级 (Tahap 2): 第 9 节, 11:45 - 12:15
+    return {
+      periodNumber: 9,
+      timeLabel: '11:45 - 12:15',
+      startMinutes: 705,
+      endMinutes: 735,
+      isManualTasmik: true,
+    };
+  }
+}
+
+// --------------------------------------------------------------------------
+// 排课指纹对比与动态多样性生成
+// --------------------------------------------------------------------------
+let previousScheduleSignature: string = '';
+
+export function getPreviousScheduleSignature(): string {
+  return previousScheduleSignature;
+}
+
+export function setPreviousScheduleSignature(sig: string): void {
+  previousScheduleSignature = sig;
+}
+
+export function resetScheduleSignature(): void {
+  previousScheduleSignature = '';
+}
+
+export function computeScheduleSignature(lessonsOrGrid: any): string {
+  if (Array.isArray(lessonsOrGrid)) {
+    return lessonsOrGrid
+      .filter((l) => l && l.countsAsClassPeriod && l.subjectCode && l.subjectCode.toUpperCase() !== 'PN')
+      .map((l) => `${l.classId}_${l.day}_P${l.periodNumber}:${l.subjectCode}`)
+      .sort()
+      .join('|');
+  }
+
+  // If a ScheduleGrid object is provided
+  if (lessonsOrGrid && typeof lessonsOrGrid === 'object') {
+    const tokens: string[] = [];
+    [1, 2, 3, 4, 5, 6].forEach((g) => {
+      DAYS_OF_WEEK.forEach((d) => {
+        const daySlots = (lessonsOrGrid as any)[g]?.[d];
+        if (daySlots) {
+          Object.entries(daySlots).forEach(([slotId, cell]: [string, any]) => {
+            if (cell && cell.subjectCode && cell.subjectCode.toUpperCase() !== 'PN' && slotId !== 'PKAR' && slotId !== 'MEMBACA' && slotId !== 'TASMIK') {
+              tokens.push(`T${g}_${d}_${slotId}:${cell.subjectCode}`);
+            }
+          });
+        }
+      });
+    });
+    return tokens.sort().join('|');
+  }
+
+  return '';
+}
+
+export function isSignificantlyDifferentFromPrevious(lessonsOrGrid: any): boolean {
+  const currentSig = computeScheduleSignature(lessonsOrGrid);
+  if (!previousScheduleSignature) {
+    previousScheduleSignature = currentSig;
+    return true; // 首次生成直接视为有效
+  }
+
+  const prevEntries = new Set(previousScheduleSignature.split('|').filter(Boolean));
+  const currEntries = currentSig.split('|').filter(Boolean);
+
+  if (currEntries.length === 0 || prevEntries.size === 0) {
+    previousScheduleSignature = currentSig;
+    return true;
+  }
+
+  // 计算相同槽位科目重合数
+  let identicalCount = 0;
+  for (const entry of currEntries) {
+    if (prevEntries.has(entry)) {
+      identicalCount++;
+    }
+  }
+
+  const similarityRatio = identicalCount / Math.max(currEntries.length, prevEntries.size);
+  // 要求至少 30% 差异（即相似度 <= 70%）
+  const isDifferent = similarityRatio <= 0.7;
+  previousScheduleSignature = currentSig;
+  return isDifferent;
+}
+
 // 2. 识别班级所属年级 (Tahun 1 ~ Tahun 6)
 export function resolveClassLevel(cls: { level?: number; className?: string; classId?: string; grade?: number; yearLevel?: string }): number {
   if (typeof cls.level === 'number' && cls.level >= 1 && cls.level <= 6) {
@@ -200,7 +436,10 @@ export function seedManualTasmikSlots(classes: any[], days: string[], lessons: a
   classes.forEach((cls) => {
     const classLevel = resolveClassLevel(cls);
     days.forEach((day) => {
-      const { tasmikManualPeriod } = getDayPeriodConfig(day, classLevel);
+      const { tasmikManualPeriod: defaultPeriod } = getDayPeriodConfig(day, classLevel);
+      const fridayMeta = getFridayTasmikSlotMeta(classLevel);
+      const tasmikManualPeriod = day === 'JUMAAT' ? fridayMeta.periodNumber : defaultPeriod;
+
       if (
         lessons.some(
           (l) =>
@@ -214,9 +453,7 @@ export function seedManualTasmikSlots(classes: any[], days: string[], lessons: a
 
       const timeSlotLabel =
         day === 'JUMAAT'
-          ? classLevel >= 4
-            ? '12:15 - 12:45'
-            : '11:45 - 12:15'
+          ? fridayMeta.timeLabel
           : day === 'ISNIN' || day === 'SELASA'
           ? '13:15 - 13:45'
           : '12:45 - 13:15';
@@ -978,18 +1215,8 @@ export function runTimetableEngine(params: {
     const clsObj = nonPrasekolahClasses.find((c) => c.classId === asg.classId);
     const classLevel = resolveClassLevel(clsObj || { className: asg.className });
 
-    // Distribute into 2-period and 1-period blocks
-    const blocks: number[] = [];
-    let rem = required - scheduled;
-    while (rem > 0) {
-      if (rem >= 2) {
-        blocks.push(2);
-        rem -= 2;
-      } else {
-        blocks.push(1);
-        rem -= 1;
-      }
-    }
+    // Distribute into blocks according to strict pedagogical rules
+    const blocks = decomposeSubjectBlocks(asg.canonicalSubjectCode, required - scheduled);
 
     // Track days used for this assignment to spread across the week (1 block per day)
     const usedDaysForSubject = new Set<string>();
@@ -1010,10 +1237,45 @@ export function runTimetableEngine(params: {
 
         for (const day of dayCandidates) {
           if (placed) break;
+
+          // 全局硬性守门员：强制拦截超标排课（严禁 > 2 节/天，仅 11/12 节允许 3 节）
+          const currentClassDayLessons = lessons.filter(
+            (l) => l.classId === asg.classId && l.day === day && !l.isPemulihan && l.countsAsClassPeriod
+          );
+          if (!canClassAcceptSubjectOnDay(currentClassDayLessons, asg.canonicalSubjectCode, required, blockLen)) {
+            continue;
+          }
+
           const maxP = getDailyMaxPeriods(day, classLevel);
 
           for (let p = 1; p <= maxP - blockLen + 1; p++) {
-            const periodsToBook = blockLen === 2 ? [p, p + 1] : [p];
+            const periodsToBook = Array.from({ length: blockLen }, (_, i) => p + i);
+
+            // 一年级第 4 节 (紧邻 PKAR 0.5节) 防重复科任老师校验
+            if (classLevel === 1 && periodsToBook.includes(4)) {
+              const existingYear1P4Lessons = lessons
+                .filter(
+                  (l) =>
+                    resolveClassLevel(l) === 1 &&
+                    l.periodNumber === 4 &&
+                    l.countsAsClassPeriod &&
+                    !l.isPemulihan
+                )
+                .map((l) => ({ day: l.day, subjectCode: l.subjectCode, teacherId: l.teacherId }));
+
+              if (
+                !canAssignYear1Period4(
+                  classLevel,
+                  4,
+                  asg.canonicalSubjectCode,
+                  asg.teacherId,
+                  existingYear1P4Lessons,
+                  strictBreaks
+                )
+              ) {
+                continue;
+              }
+            }
 
             const canBook = periodsToBook.every((per, idx) => {
               const cKey = `${asg.classId}_${day}_${per}`;
@@ -1023,11 +1285,12 @@ export function runTimetableEngine(params: {
               }
               if (!strictBreaks) return true;
               const current = getTeacherPeriodsOnDay(asg.teacherId, day);
+              const bookedSoFar = periodsToBook.slice(0, idx);
               return canTeacherTakeSlot(
                 asg.teacherId,
                 day,
                 per,
-                idx === 0 ? current : [...current, periodsToBook[0]]
+                [...current, ...bookedSoFar]
               );
             });
 

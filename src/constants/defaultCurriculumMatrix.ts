@@ -51,7 +51,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
         5: kp(5) ? 7 : 10,
         6: kp(6) ? 7 : 10,
       },
-      teachers: { 1: 'LSC', 2: 'LSC', 3: 'LSC', 4: 'LCI', 5: 'LCI', 6: 'LCI' },
+      teachers: { 1: 'SW', 2: 'LSC', 3: 'LSC', 4: 'LCI', 5: 'LCI', 6: 'LCI' },
     },
     // 3. Bahasa Melayu (BM)
     {
@@ -115,7 +115,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
         5: kp(5) ? 4 : 5,
         6: kp(6) ? 4 : 5,
       },
-      teachers: { 1: 'LSC', 2: 'JW', 3: 'JW', 4: 'LCI', 5: 'LCI', 6: 'LSC' },
+      teachers: { 1: 'SW', 2: 'JW', 3: 'JW', 4: 'LCI', 5: 'LCI', 6: 'LSC' },
     },
     // 7. Pendidikan Islam (PAI) - Ustaz Muhammad Fahim Amar (MFA)
     {

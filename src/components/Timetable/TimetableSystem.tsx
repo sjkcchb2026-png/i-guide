@@ -227,10 +227,12 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
 
     try {
       setSaveStatus('Sedang menjana jadual waktu secara automatik...');
+      const variationSeed = Math.floor(Math.random() * 10000) + 1;
       const { grid, clashes: newClashes, unplaced } = generateAutoSchedule(
         currentMatrix,
         currentClassTeachers,
-        selectedYear
+        selectedYear,
+        variationSeed
       );
 
       setSchedule(grid);
