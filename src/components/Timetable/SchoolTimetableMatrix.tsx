@@ -939,6 +939,13 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                                     </select>
                                   </div>
                                 </div>
+                              ) : row.subjectCode.startsWith('PKAR') ? (
+                                <div
+                                  className="w-full py-1 px-1 rounded-lg text-[10px] font-bold bg-emerald-950/70 border border-emerald-600/40 text-emerald-300 text-center"
+                                  title="Program Pembentukan Karakter: Automatik dipasangkan kepada guru mengajar sebelum waktu rehat (+0.5 waktu)"
+                                >
+                                  {isAssigned ? 'Auto: Sebelum Rehat' : '-'}
+                                </div>
                               ) : (
                                 <select
                                   value={currentTeacher}

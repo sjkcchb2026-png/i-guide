@@ -30,6 +30,10 @@ export interface TimetableLesson {
   isPN?: boolean;
   isPemulihan?: boolean;
   fractionalPeriod?: number;
+  isManualSlot?: boolean;
+  isAutoPKAR?: boolean;
+  linkedPreRecessLessonId?: string;
+  timeSlotLabel?: string;
 }
 
 export interface ClassProfile {
@@ -111,6 +115,135 @@ export function isPKARSubject(code?: string, name?: string): boolean {
 }
 
 // --------------------------------------------------------------------------
+// 1A. 每日正课节数配置与特色项目配置 (KP2027 & KSSR)
+// --------------------------------------------------------------------------
+// 1. 根据星期与年级 (level: 1~6) 动态返回正课节数与放学后 Tasmik 专属格位置
+export function getDayPeriodConfig(day: string, classLevel: number = 1) {
+  const isUpperPrimary = classLevel >= 4; // 四年级至六年级 (Tahun 4 - 6)
+
+  switch (day.toUpperCase()) {
+    case 'ISNIN':
+    case 'SELASA':
+      return {
+        teachingPeriods: 11,
+        preRecessPeriod: 5,
+        tasmikManualPeriod: 12,
+      };
+    case 'RABU':
+    case 'KHAMIS':
+      return {
+        teachingPeriods: 10,
+        preRecessPeriod: 5,
+        tasmikManualPeriod: 11,
+      };
+    case 'JUMAAT':
+      return {
+        // 星期五：一至三年级 7 节课，四至六年级 8 节课
+        teachingPeriods: isUpperPrimary ? 8 : 7,
+        preRecessPeriod: 5,
+        tasmikManualPeriod: isUpperPrimary ? 9 : 8,
+      };
+    default:
+      return {
+        teachingPeriods: 10,
+        preRecessPeriod: 5,
+        tasmikManualPeriod: 11,
+      };
+  }
+}
+
+// 2. 识别班级所属年级 (Tahun 1 ~ Tahun 6)
+export function resolveClassLevel(cls: { level?: number; className?: string; classId?: string; grade?: number; yearLevel?: string }): number {
+  if (typeof cls.level === 'number' && cls.level >= 1 && cls.level <= 6) {
+    return cls.level;
+  }
+  if (typeof cls.grade === 'number' && cls.grade >= 1 && cls.grade <= 6) {
+    return cls.grade;
+  }
+  const raw = `${cls.className || ''} ${cls.classId || ''} ${cls.yearLevel || ''}`.toUpperCase();
+  const match = raw.match(/(?:TAHUN|T\.?|YEAR|DARJAH|\b)([1-6])\b/);
+  return match ? parseInt(match[1], 10) : 1;
+}
+
+// 3. 一年级 07:15 - 07:30 Program Membaca 固定留空（供后续手动点击指派老师）
+export function seedYear1ProgramMembaca(classes: any[], days: string[], lessons: any[]) {
+  const year1Classes = classes.filter((c) => resolveClassLevel(c) === 1);
+  year1Classes.forEach((cls) => {
+    days.forEach((day) => {
+      // 避免重复生成
+      if (lessons.some((l) => l.day === day && l.classId === cls.classId && (l.periodNumber === 0 || l.subjectCode === 'MEMBACA'))) {
+        return;
+      }
+      lessons.push({
+        id: `membaca_${cls.classId}_${day}`,
+        day,
+        periodNumber: 0, // 07:15 - 07:30 晨读独立格
+        timeSlotLabel: '07:15 - 07:30',
+        classId: cls.classId,
+        className: cls.className,
+        subjectCode: 'MEMBACA',
+        subjectName: 'Program Membaca',
+        teacherId: '', // 默认放空，由管理员手动点击指派
+        teacherName: 'Klik untuk pilih guru',
+        isManualSlot: true,
+        countsAsClassPeriod: false,
+        countsAsTeacherPeriod: false,
+      });
+    });
+  });
+}
+
+// 3. 自动将每日 PKAR (0.5 节) 绑定给“下课前那一节”的进班老师，并自动计入 +0.5 节工作量
+export function autoPairPKARWithPreRecessTeacher(
+  lessons: any[],
+  days: string[],
+  incTeacherWorkload: (teacherId: string, day: string, delta: number) => void
+) {
+  // 先清除旧的自动 PKAR 记录，确保拖拽调课后也能实时重新绑定
+  const filteredLessons = lessons.filter((l) => !l.isAutoPKAR);
+
+  days.forEach((day) => {
+    const { preRecessPeriod } = getDayPeriodConfig(day);
+
+    // 找出所有班级在当天下课前那一节 (preRecessPeriod) 的正课
+    const preRecessLessons = filteredLessons.filter(
+      (l) =>
+        l.day === day &&
+        l.periodNumber === preRecessPeriod &&
+        !l.isPemulihan &&
+        l.countsAsClassPeriod
+    );
+
+    preRecessLessons.forEach((preLesson) => {
+      if (!preLesson.teacherId || preLesson.teacherId.startsWith('ALL_TEACHERS')) return;
+
+      // 自动为该班生成绑定下课前老师的 PKAR (0.5 节)
+      filteredLessons.push({
+        id: `pkar_${preLesson.classId}_${day}`,
+        day,
+        periodNumber: preRecessPeriod + 0.5, // 紧贴下课前的 15 分钟品格塑造时段
+        classId: preLesson.classId,
+        className: preLesson.className,
+        subjectCode: 'PKAR',
+        subjectName: 'Program Pembentukan Karakter (15 Min)',
+        teacherId: preLesson.teacherId,
+        teacherName: preLesson.teacherName,
+        isAutoPKAR: true,
+        linkedPreRecessLessonId: preLesson.id,
+        fractionalPeriod: 0.5,
+        countsAsClassPeriod: true,
+        countsAsTeacherPeriod: true, // 自动计入该老师 +0.5 节工作量
+      });
+
+      // 累加该老师当天的排课节数 (+0.5)
+      incTeacherWorkload(preLesson.teacherId, day, 0.5);
+    });
+  });
+
+  return filteredLessons;
+}
+
+// --------------------------------------------------------------------------
 // 1B. 真实时钟重叠检测器与连堂课寻优评分函数
 // --------------------------------------------------------------------------
 export interface TimeInterval {
@@ -176,17 +309,16 @@ export const validPJ2DayPairs: Array<[string, string]> = [
   ['SELASA', 'JUMAAT'],          // 星期 2, 5
 ];
 
-// 每个交易日在上午下课前可排 PJ 的节次（避开周三第1节周会，每日严禁排超过1节）
+// 每个交易日在上午下课前可排 PJ 的节次（周二第1节固定为 PN 周会，PJ 严格排入第2节；其他日期严格限制在第1节或第2节，优先第1节）
 export const getMorningPJCandidates = (day: string): number[] => {
-  if (day === 'RABU' || day === 'SELASA') {
-    return [2, 3, 4]; // 避开第1节周会
+  if (day === 'SELASA') {
+    return [2]; // 周二第 1 节固定为 PN 周会，PJ 严格排入第 2 节
   }
-  return [1, 2, 3, 4];
+  return [1, 2]; // 严格限制在第 1 节或第 2 节（优先第 1 节，有冲突时使用第 2 节）
 };
 
 export const getDailyMaxPeriods = (day: string): number => {
-  if (day === 'JUMAAT') return 8;
-  return 10;
+  return getDayPeriodConfig(day).teachingPeriods;
 };
 
 export const isAdjacentPeriod = (p1: number, p2: number): boolean => {
@@ -200,26 +332,26 @@ export function canTeacherTakeSlot(
   teacherId: string,
   day: string,
   targetPeriod: number,
-  currentTeacherLessonsOnDay: number[] // 当天已排入的节次列表
+  currentTeacherLessonsOnDay: number[], // 当天已排入的节次列表
+  currentTeacherWorkloadDay: number = 0 // 包含 0.5 节 PKAR 的实际工作量
 ): boolean {
-  // 规则 2A: 一天最多 8 节课
-  if (currentTeacherLessonsOnDay.length >= 8) {
+  // 规则 2A: 一天最多 8 节课 (含 0.5 节 PKAR)
+  if (currentTeacherLessonsOnDay.length >= 8 || currentTeacherWorkloadDay + 1 > 8) {
     return false;
   }
 
+  const { preRecessPeriod, teachingPeriods } = getDayPeriodConfig(day);
   const simulatedPeriods = [...currentTeacherLessonsOnDay, targetPeriod];
-  const morningPeriods = simulatedPeriods.filter((p) => p <= 5);
-  const afternoonPeriods = simulatedPeriods.filter((p) => p >= 6);
+  const morningPeriods = simulatedPeriods.filter((p) => p <= preRecessPeriod);
+  const afternoonPeriods = simulatedPeriods.filter((p) => p > preRecessPeriod && p <= teachingPeriods);
 
-  // 规则 2B: 下课前 (第 1 ~ 5 节) 至少留出 1 节空档
-  // 若上午 5 节全部排满（即占了 5 节），则不合法
-  if (morningPeriods.length > 4) {
+  // 规则 2B: 下课前 (第 1 ~ preRecessPeriod 节) 至少留出 1 节空档
+  if (morningPeriods.length >= preRecessPeriod) {
     return false;
   }
 
-  // 规则 2C: 下课后 (第 6 节及以后) 至少留出 1 节空档
-  const maxDayPeriod = getDailyMaxPeriods(day);
-  const totalAfternoonSlots = Math.max(0, maxDayPeriod - 5);
+  // 规则 2C: 下课后 (第 preRecessPeriod+1 节及以后) 至少留出 1 节空档
+  const totalAfternoonSlots = teachingPeriods - preRecessPeriod;
   if (totalAfternoonSlots > 1 && afternoonPeriods.length >= totalAfternoonSlots) {
     return false;
   }
@@ -280,19 +412,16 @@ export const tasmikCandidateDays = ['RABU', 'KHAMIS', 'JUMAAT'] as const;
 
 export const getPostDismissalSlotForTasmik = (
   day: 'RABU' | 'KHAMIS' | 'JUMAAT' | string,
-  yearLevelStr: string,
-  acadYearStr: string
+  yearLevelStr?: string | number,
+  _acadYearStr?: string
 ): number => {
-  const gradeNum = parseInt(yearLevelStr.replace(/\D/g, ''), 10) || 1;
-  const yr = parseInt(acadYearStr, 10) || 2027;
-  const isKP2027 = yr >= 2027 && gradeNum <= yr - 2026;
-
-  if (day === 'JUMAAT') {
-    // 星期五正课 8 节结束，放学后紧接第 9 节
-    return 9;
+  let level = 1;
+  if (typeof yearLevelStr === 'number') {
+    level = yearLevelStr;
+  } else if (typeof yearLevelStr === 'string') {
+    level = resolveClassLevel({ yearLevel: yearLevelStr });
   }
-  // 星期三、星期四：KP2027 低年级正课 9 节结束 -> 放学后为第 10 节；KSSR 正课 10 节结束 -> 放学后为第 11 节
-  return isKP2027 && gradeNum <= 2 ? 10 : 11;
+  return getDayPeriodConfig(day, level).tasmikManualPeriod;
 };
 
 export const tasmikDayPairs: Array<['RABU' | 'KHAMIS' | 'JUMAAT', 'RABU' | 'KHAMIS' | 'JUMAAT']> = [
@@ -326,9 +455,9 @@ export function runTimetableEngine(params: {
   const teacherDayPeriodCounts = new Map<string, number>();
   const teacherDayPeriodsMap = new Map<string, number[]>(); // `${teacherId}_${day}` -> array of periods
 
-  const incTeacherDayCount = (teacherId: string, day: string) => {
+  const incTeacherDayCount = (teacherId: string, day: string, delta: number = 1) => {
     const key = `${teacherId}_${day}`;
-    teacherDayPeriodCounts.set(key, (teacherDayPeriodCounts.get(key) || 0) + 1);
+    teacherDayPeriodCounts.set(key, (teacherDayPeriodCounts.get(key) || 0) + delta);
   };
 
   const getTeacherPeriodsOnDay = (teacherId: string, day: string): number[] => {
@@ -391,9 +520,9 @@ export function runTimetableEngine(params: {
   );
 
   // --------------------------------------------------------------------------
-  // 1. 周会 (PN) 全员参与，所有在职教师自动 +1 节工作量 (RABU Period 1)
+  // 1. 周会 (PN) 全员参与，所有在职教师自动 +1 节工作量 (SELASA Period 1)
   // --------------------------------------------------------------------------
-  const assemblyDay = 'RABU';
+  const assemblyDay = 'SELASA';
   nonPrasekolahClasses.forEach((cls) => {
     const classKey = `${cls.classId}_${assemblyDay}_1`;
     classSlotOccupied.add(classKey);
@@ -416,10 +545,10 @@ export function runTimetableEngine(params: {
     });
   });
 
-  // 为全校所有在职老师在周三第 1 节锁定槽位，并计入真实教学工作量 (+1)
+  // 为全校所有在职老师在周二第 1 节锁定槽位，并计入真实教学工作量 (+1)
   teachers.forEach((t) => {
     teacherSlotOccupied.add(`${t.teacherId}_${assemblyDay}_1`);
-    incTeacherDayCount(t.teacherId, assemblyDay); // 老师工作量计入 1 节
+    incTeacherDayCount(t.teacherId, assemblyDay, 1); // 老师工作量计入 1 节
     addTeacherPeriodOnDay(t.teacherId, assemblyDay, 1);
 
     lessons.push({
@@ -439,43 +568,13 @@ export function runTimetableEngine(params: {
   });
 
   // --------------------------------------------------------------------------
-  // STEP 0B: PROGRAM PEMBENTUKAN KARAKTER (PKAR_1 ~ PKAR_5, 0.5 节/天)
-  // 识别 0.5 节 PKAR 并绑定对应星期的固定 15 分钟时段，支持每天独立指定不同教师
+  // STEP 0B: 一年级 07:15 - 07:30 PROGRAM MEMBACA 固定留空（供后续手动指派老师）
   // --------------------------------------------------------------------------
+  seedYear1ProgramMembaca(nonPrasekolahClasses, DAYS_OF_WEEK as any, lessons);
+
+  // 标记 PKAR 课目由自动对齐算法绑定，不需手动选师
   pkarAssignments.forEach((asg) => {
-    // 根据后缀 PKAR_1 ~ PKAR_5 自动识别对应星期
-    const dayIndexMap: Record<string, string> = {
-      'PKAR_1': 'ISNIN',
-      'PKAR_2': 'SELASA',
-      'PKAR_3': 'RABU',
-      'PKAR_4': 'KHAMIS',
-      'PKAR_5': 'JUMAAT',
-    };
-    const targetDay = dayIndexMap[asg.canonicalSubjectCode.toUpperCase()] || 'ISNIN';
-
-    // 计入执教老师当天的工作量 (+0.5 节)
-    const teacherId = asg.teacherId;
-    if (teacherId && teacherId !== '-' && teacherId !== '') {
-      const currentCount = teacherDayPeriodCounts.get(`${teacherId}_${targetDay}`) || 0;
-      teacherDayPeriodCounts.set(`${teacherId}_${targetDay}`, currentCount + 0.5);
-
-      lessons.push({
-        id: `pkar_${asg.classId}_${targetDay}`,
-        day: targetDay,
-        periodNumber: 0, // 晨间固定 15 分钟前置时段 (07:10–07:25 / 07:25–07:40 / 09:30–09:45)
-        classId: asg.classId,
-        className: asg.className,
-        subjectCode: asg.canonicalSubjectCode,
-        subjectName: asg.subjectName || `Program Pembentukan Karakter (15 Min)`,
-        teacherId: teacherId,
-        teacherName: teacherMap.get(teacherId)?.fullName || teacherId,
-        countsAsClassPeriod: true,
-        countsAsTeacherPeriod: true,
-        fractionalPeriod: 0.5,
-      });
-
-      scheduledPerAssignment.set(asg.assignmentId, 1);
-    }
+    scheduledPerAssignment.set(asg.assignmentId, 1);
   });
 
   // --------------------------------------------------------------------------
@@ -1099,6 +1198,15 @@ export function runTimetableEngine(params: {
     scheduledPerAssignment.set(tAsg.assignmentId, scheduled);
   });
 
+  // --------------------------------------------------------------------------
+  // STEP 5: 自动将每日 PKAR (0.5 节) 绑定给“下课前那一节”的进班老师，并计入 +0.5 节工作量
+  // --------------------------------------------------------------------------
+  const finalLessons = autoPairPKARWithPreRecessTeacher(
+    lessons,
+    DAYS_OF_WEEK as any,
+    (teacherId, day, delta) => incTeacherDayCount(teacherId, day, delta)
+  );
+
   let unplacedCount = 0;
   normalizedAssignments.forEach((asg) => {
     const req = asg.effectiveWeeklyPeriods;
@@ -1108,7 +1216,7 @@ export function runTimetableEngine(params: {
     }
   });
 
-  return { lessons, scheduledPerAssignment, unplacedCount };
+  return { lessons: finalLessons, scheduledPerAssignment, unplacedCount };
 }
 
 export default runTimetableEngine;

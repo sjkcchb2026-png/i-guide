@@ -31,6 +31,8 @@ export interface TimetableCell {
   clashDetails?: string;
   isPemulihan?: boolean; // Flagged if Pemulihan (PBM / PMT) attaches to mainstream BM/MT
   pemulihanTeacherCode?: string;
+  isManualSlot?: boolean;
+  isAutoPKAR?: boolean;
 }
 
 // Full timetable store: [grade: 1-6][day: DayOfWeek][slotId: string] => TimetableCell
@@ -50,67 +52,91 @@ export interface TimetableClash {
 
 /**
  * Returns slot timing list for a given grade on a specific day
+ * Mon/Tue: 11 teaching periods (W1-W5, REHAT, W6-W11) + 1 Tasmik manual slot
+ * Wed/Thu: 10 teaching periods (W1-W5, REHAT, W6-W10) + 1 Tasmik manual slot
+ * Friday: 7 teaching periods (W1-W4, REHAT, W5-W7) + 1 Tasmik manual slot
+ * Year 1 (Tahun 1): Includes dedicated 07:15 - 07:30 Program Membaca morning slot
+ * PKAR: 15-minute slot immediately before Recess (auto-paired to pre-recess teacher)
  */
 export function getGradeDaySlots(grade: number, day: DayOfWeek): SlotTimeInfo[] {
   const isT1 = grade === 1;
   const isFriday = day === 'JUMAAT';
+  const isMonTue = day === 'ISNIN' || day === 'SELASA';
 
+  const slots: SlotTimeInfo[] = [];
+
+  // Year 1 (Tahun 1) dedicated 07:15 - 07:30 Program Membaca
   if (isT1) {
-    // T1 KP2027 Schedule (07:30 to 12:45 Mon-Thu, to 12:15 Fri)
-    const morningSlots: SlotTimeInfo[] = [
+    slots.push({
+      slotId: 'MEMBACA',
+      label: 'Membaca',
+      startTime: '07:15',
+      endTime: '07:30',
+      startMinutes: 435,
+      endMinutes: 450,
+      isSpecialLocked: true,
+    });
+  }
+
+  if (isFriday) {
+    // JUMAAT: Pre-recess 5 periods (W1 to W5), PKAR, REHAT
+    // T1 - T3: 7 regular teaching periods (W1 to W7) + TASMIK (W8, 11:45-12:15)
+    // T4 - T6: 8 regular teaching periods (W1 to W8) + TASMIK (W9, 12:15-12:45)
+    const isUpperPrimary = grade >= 4;
+    slots.push(
       { slotId: 'W1', label: 'W1', startTime: '07:30', endTime: '08:00', startMinutes: 450, endMinutes: 480 },
       { slotId: 'W2', label: 'W2', startTime: '08:00', endTime: '08:30', startMinutes: 480, endMinutes: 510 },
       { slotId: 'W3', label: 'W3', startTime: '08:30', endTime: '09:00', startMinutes: 510, endMinutes: 540 },
       { slotId: 'W4', label: 'W4', startTime: '09:00', endTime: '09:30', startMinutes: 540, endMinutes: 570 },
-      { slotId: 'PKAR', label: 'PKAR', startTime: '09:30', endTime: '09:45', startMinutes: 570, endMinutes: 585, isSpecialLocked: true },
-      { slotId: 'REHAT', label: 'REHAT', startTime: '09:45', endTime: '10:15', startMinutes: 585, endMinutes: 615, isRecess: true },
-      { slotId: 'W5', label: 'W5', startTime: '10:15', endTime: '10:45', startMinutes: 615, endMinutes: 645 },
+      { slotId: 'W5', label: 'W5', startTime: '09:30', endTime: '10:00', startMinutes: 570, endMinutes: 600 },
+      { slotId: 'PKAR', label: 'PKAR', startTime: '10:00', endTime: '10:15', startMinutes: 600, endMinutes: 615, isSpecialLocked: true },
+      { slotId: 'REHAT', label: 'REHAT', startTime: '10:15', endTime: '10:45', startMinutes: 615, endMinutes: 645, isRecess: true },
+      { slotId: 'W6', label: 'W6', startTime: '10:45', endTime: '11:15', startMinutes: 645, endMinutes: 675 },
+      { slotId: 'W7', label: 'W7', startTime: '11:15', endTime: '11:45', startMinutes: 675, endMinutes: 705 }
+    );
+
+    if (isUpperPrimary) {
+      slots.push(
+        { slotId: 'W8', label: 'W8', startTime: '11:45', endTime: '12:15', startMinutes: 705, endMinutes: 735 },
+        { slotId: 'TASMIK', label: 'TASMIK', startTime: '12:15', endTime: '12:45', startMinutes: 735, endMinutes: 765, isSpecialLocked: true }
+      );
+    } else {
+      slots.push(
+        { slotId: 'TASMIK', label: 'TASMIK', startTime: '11:45', endTime: '12:15', startMinutes: 705, endMinutes: 735, isSpecialLocked: true }
+      );
+    }
+  } else {
+    // ISNIN - KHAMIS: Pre-recess 5 periods (W1 to W5)
+    slots.push(
+      { slotId: 'W1', label: 'W1', startTime: '07:30', endTime: '08:00', startMinutes: 450, endMinutes: 480 },
+      { slotId: 'W2', label: 'W2', startTime: '08:00', endTime: '08:30', startMinutes: 480, endMinutes: 510 },
+      { slotId: 'W3', label: 'W3', startTime: '08:30', endTime: '09:00', startMinutes: 510, endMinutes: 540 },
+      { slotId: 'W4', label: 'W4', startTime: '09:00', endTime: '09:30', startMinutes: 540, endMinutes: 570 },
+      { slotId: 'W5', label: 'W5', startTime: '09:30', endTime: '10:00', startMinutes: 570, endMinutes: 600 },
+      { slotId: 'PKAR', label: 'PKAR', startTime: '10:00', endTime: '10:15', startMinutes: 600, endMinutes: 615, isSpecialLocked: true },
+      { slotId: 'REHAT', label: 'REHAT', startTime: '10:15', endTime: '10:45', startMinutes: 615, endMinutes: 645, isRecess: true },
       { slotId: 'W6', label: 'W6', startTime: '10:45', endTime: '11:15', startMinutes: 645, endMinutes: 675 },
       { slotId: 'W7', label: 'W7', startTime: '11:15', endTime: '11:45', startMinutes: 675, endMinutes: 705 },
       { slotId: 'W8', label: 'W8', startTime: '11:45', endTime: '12:15', startMinutes: 705, endMinutes: 735 },
-    ];
-
-    if (!isFriday) {
-      morningSlots.push({
-        slotId: 'W9', label: 'W9', startTime: '12:15', endTime: '12:45', startMinutes: 735, endMinutes: 765
-      });
-    }
-
-    return morningSlots;
-  } else {
-    // T2-T6 KSSR Semakan Schedule (07:15 to 13:15 Mon/Tue, 12:45 Wed/Thu, 12:15 Fri)
-    const slots: SlotTimeInfo[] = [
-      { slotId: 'W1', label: 'W1', startTime: '07:15', endTime: '07:45', startMinutes: 435, endMinutes: 465 },
-      { slotId: 'W2', label: 'W2', startTime: '07:45', endTime: '08:15', startMinutes: 465, endMinutes: 495 },
-      { slotId: 'W3', label: 'W3', startTime: '08:15', endTime: '08:45', startMinutes: 495, endMinutes: 525 },
-      { slotId: 'W4', label: 'W4', startTime: '08:45', endTime: '09:15', startMinutes: 525, endMinutes: 555 },
-      { slotId: 'W5', label: 'W5', startTime: '09:15', endTime: '09:45', startMinutes: 555, endMinutes: 585 },
-      { slotId: 'REHAT', label: 'REHAT', startTime: '09:45', endTime: '10:15', startMinutes: 585, endMinutes: 615, isRecess: true },
-      { slotId: 'W6', label: 'W6', startTime: '10:15', endTime: '10:45', startMinutes: 615, endMinutes: 645 },
-      { slotId: 'W7', label: 'W7', startTime: '10:45', endTime: '11:15', startMinutes: 645, endMinutes: 675 },
-      { slotId: 'W8', label: 'W8', startTime: '11:15', endTime: '11:45', startMinutes: 675, endMinutes: 705 },
-    ];
-
-    if (isFriday) {
-      // Friday ends at W8 (12:15)
-      return slots;
-    }
-
-    // Mon-Thu includes W9 (11:45 - 12:15) and W10 (12:15 - 12:45)
-    slots.push(
-      { slotId: 'W9', label: 'W9', startTime: '11:45', endTime: '12:15', startMinutes: 705, endMinutes: 735 },
-      { slotId: 'W10', label: 'W10', startTime: '12:15', endTime: '12:45', startMinutes: 735, endMinutes: 765 }
+      { slotId: 'W9', label: 'W9', startTime: '12:15', endTime: '12:45', startMinutes: 735, endMinutes: 765 },
+      { slotId: 'W10', label: 'W10', startTime: '12:45', endTime: '13:15', startMinutes: 765, endMinutes: 795 }
     );
 
-    // Mon & Tue include W11 (12:45 - 13:15)
-    if (day === 'ISNIN' || day === 'SELASA') {
-      slots.push({
-        slotId: 'W11', label: 'W11', startTime: '12:45', endTime: '13:15', startMinutes: 765, endMinutes: 795
-      });
+    if (isMonTue) {
+      // Mon/Tue: 11 teaching periods (W1 to W11) + Tasmik (W12)
+      slots.push(
+        { slotId: 'W11', label: 'W11', startTime: '13:15', endTime: '13:45', startMinutes: 795, endMinutes: 825 },
+        { slotId: 'TASMIK', label: 'TASMIK', startTime: '13:45', endTime: '14:15', startMinutes: 825, endMinutes: 855, isSpecialLocked: true }
+      );
+    } else {
+      // Wed/Thu: 10 teaching periods (W1 to W10) + Tasmik (W11)
+      slots.push(
+        { slotId: 'TASMIK', label: 'TASMIK', startTime: '13:15', endTime: '13:45', startMinutes: 795, endMinutes: 825, isSpecialLocked: true }
+      );
     }
-
-    return slots;
   }
+
+  return slots;
 }
 
 /**

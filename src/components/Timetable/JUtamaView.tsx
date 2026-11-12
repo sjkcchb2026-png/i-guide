@@ -104,116 +104,126 @@ export const JUtamaView: React.FC<JUtamaViewProps> = ({
             JADUAL WAKTU INDUK PERSEKOLAHAN — SESI AKADEMIK {academicYear}
           </h2>
           <p className="text-[10px] text-slate-500 italic">
-            Kurikulum Dwi-Laluan: Tahun 1 (KP2027 · 46.5 Waktu) & Tahun 2–6 (KSSR Semakan · 50 Waktu) · Waktu Rehat: 09:45–10:15
+            Struktur Waktu KPM: Isnin & Selasa (11 Waktu), Rabu & Khamis (10 Waktu), Jumaat (7 Waktu) · Rehat: 09:45 (Jumaat) / 10:15 (Isnin–Khamis) · Waktu Tambahan Tasmik
           </p>
         </div>
 
         {/* Master Table per Day */}
         <div className="space-y-6">
-          {DAYS_OF_WEEK.map((day) => (
-            <div key={day} className="space-y-2 break-inside-avoid">
-              <div className="flex items-center justify-between bg-slate-100 px-4 py-2 rounded-xl border border-slate-300">
-                <span className="font-black text-xs text-slate-900 tracking-wider uppercase">
-                  HARI: {day}
-                </span>
-                <span className="text-[10px] text-slate-500 font-mono">
-                  {day === 'JUMAAT' ? 'Waktu Tamat: 12:15' : 'Waktu Tamat: 12:45 / 13:15'}
-                </span>
-              </div>
+          {DAYS_OF_WEEK.map((day) => {
+            const isFri = day === 'JUMAAT';
+            const isMonTue = day === 'ISNIN' || day === 'SELASA';
+            // Day-specific column headers
+            const dayHeaders = isFri
+              ? ['W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'TASMIK']
+              : isMonTue
+              ? ['W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'TASMIK']
+              : ['W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'TASMIK'];
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-[11px] border-collapse border border-slate-400">
-                  <thead>
-                    <tr className="bg-slate-200 text-slate-800 font-black text-center border-b border-slate-400">
-                      <th className="p-2 border border-slate-400 w-24">Kelas</th>
-                      <th className="p-2 border border-slate-400 w-32">Guru Kelas</th>
-                      {/* Common Slot Columns: W1 to W11 */}
-                      {['W1', 'W2', 'W3', 'W4', 'W5', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11'].map((slot) => {
-                        if (day === 'JUMAAT' && ['W9', 'W10', 'W11'].includes(slot)) return null;
-                        if (['RABU', 'KHAMIS'].includes(day) && slot === 'W11') return null;
-                        return (
+            return (
+              <div key={day} className="space-y-2 break-inside-avoid">
+                <div className="flex items-center justify-between bg-slate-100 px-4 py-2 rounded-xl border border-slate-300">
+                  <span className="font-black text-xs text-slate-900 tracking-wider uppercase">
+                    HARI: {day}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {isFri ? 'Waktu Tamat: 11:45 (T1–T3) / 12:15 (T4–T6)' : isMonTue ? 'Waktu Tamat: 13:45 (Tasmik hingga 14:15)' : 'Waktu Tamat: 13:15 (Tasmik hingga 13:45)'}
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-[11px] border-collapse border border-slate-400">
+                    <thead>
+                      <tr className="bg-slate-200 text-slate-800 font-black text-center border-b border-slate-400">
+                        <th className="p-2 border border-slate-400 w-24">Kelas</th>
+                        <th className="p-2 border border-slate-400 w-32">Guru Kelas</th>
+                        {dayHeaders.map((slot) => (
                           <th
                             key={slot}
                             className={`p-1.5 border border-slate-400 text-center ${
-                              slot === 'REHAT' ? 'bg-amber-100 text-amber-900 w-16' : 'w-20'
+                              slot === 'REHAT' ? 'bg-amber-100 text-amber-900 w-16' : slot === 'PKAR' ? 'bg-emerald-100 text-emerald-900 w-16' : 'w-20'
                             }`}
                           >
                             <div className="text-[10px] font-bold">{slot}</div>
                           </th>
-                        );
-                      })}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-300 text-center font-mono">
-                    {[1, 2, 3, 4, 5, 6].map((grade) => {
-                      const classTeacher = classTeachers[grade] || '-';
-                      const slots = getGradeDaySlots(grade, day);
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-300 text-center font-mono">
+                      {[1, 2, 3, 4, 5, 6].map((grade) => {
+                        const classTeacher = classTeachers[grade] || '-';
 
-                      return (
-                        <tr key={grade} className="hover:bg-slate-50 transition">
-                          <td className="p-2 border border-slate-400 font-sans font-black text-slate-900 bg-slate-50 text-left">
-                            Tahun {grade}
-                          </td>
-                          <td className="p-2 border border-slate-400 font-sans text-xs text-slate-600 truncate text-left max-w-[120px]" title={classTeacher}>
-                            {classTeacher}
-                          </td>
+                        return (
+                          <tr key={grade} className="hover:bg-slate-50 transition">
+                            <td className="p-2 border border-slate-400 font-sans font-black text-slate-900 bg-slate-50 text-left">
+                              Tahun {grade}
+                            </td>
+                            <td className="p-2 border border-slate-400 font-sans text-xs text-slate-600 truncate text-left max-w-[120px]" title={classTeacher}>
+                              {classTeacher}
+                            </td>
 
-                          {/* Render cells corresponding to master slot structure */}
-                          {['W1', 'W2', 'W3', 'W4', 'W5', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11'].map((slotKey) => {
-                            if (day === 'JUMAAT' && ['W9', 'W10', 'W11'].includes(slotKey)) return null;
-                            if (['RABU', 'KHAMIS'].includes(day) && slotKey === 'W11') return null;
+                            {dayHeaders.map((slotKey) => {
+                              if (slotKey === 'REHAT') {
+                                return (
+                                  <td
+                                    key={slotKey}
+                                    className="p-1 border border-slate-400 bg-amber-50 text-amber-800 font-bold text-[9px]"
+                                  >
+                                    REHAT
+                                  </td>
+                                );
+                              }
 
-                            if (slotKey === 'REHAT') {
+                              if (isFri && slotKey === 'W8' && grade < 4) {
+                                return (
+                                  <td
+                                    key={slotKey}
+                                    className="p-1 border border-slate-400 bg-slate-100 text-slate-300 text-center text-[10px]"
+                                  >
+                                    -
+                                  </td>
+                                );
+                              }
+
+                              const cell = schedule[grade]?.[day]?.[slotKey];
+
                               return (
                                 <td
                                   key={slotKey}
-                                  className="p-1 border border-slate-400 bg-amber-50 text-amber-800 font-bold text-[9px]"
+                                  className={`p-1 border border-slate-400 text-center ${
+                                    slotKey === 'PKAR'
+                                      ? 'bg-emerald-50/60'
+                                      : cell
+                                      ? 'bg-blue-50/50'
+                                      : ''
+                                  }`}
                                 >
-                                  REHAT
+                                  {cell ? (
+                                    <div>
+                                      <div className="font-black text-slate-900 text-xs font-sans">
+                                        {cell.subjectCode}
+                                      </div>
+                                      {cell.subjectCode !== 'PN' && (
+                                        <div className="text-[10px] text-blue-700 font-bold">
+                                          {getTeacherLabel(cell.teacherCode)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-300">-</span>
+                                  )}
                                 </td>
                               );
-                            }
-
-                            // For T1, map specific slot if appropriate (PKAR is 09:30-09:45)
-                            let cell = schedule[grade]?.[day]?.[slotKey];
-
-                            // T1 doesn't have W5 in morning; its morning has W1-W4 + PKAR
-                            if (grade === 1 && slotKey === 'W5') {
-                              cell = schedule[grade]?.[day]?.['PKAR'];
-                            }
-
-                            return (
-                              <td
-                                key={slotKey}
-                                className={`p-1 border border-slate-400 text-center ${
-                                  cell ? 'bg-blue-50/50' : ''
-                                }`}
-                              >
-                                {cell ? (
-                                  <div>
-                                    <div className="font-black text-slate-900 text-xs font-sans">
-                                      {cell.subjectCode}
-                                    </div>
-                                    {cell.subjectCode !== 'PN' && (
-                                      <div className="text-[10px] text-blue-700 font-bold">
-                                        {getTeacherLabel(cell.teacherCode)}
-                                      </div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <span className="text-slate-300">-</span>
-                                )}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Footer Sign-off */}

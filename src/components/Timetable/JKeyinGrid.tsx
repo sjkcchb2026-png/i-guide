@@ -9,6 +9,7 @@ import {
   getGradeDaySlots 
 } from './types';
 import { SubjectAllocationRow } from './SchoolTimetableMatrix';
+import { autoPairPKARInGrid } from './autoScheduler';
 import { 
   Sparkles, 
   AlertTriangle, 
@@ -97,6 +98,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     if (!newGrid[grade][day]) newGrid[grade][day] = {};
     newGrid[grade][day][slotId] = newCell;
 
+    // Dynamically update/re-pair PKAR with pre-recess teacher
+    autoPairPKARInGrid(newGrid);
+
     onUpdateSchedule(newGrid);
     setEditingCell(null);
   };
@@ -108,6 +112,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     if (newGrid[grade]?.[day]) {
       newGrid[grade][day][slotId] = null;
     }
+    // Dynamically update/re-pair PKAR with pre-recess teacher
+    autoPairPKARInGrid(newGrid);
+
     onUpdateSchedule(newGrid);
     setEditingCell(null);
   };
@@ -148,15 +155,18 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     : clashes.filter((c) => c.gradeA === selectedGrade || c.gradeB === selectedGrade);
 
   // Common slots for 1-to-6 Master Table
+  // Mon/Tue: 11 teaching periods (W1-W5, PKAR, REHAT, W6-W11, TASMIK)
+  // Wed/Thu: 10 teaching periods (W1-W5, PKAR, REHAT, W6-W10, TASMIK)
+  // Friday: 7 teaching periods (T1-T3) / 8 teaching periods (T4-T6)
   const getMasterSlotHeaders = (day: DayOfWeek) => {
-    const slots = ['W1', 'W2', 'W3', 'W4', 'W5', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11'];
     if (day === 'JUMAAT') {
-      return slots.filter((s) => !['W9', 'W10', 'W11'].includes(s));
+      return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'TASMIK'];
     }
-    if (['RABU', 'KHAMIS'].includes(day)) {
-      return slots.filter((s) => s !== 'W11');
+    if (day === 'ISNIN' || day === 'SELASA') {
+      return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'TASMIK'];
     }
-    return slots;
+    // RABU, KHAMIS
+    return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'TASMIK'];
   };
 
   const daysToDisplay = activeDayFilter === 'ALL' ? DAYS_OF_WEEK : [activeDayFilter];
@@ -376,15 +386,32 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                               );
                             }
 
-                            // Determine actual slot id for T1 if PKAR
-                            let targetSlotId = slotKey;
-                            let cell = schedule[grade]?.[day]?.[slotKey];
-
-                            // For Grade 1 KP2027: morning has PKAR at 09:30-09:45 instead of W5
-                            if (grade === 1 && slotKey === 'W5') {
-                              targetSlotId = 'PKAR';
-                              cell = schedule[1]?.[day]?.['PKAR'];
+                            // For Grade 2-6: MEMBACA does not apply
+                            if (slotKey === 'MEMBACA' && grade !== 1) {
+                              return (
+                                <td
+                                  key={slotKey}
+                                  className="py-2 px-1 text-center bg-slate-950/40 text-slate-700 font-bold text-[10px] border-l border-slate-800 select-none"
+                                >
+                                  -
+                                </td>
+                              );
                             }
+
+                            // On Friday: W8 only applies to Upper Primary (Grade 4-6)
+                            if (day === 'JUMAAT' && slotKey === 'W8' && grade < 4) {
+                              return (
+                                <td
+                                  key={slotKey}
+                                  className="py-2 px-1 text-center bg-slate-950/40 text-slate-700 font-bold text-[10px] border-l border-slate-800 select-none"
+                                >
+                                  -
+                                </td>
+                              );
+                            }
+
+                            const targetSlotId = slotKey;
+                            const cell = schedule[grade]?.[day]?.[targetSlotId];
 
                             // Check collision
                             const hasClash = clashes.some(
@@ -405,6 +432,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                     : cell
                                     ? targetSlotId === 'PKAR'
                                       ? 'bg-emerald-950/40 hover:bg-emerald-900/50'
+                                      : targetSlotId === 'MEMBACA'
+                                      ? 'bg-indigo-950/40 hover:bg-indigo-900/50'
                                       : 'bg-slate-800/60 hover:bg-slate-700/60'
                                     : 'hover:bg-slate-800/30'
                                 }`}
@@ -418,7 +447,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                       )}
                                     </div>
                                     {cell.subjectCode !== 'PN' && (
-                                      <div className="text-[10px] font-bold text-blue-300">
+                                      <div className={`text-[10px] font-bold ${
+                                        cell.isAutoPKAR ? 'text-emerald-300' : 'text-blue-300'
+                                      }`}>
                                         {teacherLabel}
                                       </div>
                                     )}
@@ -595,6 +626,12 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                   className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-bold outline-none focus:border-blue-500 cursor-pointer"
                 >
                   <option value="">-- Kosong / Tiada Subjek --</option>
+                  {editingCell.slotId === 'MEMBACA' && (
+                    <option value="MEMBACA">MEMBACA - Program Membaca (07:15 - 07:30)</option>
+                  )}
+                  {editingCell.slotId === 'PKAR' && (
+                    <option value="PKAR">PKAR - Program Pembentukan Karakter (Auto Pre-Recess)</option>
+                  )}
                   {matrixData.map((r) => (
                     <option key={r.id} value={r.subjectCode}>
                       {r.subjectCode} - {r.subjectName} ({r.periods[editingCell.grade] || 0} waktu)

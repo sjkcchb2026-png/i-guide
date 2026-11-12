@@ -133,6 +133,49 @@ export function getSubjectBlockDistribution(subjectCode: string, totalPeriods: n
 }
 
 /**
+ * Auto-pairs PKAR (0.5 period) for each grade and day to the teacher in the pre-recess period
+ * (W5 on Mon-Thu, W4 on Friday). Updates dynamically during drag-and-drop or manual editing.
+ */
+export function autoPairPKARInGrid(grid: ScheduleGrid): void {
+  [1, 2, 3, 4, 5, 6].forEach((grade) => {
+    DAYS_OF_WEEK.forEach((day) => {
+      const preRecessSlot = day === 'JUMAAT' ? 'W4' : 'W5';
+      const preRecessCell = grid[grade]?.[day]?.[preRecessSlot];
+
+      const pkarSlot = getGradeDaySlots(grade, day).find((s) => s.slotId === 'PKAR');
+      if (pkarSlot) {
+        if (!grid[grade]) grid[grade] = {} as any;
+        if (!grid[grade][day]) grid[grade][day] = {};
+
+        if (preRecessCell && preRecessCell.teacherCode && preRecessCell.teacherCode.trim() !== '') {
+          grid[grade][day]['PKAR'] = {
+            subjectId: 'pkar',
+            subjectCode: 'PKAR',
+            subjectName: 'Program Pembentukan Karakter (15 Min)',
+            teacherCode: preRecessCell.teacherCode,
+            teacherName: preRecessCell.teacherName,
+            periodLength: 0.5,
+            isLocked: false,
+            isAutoPKAR: true,
+          };
+        } else {
+          grid[grade][day]['PKAR'] = {
+            subjectId: 'pkar',
+            subjectCode: 'PKAR',
+            subjectName: 'Program Pembentukan Karakter (15 Min)',
+            teacherCode: '',
+            teacherName: '',
+            periodLength: 0.5,
+            isLocked: false,
+            isAutoPKAR: true,
+          };
+        }
+      }
+    });
+  });
+}
+
+/**
  * Initializes an empty ScheduleGrid for grades 1 to 6
  */
 export function createEmptyScheduleGrid(): ScheduleGrid {
@@ -148,7 +191,20 @@ export function createEmptyScheduleGrid(): ScheduleGrid {
     DAYS_OF_WEEK.forEach((day) => {
       const slots = getGradeDaySlots(grade, day);
       slots.forEach((s) => {
-        grid[grade][day][s.slotId] = null;
+        if (s.slotId === 'MEMBACA' && grade === 1) {
+          grid[grade][day][s.slotId] = {
+            subjectId: 'membaca',
+            subjectCode: 'MEMBACA',
+            subjectName: 'Program Membaca',
+            teacherCode: '',
+            teacherName: 'Klik untuk pilih guru',
+            periodLength: 0.5,
+            isLocked: false,
+            isManualSlot: true,
+          };
+        } else {
+          grid[grade][day][s.slotId] = null;
+        }
       });
     });
   });
@@ -203,11 +259,14 @@ export function detectScheduleClashes(grid: ScheduleGrid): TimetableClash[] {
 
         // Whitelist: TASMIK (Gabung Kelas) is intentionally concurrent after school
         if (
-          (a.subjectCode === 'TASMIK' || a.subjectCode === 'TAS') &&
-          (b.subjectCode === 'TASMIK' || b.subjectCode === 'TAS')
+          (a.subjectCode === 'TASMIK' || a.subjectCode === 'TAS' || a.slotId === 'TASMIK') &&
+          (b.subjectCode === 'TASMIK' || b.subjectCode === 'TAS' || b.slotId === 'TASMIK')
         ) {
           continue;
         }
+
+        // Whitelist: MEMBACA (Year 1 independent morning slot)
+        if (a.slotId === 'MEMBACA' || b.slotId === 'MEMBACA') continue;
 
         // If it's the exact same grade and slot, continue (not a cross-grade collision)
         if (a.grade === b.grade && a.slotId === b.slotId) continue;
@@ -395,13 +454,13 @@ export function generateAutoSchedule(
 
   // --------------------------------------------------------------------------
   // STEP 1: PLACE MANDATORY LOCKED SLOTS
-  // (a) Perhimpunan (PN): Fixed on Wednesday (RABU) W1 for all grades 1 to 6
+  // (a) Perhimpunan (PN): Fixed on Tuesday (SELASA) W1 for all grades 1 to 6
   // (PN 不要放老师名字: teacherCode is explicitly empty)
   // --------------------------------------------------------------------------
   [1, 2, 3, 4, 5, 6].forEach((grade) => {
-    const s = getGradeDaySlots(grade, 'RABU').find((sl) => sl.slotId === 'W1');
+    const s = getGradeDaySlots(grade, 'SELASA').find((sl) => sl.slotId === 'W1');
     if (s) {
-      bookSlots(grade, 'RABU', [s], {
+      bookSlots(grade, 'SELASA', [s], {
         subjectId: 'pn',
         subjectCode: 'PN',
         subjectName: 'PERHIMPUNAN RASMI',
@@ -411,34 +470,20 @@ export function generateAutoSchedule(
     }
   });
 
-  // (b) Program Pembentukan Karakter (PKAR): Daily 09:30-09:45 for KP2027 classes (PKAR_1 to PKAR_5)
-  [1, 2, 3, 4, 5, 6].forEach((grade) => {
-    if (isKP(grade)) {
-      const dayCodes: Record<DayOfWeek, string> = {
-        ISNIN: 'PKAR_1',
-        SELASA: 'PKAR_2',
-        RABU: 'PKAR_3',
-        KHAMIS: 'PKAR_4',
-        JUMAAT: 'PKAR_5',
+  // (b) Year 1 Program Membaca (07:15 - 07:30): Fixed empty slot for manual assignment
+  DAYS_OF_WEEK.forEach((day) => {
+    const s = getGradeDaySlots(1, day).find((sl) => sl.slotId === 'MEMBACA');
+    if (s) {
+      grid[1][day]['MEMBACA'] = {
+        subjectId: 'membaca',
+        subjectCode: 'MEMBACA',
+        subjectName: 'Program Membaca',
+        teacherCode: '',
+        teacherName: 'Klik untuk pilih guru',
+        periodLength: 0.5,
+        isLocked: false,
+        isManualSlot: true,
       };
-
-      DAYS_OF_WEEK.forEach((day) => {
-        const subCode = dayCodes[day];
-        const dayRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === subCode);
-        const legacyRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'PKAR');
-        const teacher = dayRow?.teachers[grade] || legacyRow?.teachers[grade] || classTeachers[grade] || '';
-
-        const s = getGradeDaySlots(grade, day).find((sl) => sl.slotId === 'PKAR');
-        if (s) {
-          bookSlots(grade, day, [s], {
-            subjectId: subCode.toLowerCase(),
-            subjectCode: subCode,
-            subjectName: `PROGRAM PEMBENTUKAN KARAKTER (${day})`,
-            teacherCode: teacher,
-            isLocked: true,
-          });
-        }
-      });
     }
   });
 
@@ -637,10 +682,14 @@ export function generateAutoSchedule(
         if (placed) break;
 
         const allSlots = getGradeDaySlots(block.grade, day);
-        const candidateSlots = allSlots.filter((s) => !s.isRecess && s.slotId !== 'PKAR');
-        const validSlots = block.isMorningOnly
-          ? candidateSlots.filter((s) => s.endMinutes <= 585)
-          : candidateSlots;
+        const candidateSlots = allSlots.filter((s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK');
+        let validSlots = candidateSlots;
+        if (block.subjectCode === 'PJ') {
+          // PJ: Strictly Period 1 or Period 2 only (prefer Period 1; use Period 2 if P1 has a collision or on Tuesday where P1 is PN)
+          validSlots = candidateSlots.filter((s) => s.slotId === 'W1' || s.slotId === 'W2');
+        } else if (block.isMorningOnly) {
+          validSlots = candidateSlots.filter((s) => s.endMinutes <= 585);
+        }
 
         for (let sIdx = 0; sIdx <= validSlots.length - block.length; sIdx++) {
           const slotGroup = validSlots.slice(sIdx, sIdx + block.length);
@@ -682,10 +731,13 @@ export function generateAutoSchedule(
       for (const day of daysOrder) {
         if (placed) break;
         const allSlots = getGradeDaySlots(block.grade, day);
-        const candidateSlots = allSlots.filter((s) => !s.isRecess && s.slotId !== 'PKAR');
-        const validSlots = block.isMorningOnly
-          ? candidateSlots.filter((s) => s.endMinutes <= 585)
-          : candidateSlots;
+        const candidateSlots = allSlots.filter((s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK');
+        let validSlots = candidateSlots;
+        if (block.subjectCode === 'PJ') {
+          validSlots = candidateSlots.filter((s) => s.slotId === 'W1' || s.slotId === 'W2');
+        } else if (block.isMorningOnly) {
+          validSlots = candidateSlots.filter((s) => s.endMinutes <= 585);
+        }
 
         for (let sIdx = 0; sIdx <= validSlots.length - block.length; sIdx++) {
           const slotGroup = validSlots.slice(sIdx, sIdx + block.length);
@@ -874,8 +926,8 @@ export function generateAutoSchedule(
     for (let g = 1; g <= 6; g++) {
       for (const day of DAYS_OF_WEEK) {
         const slots = getGradeDaySlots(g, day);
-        const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 585 && s.slotId !== 'PKAR');
-        const aSlots = slots.filter((s) => !s.isRecess && s.startMinutes >= 615 && s.slotId !== 'PKAR');
+        const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 600 && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA');
+        const aSlots = slots.filter((s) => !s.isRecess && s.startMinutes >= 615 && s.slotId !== 'PKAR' && s.slotId !== 'TASMIK');
         const anyAfternoon = aSlots.some((s) => grid[g][day][s.slotId] !== null);
 
         for (let i = 0; i < mSlots.length; i++) {
@@ -906,8 +958,8 @@ export function generateAutoSchedule(
     for (const gap of gaps) {
       const { grade, day, slot, session } = gap;
       const slots = getGradeDaySlots(grade, day);
-      const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 585 && s.slotId !== 'PKAR');
-      const aSlots = slots.filter((s) => !s.isRecess && s.startMinutes >= 615 && s.slotId !== 'PKAR');
+      const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 600 && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA');
+      const aSlots = slots.filter((s) => !s.isRecess && s.startMinutes >= 615 && s.slotId !== 'PKAR' && s.slotId !== 'TASMIK');
 
       // Strategy 1: Shift later lesson from same day into gap
       const pool = session === 'morning' ? [...mSlots, ...aSlots] : [...aSlots];
@@ -926,7 +978,7 @@ export function generateAutoSchedule(
       // Strategy 2: Pull tail lesson from other days
       for (const otherDay of DAYS_OF_WEEK) {
         if (otherDay === day) continue;
-        const otherSlots = getGradeDaySlots(grade, otherDay).filter((s) => !s.isRecess && s.slotId !== 'PKAR');
+        const otherSlots = getGradeDaySlots(grade, otherDay).filter((s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK');
         for (let k = otherSlots.length - 1; k >= 0; k--) {
           const src = otherSlots[k];
           const cell = grid[grade][otherDay][src.slotId];
@@ -945,13 +997,13 @@ export function generateAutoSchedule(
 
       // Strategy 3: 2-way swap with tail of another day
       for (const otherDay of DAYS_OF_WEEK) {
-        const allDaySlots = getGradeDaySlots(grade, otherDay).filter((s) => !s.isRecess && s.slotId !== 'PKAR');
+        const allDaySlots = getGradeDaySlots(grade, otherDay).filter((s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK');
         for (const candSlot of allDaySlots) {
           const candCell = grid[grade][otherDay][candSlot.slotId];
           if (!candCell || candCell.isLocked) continue;
           if (canMove(candCell, otherDay, candSlot, day, slot, grade)) {
             for (const thirdDay of DAYS_OF_WEEK) {
-              const thirdSlots = getGradeDaySlots(grade, thirdDay).filter((s) => !s.isRecess && s.slotId !== 'PKAR');
+              const thirdSlots = getGradeDaySlots(grade, thirdDay).filter((s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK');
               for (let t = thirdSlots.length - 1; t >= 0; t--) {
                 const tailSlot = thirdSlots[t];
                 const tailCell = grid[grade][thirdDay][tailSlot.slotId];
@@ -975,6 +1027,9 @@ export function generateAutoSchedule(
     }
     if (!anyMoved) break;
   }
+
+  // 自动将每日 PKAR (0.5 节) 绑定给“下课前那一节”的进班老师
+  autoPairPKARInGrid(grid);
 
   const clashes = detectScheduleClashes(grid);
 

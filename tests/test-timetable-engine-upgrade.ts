@@ -46,13 +46,13 @@ assert(
 );
 
 // 2C: Afternoon (Periods 6+) must leave at least 1 break
-// On ISNIN (max 10 periods, so periods 6,7,8,9,10 = 5 afternoon slots). If 4 already scheduled, 5th is blocked.
+// On ISNIN (11 teaching periods, so periods 6,7,8,9,10,11 = 6 afternoon slots). If 5 already scheduled, 6th is blocked.
 assert(
-  '2C: Teacher on ISNIN with 6,7,8,9 already scheduled cannot take period 10 (would fill all 5 afternoon slots)',
-  canTeacherTakeSlot('t1', 'ISNIN', 10, [6, 7, 8, 9]) === false
+  '2C: Teacher on ISNIN with 6,7,8,9,10 already scheduled cannot take period 11 (would fill all 6 afternoon slots)',
+  canTeacherTakeSlot('t1', 'ISNIN', 11, [6, 7, 8, 9, 10]) === false
 );
 assert(
-  '2C: Teacher on ISNIN with 6,7,8 scheduled CAN take period 9 (3 afternoon slots taken out of 5)',
+  '2C: Teacher on ISNIN with 6,7,8 scheduled CAN take period 9 (3 afternoon slots taken out of 6)',
   canTeacherTakeSlot('t1', 'ISNIN', 9, [6, 7, 8]) === true
 );
 
@@ -161,22 +161,22 @@ const result = runTimetableEngine({
   academicYear: '2027',
 });
 
-// Verify PN lessons generated for classes on Wednesday (RABU) Period 1
+// Verify PN lessons generated for classes on Tuesday (SELASA) Period 1
 const pnClassLessons = result.lessons.filter((l) => l.isPN && l.countsAsClassPeriod);
 assert(
-  '1A: Class PN lessons scheduled on RABU Period 1 for all non-prasekolah classes',
+  '1A: Class PN lessons scheduled on SELASA Period 1 for all non-prasekolah classes',
   pnClassLessons.length === mockClasses.length &&
-  pnClassLessons.every((l) => l.day === 'RABU' && l.periodNumber === 1 && l.subjectCode === 'PN')
+  pnClassLessons.every((l) => l.day === 'SELASA' && l.periodNumber === 1 && l.subjectCode === 'PN')
 );
 
-// Verify PN workload lessons generated for every teacher on Wednesday (RABU) Period 1 (+1 period)
+// Verify PN workload lessons generated for every teacher on Tuesday (SELASA) Period 1 (+1 period)
 const pnTeacherWorkloadLessons = result.lessons.filter(
   (l) => l.isPN && l.countsAsTeacherPeriod && !l.countsAsClassPeriod
 );
 assert(
-  '1B: All active teachers have PN workload lesson on RABU Period 1 (+1 teaching workload)',
+  '1B: All active teachers have PN workload lesson on SELASA Period 1 (+1 teaching workload)',
   pnTeacherWorkloadLessons.length === mockTeachers.length &&
-  pnTeacherWorkloadLessons.every((l) => l.day === 'RABU' && l.periodNumber === 1 && l.countsAsTeacherPeriod === true)
+  pnTeacherWorkloadLessons.every((l) => l.day === 'SELASA' && l.periodNumber === 1 && l.countsAsTeacherPeriod === true)
 );
 
 // --------------------------------------------------------------------------
@@ -231,59 +231,49 @@ assert(
 );
 
 // --------------------------------------------------------------------------
-// TEST 5: PKAR 5-Day Split (0.5 periods per day, independent teachers)
+// TEST 5: Auto-pair PKAR with Pre-Recess Teacher & Year 1 Program Membaca
 // --------------------------------------------------------------------------
-console.log('\n[PKAR SPLIT] Verifying PKAR 5-day split into 0.5-period assignments...');
+console.log('\n[PKAR & MEMBACA] Verifying Program Membaca and Auto-paired PKAR...');
 
-import { KP2027_PKAR_SUBJECTS } from '../src/constants/defaultSubjects';
-
-assert(
-  '5A: KP2027_PKAR_SUBJECTS contains 5 distinct entries (PKAR_1 to PKAR_5) with 0.5 defaultPeriods',
-  Array.isArray(KP2027_PKAR_SUBJECTS) &&
-  KP2027_PKAR_SUBJECTS.length === 5 &&
-  KP2027_PKAR_SUBJECTS.every((s) => s.defaultPeriods === 0.5 && s.durationMinutes === 15)
-);
-
-assert(
-  '5B: KP2027_PKAR_SUBJECTS correctly maps each code to Isnin through Jumaat',
-  KP2027_PKAR_SUBJECTS[0].dayLocked === 'ISNIN' &&
-  KP2027_PKAR_SUBJECTS[1].dayLocked === 'SELASA' &&
-  KP2027_PKAR_SUBJECTS[2].dayLocked === 'RABU' &&
-  KP2027_PKAR_SUBJECTS[3].dayLocked === 'KHAMIS' &&
-  KP2027_PKAR_SUBJECTS[4].dayLocked === 'JUMAAT'
-);
-
-// Run an engine test specifically with 5 distinct PKAR assignments with different teachers
-const pkarAssignmentsTest: SubjectAssignment[] = [
-  { assignmentId: 'pkar_isnin', classId: 'cls_1', className: 'Tahun 1', canonicalSubjectCode: 'PKAR_1', subjectName: 'Program Pembentukan Karakter (Isnin)', teacherId: 't_gb', effectiveWeeklyPeriods: 0.5 },
-  { assignmentId: 'pkar_selasa', classId: 'cls_1', className: 'Tahun 1', canonicalSubjectCode: 'PKAR_2', subjectName: 'Program Pembentukan Karakter (Selasa)', teacherId: 't_pk1', effectiveWeeklyPeriods: 0.5 },
-  { assignmentId: 'pkar_rabu', classId: 'cls_1', className: 'Tahun 1', canonicalSubjectCode: 'PKAR_3', subjectName: 'Program Pembentukan Karakter (Rabu)', teacherId: 't_bm', effectiveWeeklyPeriods: 0.5 },
-  { assignmentId: 'pkar_khamis', classId: 'cls_1', className: 'Tahun 1', canonicalSubjectCode: 'PKAR_4', subjectName: 'Program Pembentukan Karakter (Khamis)', teacherId: 't_pem', effectiveWeeklyPeriods: 0.5 },
-  { assignmentId: 'pkar_jumaat', classId: 'cls_1', className: 'Tahun 1', canonicalSubjectCode: 'PKAR_5', subjectName: 'Program Pembentukan Karakter (Jumaat)', teacherId: 't_ustaz', effectiveWeeklyPeriods: 0.5 },
+// Run an engine test with regular lessons covering pre-recess periods (W1-W5 on Mon-Thu, W1-W4 on Fri)
+const regularAssignmentsTest: SubjectAssignment[] = [
+  { assignmentId: 'asg_bm', classId: 'cls_1', className: 'Tahun 1', canonicalSubjectCode: 'BM', subjectName: 'Bahasa Melayu', teacherId: 't_bm', effectiveWeeklyPeriods: 10 },
+  { assignmentId: 'asg_bc', classId: 'cls_1', className: 'Tahun 1', canonicalSubjectCode: 'BC', subjectName: 'Bahasa Cina', teacherId: 't_gb', effectiveWeeklyPeriods: 12 },
+  { assignmentId: 'asg_mt', classId: 'cls_1', className: 'Tahun 1', canonicalSubjectCode: 'MT', subjectName: 'Matematik', teacherId: 't_pk1', effectiveWeeklyPeriods: 7 },
 ];
 
-const pkarResult = runTimetableEngine({
+const autoPairResult = runTimetableEngine({
   classes: mockClasses,
   teachers: mockTeachers,
-  assignments: pkarAssignmentsTest,
+  assignments: regularAssignmentsTest,
   academicYear: '2027',
 });
 
-const pkarLessons = pkarResult.lessons.filter((l) => l.subjectCode.startsWith('PKAR'));
-
+// 5A: Year 1 Program Membaca seeded with empty teacher
+const membacaLessons = autoPairResult.lessons.filter((l) => l.subjectCode === 'MEMBACA');
 assert(
-  '5C: Exactly 5 PKAR lessons generated for Year 1 (one per weekday)',
-  pkarLessons.length === 5 &&
-  pkarLessons.every((l) => l.periodNumber === 0 && l.fractionalPeriod === 0.5 && l.countsAsTeacherPeriod === true)
+  '5A: Year 1 Program Membaca seeded for all weekdays with empty teacher by default (for manual click assignment)',
+  membacaLessons.length === 5 &&
+  membacaLessons.every((l) => l.classId === 'cls_1' && l.teacherId === '' && l.periodNumber === 0)
+);
+
+// 5B: Auto PKAR paired to pre-recess teacher
+const autoPkarLessons = autoPairResult.lessons.filter((l) => l.isAutoPKAR);
+assert(
+  '5B: Auto PKAR lessons generated with 0.5 fractionalPeriod and countsAsTeacherPeriod: true',
+  autoPkarLessons.length > 0 &&
+  autoPkarLessons.every((l) => l.fractionalPeriod === 0.5 && l.countsAsTeacherPeriod === true && !!l.teacherId)
 );
 
 assert(
-  '5D: Each PKAR lesson correctly assigned to its respective day and independent teacher',
-  pkarLessons.find((l) => l.day === 'ISNIN')?.teacherId === 't_gb' &&
-  pkarLessons.find((l) => l.day === 'SELASA')?.teacherId === 't_pk1' &&
-  pkarLessons.find((l) => l.day === 'RABU')?.teacherId === 't_bm' &&
-  pkarLessons.find((l) => l.day === 'KHAMIS')?.teacherId === 't_pem' &&
-  pkarLessons.find((l) => l.day === 'JUMAAT')?.teacherId === 't_ustaz'
+  '5C: PKAR teacher matches the teacher of the period immediately before recess',
+  autoPkarLessons.every((pkar) => {
+    const prePeriod = pkar.day === 'JUMAAT' ? 4 : 5;
+    const preLesson = autoPairResult.lessons.find(
+      (l) => l.classId === pkar.classId && l.day === pkar.day && l.periodNumber === prePeriod && !l.isPemulihan && l.countsAsClassPeriod
+    );
+    return preLesson && preLesson.teacherId === pkar.teacherId;
+  })
 );
 
 console.log('\n================================================================');

@@ -11,18 +11,18 @@ function runPNAndZeroGapsTest() {
 
   let failed = false;
 
-  // 1. Verify PN has NO teacher name or code assigned
+  // 1. Verify PN has NO teacher name or code assigned (locked on SELASA W1)
   console.log('--- Test 1: PN Teacher Check ---');
   for (let g = 1; g <= 6; g++) {
-    const pnCell = grid[g]['RABU']['W1'];
+    const pnCell = grid[g]['SELASA']['W1'];
     if (!pnCell || pnCell.subjectCode !== 'PN') {
-      console.error(`❌ Grade ${g} RABU W1 is not PN:`, pnCell);
+      console.error(`❌ Grade ${g} SELASA W1 is not PN:`, pnCell);
       failed = true;
     } else if (pnCell.teacherCode && pnCell.teacherCode.trim() !== '') {
       console.error(`❌ Grade ${g} PN has teacherCode: "${pnCell.teacherCode}" (Expected empty!)`);
       failed = true;
     } else {
-      console.log(`✅ Grade ${g} PN on RABU W1: subjectCode="PN", teacherCode="" (No teacher)`);
+      console.log(`✅ Grade ${g} PN on SELASA W1: subjectCode="PN", teacherCode="" (No teacher)`);
     }
   }
 
@@ -32,8 +32,8 @@ function runPNAndZeroGapsTest() {
   for (let g = 1; g <= 6; g++) {
     for (const day of DAYS_OF_WEEK) {
       const slots = getGradeDaySlots(g, day);
-      const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 585 && s.slotId !== 'PKAR');
-      const aSlots = slots.filter((s) => !s.isRecess && s.startMinutes >= 615 && s.slotId !== 'PKAR');
+      const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 600 && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA');
+      const aSlots = slots.filter((s) => !s.isRecess && s.startMinutes >= 615 && s.slotId !== 'PKAR' && s.slotId !== 'TASMIK');
       const anyAfternoon = aSlots.some((s) => grid[g][day][s.slotId] !== null);
 
       // Morning check: no empty slot before an occupied slot, and no empty morning slot if afternoon has lessons
