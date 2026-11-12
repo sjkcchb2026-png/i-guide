@@ -224,14 +224,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         category: 'KP2027_ONLY',
         subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (ISNIN)',
         subjectCode: 'PKAR_1',
-        periods: {
-          1: kp(1) ? 0.5 : 0,
-          2: kp(2) ? 0.5 : 0,
-          3: kp(3) ? 0.5 : 0,
-          4: kp(4) ? 0.5 : 0,
-          5: kp(5) ? 0.5 : 0,
-          6: kp(6) ? 0.5 : 0,
-        },
+        periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
         teachers: emptyTeachers(),
       },
       {
@@ -239,14 +232,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         category: 'KP2027_ONLY',
         subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (SELASA)',
         subjectCode: 'PKAR_2',
-        periods: {
-          1: kp(1) ? 0.5 : 0,
-          2: kp(2) ? 0.5 : 0,
-          3: kp(3) ? 0.5 : 0,
-          4: kp(4) ? 0.5 : 0,
-          5: kp(5) ? 0.5 : 0,
-          6: kp(6) ? 0.5 : 0,
-        },
+        periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
         teachers: emptyTeachers(),
       },
       {
@@ -254,14 +240,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         category: 'KP2027_ONLY',
         subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (RABU)',
         subjectCode: 'PKAR_3',
-        periods: {
-          1: kp(1) ? 0.5 : 0,
-          2: kp(2) ? 0.5 : 0,
-          3: kp(3) ? 0.5 : 0,
-          4: kp(4) ? 0.5 : 0,
-          5: kp(5) ? 0.5 : 0,
-          6: kp(6) ? 0.5 : 0,
-        },
+        periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
         teachers: emptyTeachers(),
       },
       {
@@ -269,14 +248,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         category: 'KP2027_ONLY',
         subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (KHAMIS)',
         subjectCode: 'PKAR_4',
-        periods: {
-          1: kp(1) ? 0.5 : 0,
-          2: kp(2) ? 0.5 : 0,
-          3: kp(3) ? 0.5 : 0,
-          4: kp(4) ? 0.5 : 0,
-          5: kp(5) ? 0.5 : 0,
-          6: kp(6) ? 0.5 : 0,
-        },
+        periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
         teachers: emptyTeachers(),
       },
       {
@@ -284,14 +256,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         category: 'KP2027_ONLY',
         subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (JUMAAT)',
         subjectCode: 'PKAR_5',
-        periods: {
-          1: kp(1) ? 0.5 : 0,
-          2: kp(2) ? 0.5 : 0,
-          3: 0,
-          4: 0,
-          5: 0,
-          6: 0,
-        },
+        periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
         teachers: emptyTeachers(),
       },
       {
@@ -665,10 +630,19 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     return totals;
   }, [matrixData]);
 
-  // 实时累加每位真实教师的总节数（包含主配课及 AM 协同教学双师，两位老师均计入全额执教工作量）
+  // 实时累加每位真实教师的总节数（包含 PN 周会全员在职教师 +1 节，AM 协同教学双师，以及所有执教科目）
   const teacherWorkloads = useMemo(() => {
     const loads: Record<string, number> = {};
+    // 规则 1: 全员教师参与周二周会 (PN Period 1)，所有在职教师自动 +1 节工作量
+    dynamicTeacherMapping.list.forEach((t) => {
+      loads[t.code] = 1;
+    });
+
     matrixData.forEach((row) => {
+      const code = (row.subjectCode || '').toUpperCase();
+      // PN 周会已通过上述统一计入全员教师，避免重复累加
+      if (code === 'PN') return;
+
       [1, 2, 3, 4, 5, 6].forEach((grade) => {
         const tCode = row.teachers[grade];
         const pCount = Number(row.periods[grade] || 0);
@@ -684,7 +658,19 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
       });
     });
     return loads;
-  }, [matrixData]);
+  }, [matrixData, dynamicTeacherMapping.list]);
+
+  // 按工作量由重至轻排序教师列表（Heaviest-Workload Teacher First）
+  const sortedTeachersByWorkload = useMemo(() => {
+    return [...dynamicTeacherMapping.list].sort((a, b) => {
+      const loadA = teacherWorkloads[a.code] || 0;
+      const loadB = teacherWorkloads[b.code] || 0;
+      if (loadB !== loadA) {
+        return loadB - loadA; // Heaviest-Workload Teacher First!
+      }
+      return a.num - b.num;
+    });
+  }, [dynamicTeacherMapping.list, teacherWorkloads]);
 
   const grandTotalPeriods = useMemo(() => {
     return Object.values(gradeTotalPeriods).reduce((a, b) => a + b, 0);
@@ -713,6 +699,8 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     }
   };
 
+  const [dragOverCellKey, setDragOverCellKey] = useState<string | null>(null);
+
   return (
     <div className="space-y-6">
       {/* 顶部控制栏 */}
@@ -728,9 +716,8 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
             Matriks Agihan Mengajar (Sesi {selectedYear})
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            Tahun 1–{[1, 2, 3, 4, 5, 6].filter((g) => isGradeKP2027(selectedYear, g)).pop() || 1} menggunakan{' '}
-            <strong className="text-emerald-400">KP2027 (T1: 46.5 waktu, BC 12 waktu, AM 3 waktu, PKAR 2.5 waktu [5 × 0.5 waktu])</strong>;
-            tahun lain kekal <strong className="text-amber-300">KSSR Semakan (50 waktu)</strong>.
+            Jadual Waktu Akademik Penuh (Isnin–Selasa 11 waktu, Rabu–Khamis 10 waktu, Jumaat 7 waktu [T1–T3] / 8 waktu [T4–T6]):{' '}
+            <strong className="text-emerald-400">T1: 49 waktu (+2.5 PKAR) | T2–T3: 49 waktu | T4–T6: 50 waktu</strong>. Slot Tasmik adalah pascawaktu sekolah (100% manual).
           </p>
         </div>
 
@@ -797,12 +784,17 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         {/* 左侧：配课矩阵 (3列宽) */}
         <div className="xl:col-span-3 bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl overflow-hidden">
           <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
-            <h3 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
-              <Layers className="w-4 h-4 text-blue-400" />
-              <span>Jadual Agihan Mengajar Mengikut Tahun & Subjek</span>
-            </h3>
+            <div>
+              <h3 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
+                <Layers className="w-4 h-4 text-blue-400" />
+                <span>Jadual Agihan Mengajar Mengikut Tahun & Subjek</span>
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                * Boleh tarik (Drag & Drop) kod guru dari panel kanan terus ke dalam petak guru
+              </p>
+            </div>
             <span className="text-[11px] text-slate-400">
-              * Petak waktu adalah pratetap KP2027/KSSR tetapi tidak dikunci (boleh diubah suai)
+              * Petak waktu adalah pratetap KP2027/KSSR tetapi tidak dikunci
             </span>
           </div>
 
@@ -844,7 +836,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
               <tbody className="divide-y divide-slate-800 font-mono">
                 {matrixData
                   .filter((row) => {
-                    // 隐藏全校 1-6 年级节数都为 0 的未启用过渡科目（如 2027 年尚未用到的 Tahap II ESD/EST），保持表格清爽
+                    // 隐藏全校 1-6 年级节数都为 0 的未启用过渡科目（保持表格清爽）
                     const hasAnyActivePeriod = [1, 2, 3, 4, 5, 6].some((g) => (row.periods[g] || 0) > 0);
                     return hasAnyActivePeriod || row.category !== 'KP2027_ONLY';
                   })
@@ -872,35 +864,85 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                         const currentPeriod = row.periods[grade] ?? 0;
                         const currentTeacher = row.teachers[grade] || '';
                         const isAssigned = currentPeriod > 0;
+                        const cellKey = `${row.id}_${grade}`;
+
+                        const isPkarNonT1 = row.subjectCode.startsWith('PKAR') && grade !== 1;
 
                         return (
                           <React.Fragment key={grade}>
-                            {/* 节数输入框（预设但完全不锁死） */}
+                            {/* 节数输入框（预设但完全不锁死；PKAR 仅限一年级） */}
                             <td className="py-1.5 px-1 text-center border-l border-slate-800/80">
                               <input
                                 type="number"
                                 step="0.5"
                                 min="0"
                                 max="30"
-                                value={currentPeriod || ''}
+                                disabled={isPkarNonT1}
+                                value={isPkarNonT1 ? '' : (currentPeriod || '')}
                                 onChange={(e) =>
                                   handlePeriodChange(row.id, grade, parseFloat(e.target.value))
                                 }
                                 placeholder="-"
                                 className={`w-11 text-center py-1 bg-slate-950 border rounded-lg text-xs font-bold outline-none transition ${
-                                  isAssigned
+                                  isPkarNonT1
+                                    ? 'border-transparent text-slate-700 cursor-not-allowed'
+                                    : isAssigned
                                     ? 'border-slate-700 text-white focus:border-blue-500'
                                     : 'border-transparent text-slate-600 focus:border-slate-700'
                                 }`}
                               />
                             </td>
 
-                            {/* 教师选择下拉框（普通科目单一选择；AM 协同教学提供 Guru 1 与 Guru 2 双师选择） */}
-                            <td className="py-1.5 px-1 text-center">
+                            {/* 教师选择下拉框（普通科目单一选择；AM 协同教学提供 Guru 1 与 Guru 2 双师选择；支持 Drag-and-Drop） */}
+                            <td
+                              className={`py-1.5 px-1 text-center transition ${
+                                dragOverCellKey === cellKey ? 'bg-blue-900/40 ring-2 ring-blue-400 rounded-lg' : ''
+                              }`}
+                              onDragOver={(e) => {
+                                if (isAssigned && row.subjectCode !== 'AM' && !row.subjectCode.startsWith('PKAR')) {
+                                  e.preventDefault();
+                                  e.dataTransfer.dropEffect = 'copy';
+                                  setDragOverCellKey(cellKey);
+                                }
+                              }}
+                              onDragLeave={() => {
+                                if (dragOverCellKey === cellKey) {
+                                  setDragOverCellKey(null);
+                                }
+                              }}
+                              onDrop={(e) => {
+                                if (isAssigned && row.subjectCode !== 'AM' && !row.subjectCode.startsWith('PKAR')) {
+                                  e.preventDefault();
+                                  setDragOverCellKey(null);
+                                  const code = e.dataTransfer.getData('application/teacher-code') || e.dataTransfer.getData('text/plain');
+                                  if (code) {
+                                    handleTeacherChange(row.id, grade, code.trim());
+                                  }
+                                }
+                              }}
+                            >
                               {row.subjectCode === 'AM' && isAssigned ? (
                                 <div className="flex flex-col gap-1 w-full min-w-[110px]">
                                   {/* Guru 1 (Guru Utama) */}
-                                  <div className="flex items-center gap-1">
+                                  <div
+                                    className={`flex items-center gap-1 rounded transition p-0.5 ${
+                                      dragOverCellKey === `${cellKey}_g1` ? 'bg-blue-900/60 ring-2 ring-blue-400' : ''
+                                    }`}
+                                    onDragOver={(e) => {
+                                      e.preventDefault();
+                                      e.dataTransfer.dropEffect = 'copy';
+                                      setDragOverCellKey(`${cellKey}_g1`);
+                                    }}
+                                    onDragLeave={() => {
+                                      if (dragOverCellKey === `${cellKey}_g1`) setDragOverCellKey(null);
+                                    }}
+                                    onDrop={(e) => {
+                                      e.preventDefault();
+                                      setDragOverCellKey(null);
+                                      const code = e.dataTransfer.getData('application/teacher-code') || e.dataTransfer.getData('text/plain');
+                                      if (code) handleTeacherChange(row.id, grade, code.trim());
+                                    }}
+                                  >
                                     <span className="text-[9px] font-black px-1 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 shrink-0" title="Guru 1 (Guru Utama)">
                                       G1
                                     </span>
@@ -920,7 +962,25 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                                   </div>
 
                                   {/* Guru 2 (Guru Bersama / Co-Teacher) */}
-                                  <div className="flex items-center gap-1">
+                                  <div
+                                    className={`flex items-center gap-1 rounded transition p-0.5 ${
+                                      dragOverCellKey === `${cellKey}_g2` ? 'bg-purple-900/60 ring-2 ring-purple-400' : ''
+                                    }`}
+                                    onDragOver={(e) => {
+                                      e.preventDefault();
+                                      e.dataTransfer.dropEffect = 'copy';
+                                      setDragOverCellKey(`${cellKey}_g2`);
+                                    }}
+                                    onDragLeave={() => {
+                                      if (dragOverCellKey === `${cellKey}_g2`) setDragOverCellKey(null);
+                                    }}
+                                    onDrop={(e) => {
+                                      e.preventDefault();
+                                      setDragOverCellKey(null);
+                                      const code = e.dataTransfer.getData('application/teacher-code') || e.dataTransfer.getData('text/plain');
+                                      if (code) handleSecondaryTeacherChange(row.id, grade, code.trim());
+                                    }}
+                                  >
                                     <span className="text-[9px] font-black px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0" title="Guru 2 (Guru Bersama / Co-Teacher)">
                                       G2
                                     </span>
@@ -941,10 +1001,14 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                                 </div>
                               ) : row.subjectCode.startsWith('PKAR') ? (
                                 <div
-                                  className="w-full py-1 px-1 rounded-lg text-[10px] font-bold bg-emerald-950/70 border border-emerald-600/40 text-emerald-300 text-center"
-                                  title="Program Pembentukan Karakter: Automatik dipasangkan kepada guru mengajar sebelum waktu rehat (+0.5 waktu)"
+                                  className={`w-full py-1 px-1 rounded-lg text-[10px] font-bold text-center ${
+                                    grade === 1 && isAssigned
+                                      ? 'bg-emerald-950/70 border border-emerald-600/40 text-emerald-300'
+                                      : 'text-slate-600'
+                                  }`}
+                                  title={grade === 1 ? 'Program Pembentukan Karakter: Automatik dipasangkan kepada guru mengajar sebelum waktu rehat (+0.5 waktu)' : 'PKAR hanya untuk Tahun 1 (T2–T6 tiada PKAR)'}
                                 >
-                                  {isAssigned ? 'Auto: Sebelum Rehat' : '-'}
+                                  {grade === 1 && isAssigned ? 'Auto: Sebelum Rehat' : '-'}
                                 </div>
                               ) : (
                                 <select
@@ -992,7 +1056,15 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                         isGradeKP2027(selectedYear, g) ? 'text-emerald-400' : 'text-amber-300'
                       }`}
                     >
-                      {gradeTotalPeriods[g]} Waktu
+                      <div className="font-mono text-sm">
+                        {gradeTotalPeriods[g]} Waktu {g === 1 ? ' (+2.5 PKAR)' : ''}
+                      </div>
+                      <div className="text-[10px] font-sans text-slate-300 font-bold mt-0.5">
+                        Sasaran: {g === 1 ? '49 (+2.5 PKAR)' : g <= 3 ? '49' : '50'} Waktu
+                      </div>
+                      <div className="text-[9px] font-sans text-slate-500 font-normal">
+                        (Tasmik: Slot Khas Pascawaktu)
+                      </div>
                     </td>
                   ))}
                 </tr>
@@ -1005,10 +1077,15 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         <div className="space-y-6">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-              <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
-                <Users className="w-4 h-4 text-indigo-400" />
-                <span>Daftar Guru (Master Data)</span>
-              </h3>
+              <div>
+                <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-indigo-400" />
+                  <span>Daftar Guru (Master Data)</span>
+                </h3>
+                <span className="text-[10px] text-indigo-300 font-sans block mt-0.5">
+                  Beban Terberat Dahulu · Tarik (Drag) Kod Guru
+                </span>
+              </div>
               <span className="text-[10px] text-slate-400 font-mono">
                 Jumlah: <strong className="text-white">{grandTotalPeriods}</strong>
               </span>
@@ -1027,24 +1104,38 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                 <table className="w-full text-left text-xs font-mono">
                   <thead className="bg-slate-950 text-slate-400 text-[10px] uppercase font-bold sticky top-0">
                     <tr>
-                      <th className="p-2 w-10">Kod</th>
+                      <th className="p-2 w-8">No</th>
                       <th className="p-2 w-14">Guru</th>
                       <th className="p-2">Nama Penuh</th>
                       <th className="p-2 text-right w-12">Waktu</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
-                    {dynamicTeacherMapping.list.map((t) => {
+                    {sortedTeachersByWorkload.map((t) => {
                       const workload = teacherWorkloads[t.code] || 0;
                       const isOptimal = workload >= 22 && workload <= 30;
                       const isOverload = workload > 30;
 
                       return (
-                        <tr key={t.id} className="hover:bg-slate-800/40">
+                        <tr
+                          key={t.id}
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData('text/plain', t.code);
+                            e.dataTransfer.setData('application/teacher-code', t.code);
+                            e.dataTransfer.effectAllowed = 'copyMove';
+                          }}
+                          className="hover:bg-slate-800/50 cursor-grab active:cursor-grabbing transition group"
+                          title="Tarik kod guru ini ke dalam petak jadual untuk menetapkan guru"
+                        >
                           <td className="p-2 font-bold text-slate-400">{t.num}</td>
-                          <td className="p-2 font-bold text-indigo-300">{t.code}</td>
+                          <td className="p-2 font-black text-indigo-300">
+                            <span className="px-1.5 py-0.5 rounded bg-indigo-500/20 border border-indigo-500/30 group-hover:bg-indigo-500/30 transition">
+                              {t.code}
+                            </span>
+                          </td>
                           <td
-                            className="p-2 font-sans truncate max-w-[110px] text-slate-200"
+                            className="p-2 font-sans truncate max-w-[110px] text-slate-200 text-[11px]"
                             title={t.name}
                           >
                             {t.name}

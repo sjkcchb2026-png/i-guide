@@ -193,7 +193,53 @@ export function seedYear1ProgramMembaca(classes: any[], days: string[], lessons:
   });
 }
 
-// 3. 自动将每日 PKAR (0.5 节) 绑定给“下课前那一节”的进班老师，并自动计入 +0.5 节工作量
+// 4. 放学后专属 TASMIK 槽位（Slot Khas Tasmik）100% 手动指派（预设放空，严禁自动排入）
+// 星期一/二: 第 12 节 (13:45-14:15), 星期三/四: 第 11 节 (13:15-13:45), 星期五: 一至三年级第 8 节 (11:45-12:15) / 四至六年级第 9 节 (12:15-12:45)
+export function seedManualTasmikSlots(classes: any[], days: string[], lessons: any[]) {
+  classes.forEach((cls) => {
+    const classLevel = resolveClassLevel(cls);
+    days.forEach((day) => {
+      const { tasmikManualPeriod } = getDayPeriodConfig(day, classLevel);
+      if (
+        lessons.some(
+          (l) =>
+            l.day === day &&
+            l.classId === cls.classId &&
+            (l.periodNumber === tasmikManualPeriod || l.id === `manual_tasmik_${cls.classId}_${day}_P${tasmikManualPeriod}`)
+        )
+      ) {
+        return;
+      }
+
+      const timeSlotLabel =
+        day === 'JUMAAT'
+          ? classLevel >= 4
+            ? '12:15 - 12:45'
+            : '11:45 - 12:15'
+          : day === 'ISNIN' || day === 'SELASA'
+          ? '13:45 - 14:15'
+          : '13:15 - 13:45';
+
+      lessons.push({
+        id: `manual_tasmik_${cls.classId}_${day}_P${tasmikManualPeriod}`,
+        day,
+        periodNumber: tasmikManualPeriod,
+        timeSlotLabel,
+        classId: cls.classId,
+        className: cls.className,
+        subjectCode: 'TASMIK',
+        subjectName: 'Slot Khas Tasmik (Selepas Sekolah)',
+        teacherId: '', // 100% 手动点击指派，严禁系统自动预占
+        teacherName: 'Klik untuk pilih Ustaz/Ustazah',
+        isManualSlot: true,
+        countsAsClassPeriod: false, // 放学后时段，不计入班级正课节数
+        countsAsTeacherPeriod: false, // 待手动指派后计入执教教师工作量
+      });
+    });
+  });
+}
+
+// 5. 自动将每日 PKAR (0.5 节) 绑定给“下课前那一节”的进班老师，并自动计入 +0.5 节工作量
 export function autoPairPKARWithPreRecessTeacher(
   lessons: any[],
   days: string[],
@@ -205,39 +251,53 @@ export function autoPairPKARWithPreRecessTeacher(
   days.forEach((day) => {
     const { preRecessPeriod } = getDayPeriodConfig(day);
 
-    // 找出所有班级在当天下课前那一节 (preRecessPeriod) 的正课
+    // 找出所有一年级班级在当天下课前那一节的正课 (PKAR 只有一年级。二到六年级没有。)
+    // 一年级下课前最后一节正课是第 4 节 (09:00 - 09:30)，紧接 09:30 - 09:45 PKAR，09:45 下课
+    const isYear1Lesson = (l: any) =>
+      l.classLevel === 1 ||
+      (typeof l.className === 'string' && (l.className.includes('1') || l.className.toUpperCase().includes('TAHUN 1'))) ||
+      (typeof l.classId === 'string' && l.classId.includes('1'));
+
     const preRecessLessons = filteredLessons.filter(
       (l) =>
         l.day === day &&
-        l.periodNumber === preRecessPeriod &&
+        isYear1Lesson(l) &&
+        (l.periodNumber === 4 || l.periodNumber === preRecessPeriod) &&
         !l.isPemulihan &&
         l.countsAsClassPeriod
     );
 
-    preRecessLessons.forEach((preLesson) => {
-      if (!preLesson.teacherId || preLesson.teacherId.startsWith('ALL_TEACHERS')) return;
+    // 每个一年级班级仅绑定一次第 4 节教师
+    const pairedClasses = new Set<string>();
+    preRecessLessons
+      .sort((a, b) => (a.periodNumber === 4 ? -1 : 1))
+      .forEach((preLesson) => {
+        if (pairedClasses.has(preLesson.classId)) return;
+        if (!preLesson.teacherId || preLesson.teacherId.startsWith('ALL_TEACHERS')) return;
 
-      // 自动为该班生成绑定下课前老师的 PKAR (0.5 节)
-      filteredLessons.push({
-        id: `pkar_${preLesson.classId}_${day}`,
-        day,
-        periodNumber: preRecessPeriod + 0.5, // 紧贴下课前的 15 分钟品格塑造时段
-        classId: preLesson.classId,
-        className: preLesson.className,
-        subjectCode: 'PKAR',
-        subjectName: 'Program Pembentukan Karakter (15 Min)',
-        teacherId: preLesson.teacherId,
-        teacherName: preLesson.teacherName,
-        isAutoPKAR: true,
-        linkedPreRecessLessonId: preLesson.id,
-        fractionalPeriod: 0.5,
-        countsAsClassPeriod: true,
-        countsAsTeacherPeriod: true, // 自动计入该老师 +0.5 节工作量
+        pairedClasses.add(preLesson.classId);
+
+        // 自动为该班生成绑定下课前老师的 PKAR (0.5 节)
+        filteredLessons.push({
+          id: `pkar_${preLesson.classId}_${day}`,
+          day,
+          periodNumber: 4.5, // 09:30 - 09:45 (下课前 15 分钟)
+          classId: preLesson.classId,
+          className: preLesson.className,
+          subjectCode: 'PKAR',
+          subjectName: 'Program Pembentukan Karakter (15 Min)',
+          teacherId: preLesson.teacherId,
+          teacherName: preLesson.teacherName,
+          isAutoPKAR: true,
+          linkedPreRecessLessonId: preLesson.id,
+          fractionalPeriod: 0.5,
+          countsAsClassPeriod: true,
+          countsAsTeacherPeriod: true, // 自动计入该老师 +0.5 节工作量
+        });
+
+        // 累加该老师当天的排课节数 (+0.5)
+        incTeacherWorkload(preLesson.teacherId, day, 0.5);
       });
-
-      // 累加该老师当天的排课节数 (+0.5)
-      incTeacherWorkload(preLesson.teacherId, day, 0.5);
-    });
   });
 
   return filteredLessons;
@@ -317,8 +377,8 @@ export const getMorningPJCandidates = (day: string): number[] => {
   return [1, 2]; // 严格限制在第 1 节或第 2 节（优先第 1 节，有冲突时使用第 2 节）
 };
 
-export const getDailyMaxPeriods = (day: string): number => {
-  return getDayPeriodConfig(day).teachingPeriods;
+export const getDailyMaxPeriods = (day: string, classLevel: number = 1): number => {
+  return getDayPeriodConfig(day, classLevel).teachingPeriods;
 };
 
 export const isAdjacentPeriod = (p1: number, p2: number): boolean => {
@@ -572,6 +632,11 @@ export function runTimetableEngine(params: {
   // --------------------------------------------------------------------------
   seedYear1ProgramMembaca(nonPrasekolahClasses, DAYS_OF_WEEK as any, lessons);
 
+  // --------------------------------------------------------------------------
+  // STEP 0C: 放学后 SLOT KHAS TASMIK 固定留空（100% 手动指派，严禁系统自动预占）
+  // --------------------------------------------------------------------------
+  seedManualTasmikSlots(nonPrasekolahClasses, DAYS_OF_WEEK as any, lessons);
+
   // 标记 PKAR 课目由自动对齐算法绑定，不需手动选师
   pkarAssignments.forEach((asg) => {
     scheduledPerAssignment.set(asg.assignmentId, 1);
@@ -676,7 +741,7 @@ export function runTimetableEngine(params: {
 
       for (const day of DAYS_OF_WEEK) {
         if (scheduled >= required) break;
-        const maxP = getDailyMaxPeriods(day);
+        const maxP = getDailyMaxPeriods(day, resolveClassLevel(cls));
         const remaining = required - scheduled;
         const blockLen = remaining >= 2 ? 2 : 1;
 
@@ -795,7 +860,7 @@ export function runTimetableEngine(params: {
 
       for (const day of DAYS_OF_WEEK) {
         if (scheduled >= required) break;
-        const maxP = getDailyMaxPeriods(day);
+        const maxP = getDailyMaxPeriods(day, resolveClassLevel(cls));
 
         for (let p = 1; p <= maxP; p++) {
           if (scheduled >= required) break;
@@ -882,13 +947,35 @@ export function runTimetableEngine(params: {
     return !isPj && !isPmOrPai;
   });
 
-  // Sort by workload (highest periods first)
-  remainingAssignments.sort((a, b) => b.effectiveWeeklyPeriods - a.effectiveWeeklyPeriods);
+  // 1. Calculate global teacher workload across all assignments to implement "Heaviest-Workload Teacher First"
+  const teacherTotalWorkload = new Map<string, number>();
+  normalizedAssignments.forEach((a) => {
+    const w = a.effectiveWeeklyPeriods || 0;
+    if (a.teacherId) {
+      teacherTotalWorkload.set(a.teacherId, (teacherTotalWorkload.get(a.teacherId) || 0) + w);
+    }
+    const secT = (a as any).secondaryTeacherId || (a as any).coTeacherId;
+    if (secT) {
+      teacherTotalWorkload.set(secT, (teacherTotalWorkload.get(secT) || 0) + w);
+    }
+  });
+
+  // Sort globally by Heaviest-Workload Teacher First, then by assignment periods
+  remainingAssignments.sort((a, b) => {
+    const tLoadA = teacherTotalWorkload.get(a.teacherId) || 0;
+    const tLoadB = teacherTotalWorkload.get(b.teacherId) || 0;
+    if (tLoadB !== tLoadA) {
+      return tLoadB - tLoadA; // Heaviest-Workload Teacher First!
+    }
+    return b.effectiveWeeklyPeriods - a.effectiveWeeklyPeriods;
+  });
 
   remainingAssignments.forEach((asg) => {
     const required = asg.effectiveWeeklyPeriods;
     let scheduled = scheduledPerAssignment.get(asg.assignmentId) || 0;
     const teacherObj = teacherMap.get(asg.teacherId);
+    const clsObj = nonPrasekolahClasses.find((c) => c.classId === asg.classId);
+    const classLevel = resolveClassLevel(clsObj || { className: asg.className });
 
     // Distribute into 2-period and 1-period blocks
     const blocks: number[] = [];
@@ -922,7 +1009,7 @@ export function runTimetableEngine(params: {
 
         for (const day of dayCandidates) {
           if (placed) break;
-          const maxP = getDailyMaxPeriods(day);
+          const maxP = getDailyMaxPeriods(day, classLevel);
 
           for (let p = 1; p <= maxP - blockLen + 1; p++) {
             const periodsToBook = blockLen === 2 ? [p, p + 1] : [p];
@@ -1093,109 +1180,12 @@ export function runTimetableEngine(params: {
   });
 
   // --------------------------------------------------------------------------
-  // 4. PROGRAM TASMIK (放学后时段 + 合班 GABUNG KELAS 冲突白名单支持)
+  // 4. PROGRAM TASMIK (100% MANUAL ARRANGEMENT — EXCLUDED FROM AUTO-SCHEDULING)
+  // TASMIK is completely excluded from automated placement; Slot Khas Tasmik is seeded
+  // post-school for manual click-assignment by Principal / PKP.
   // --------------------------------------------------------------------------
   tasmikAssignments.forEach((tAsg) => {
-    const required = tAsg.effectiveWeeklyPeriods || 2; // 每周 2 节 (拆成 2 天: 1 + 1)
-    const clsObj = nonPrasekolahClasses.find((c) => c.classId === tAsg.classId);
-    const yearLevelStr = clsObj?.yearLevel || tAsg.className || '1';
-    const teacherObj = teacherMap.get(tAsg.teacherId);
-
-    let scheduled = 0;
-    const usedDaysForClass = new Set<string>();
-
-    const isSlotAvailableForTeacher = (teacherId: string, day: string, period: number): boolean => {
-      const tKey = `${teacherId}_${day}_${period}`;
-      if (!teacherSlotOccupied.has(tKey)) return true;
-
-      // 合班豁免检查：若该时段已有 TASMIK 课，使用 isTimetableConflict 判断是否可合班
-      const existing = lessons.find(
-        (l) => l.teacherId === teacherId && l.day === day && l.periodNumber === period
-      );
-      if (existing) {
-        const candidate = {
-          teacherId,
-          day,
-          periodNumber: period,
-          subjectCode: 'TASMIK',
-        };
-        return !isTimetableConflict(existing, candidate);
-      }
-      return false;
-    };
-
-    // 优先从 (拜三+拜四)、(拜三+拜五)、(拜四+拜五) 组合中选出老师无冲突的 2 天（每天只排 1 节）
-    for (const [day1, day2] of tasmikDayPairs) {
-      const p1 = getPostDismissalSlotForTasmik(day1, yearLevelStr, academicYear);
-      const p2 = getPostDismissalSlotForTasmik(day2, yearLevelStr, academicYear);
-
-      if (
-        isSlotAvailableForTeacher(tAsg.teacherId, day1, p1) &&
-        isSlotAvailableForTeacher(tAsg.teacherId, day2, p2)
-      ) {
-        [
-          { day: day1, period: p1 },
-          { day: day2, period: p2 },
-        ].forEach(({ day, period }) => {
-          teacherSlotOccupied.add(`${tAsg.teacherId}_${day}_${period}`);
-          incTeacherDayCount(tAsg.teacherId, day);
-          addTeacherPeriodOnDay(tAsg.teacherId, day, period);
-          usedDaysForClass.add(day);
-          scheduled++;
-
-          lessons.push({
-            id: `tasmik_${tAsg.classId}_${day}_P${period}`,
-            day,
-            periodNumber: period,
-            classId: tAsg.classId,
-            className: tAsg.className,
-            subjectCode: 'TASMIK',
-            subjectName: 'Program Tasmik (Selepas Sekolah)',
-            teacherId: tAsg.teacherId,
-            teacherName: teacherObj?.fullName || tAsg.teacherId,
-            countsAsClassPeriod: false, // 放学后时段，不占正课节数
-            countsAsTeacherPeriod: true, // 计入 Ustaz / Ustazah 节数
-          });
-        });
-        break;
-      }
-    }
-
-    // 若第 1 顺位未完成，仍在拜三、拜四、拜五中选择任意 2 个不同天（每天 1 节）
-    if (scheduled < required) {
-      for (const day of tasmikCandidateDays) {
-        if (scheduled >= required) break;
-        if (usedDaysForClass.has(day)) continue; // 严格保证同一班一天最多 1 节 Tasmik
-
-        const baseP = getPostDismissalSlotForTasmik(day, yearLevelStr, academicYear);
-        for (const p of [baseP, baseP + 1]) {
-          if (isSlotAvailableForTeacher(tAsg.teacherId, day, p)) {
-            teacherSlotOccupied.add(`${tAsg.teacherId}_${day}_${p}`);
-            incTeacherDayCount(tAsg.teacherId, day);
-            addTeacherPeriodOnDay(tAsg.teacherId, day, p);
-            usedDaysForClass.add(day);
-            scheduled++;
-
-            lessons.push({
-              id: `tasmik_${tAsg.classId}_${day}_P${p}`,
-              day,
-              periodNumber: p,
-              classId: tAsg.classId,
-              className: tAsg.className,
-              subjectCode: 'TASMIK',
-              subjectName: 'Program Tasmik (Selepas Sekolah)',
-              teacherId: tAsg.teacherId,
-              teacherName: teacherObj?.fullName || tAsg.teacherId,
-              countsAsClassPeriod: false,
-              countsAsTeacherPeriod: true,
-            });
-            break;
-          }
-        }
-      }
-    }
-
-    scheduledPerAssignment.set(tAsg.assignmentId, scheduled);
+    scheduledPerAssignment.set(tAsg.assignmentId, 0);
   });
 
   // --------------------------------------------------------------------------
@@ -1209,6 +1199,10 @@ export function runTimetableEngine(params: {
 
   let unplacedCount = 0;
   normalizedAssignments.forEach((asg) => {
+    // Exclude manual TASMIK and auto PKAR from unplacedCount
+    if (isTasmikSubject(asg.canonicalSubjectCode, asg.subjectName) || isPKARSubject(asg.canonicalSubjectCode, asg.subjectName)) {
+      return;
+    }
     const req = asg.effectiveWeeklyPeriods;
     const sch = scheduledPerAssignment.get(asg.assignmentId) || 0;
     if (sch < req) {

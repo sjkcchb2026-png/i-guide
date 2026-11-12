@@ -96,14 +96,15 @@ assert(
   result.unplaced.length === 0
 );
 
-// Verify Perhimpunan (PN) on Wednesday (RABU) W1
+// Verify Perhimpunan (PN) on Tuesday (SELASA) W1
 [1, 2, 3, 4, 5, 6].forEach((g) => {
-  const pnCell = result.grid[g]['RABU']['W1'];
+  const pnCell = result.grid[g]['SELASA']['W1'];
   assert(
-    `3C: Grade ${g} has locked Perhimpunan (PN) on RABU W1`,
+    `3C: Grade ${g} has locked Perhimpunan (PN) on SELASA W1`,
     Boolean(pnCell && pnCell.subjectCode === 'PN' && pnCell.isLocked)
   );
 });
+
 
 // Verify Year 1 PKAR daily slots
 const pkarDays = ['ISNIN', 'SELASA', 'RABU', 'KHAMIS', 'JUMAAT'] as const;

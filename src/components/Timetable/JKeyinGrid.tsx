@@ -61,6 +61,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
   const [editTeacherCode, setEditTeacherCode] = useState<string>('');
   const [editIsPemulihan, setEditIsPemulihan] = useState<boolean>(false);
 
+  const [dragSource, setDragSource] = useState<{ grade: number; day: DayOfWeek; slotId: string } | null>(null);
+  const [dragOverCellKey, setDragOverCellKey] = useState<string | null>(null);
+
   const isKP = (g: number) => {
     const yr = parseInt(academicYear, 10) || 2027;
     if (yr < 2027) return false;
@@ -71,7 +74,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     if (slotId === 'REHAT') return;
     const current = schedule[grade]?.[day]?.[slotId];
     setEditingCell({ grade, day, slotId, current });
-    setEditSubjectCode(current?.subjectCode || '');
+    setEditSubjectCode(current?.subjectCode || (slotId === 'TASMIK' ? 'TASMIK' : slotId === 'MEMBACA' ? 'MEMBACA' : ''));
     setEditTeacherCode(current?.teacherCode || '');
     setEditIsPemulihan(current?.isPemulihan || false);
   };
@@ -82,14 +85,16 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
 
     const matchedRow = matrixData.find((r) => r.subjectCode === editSubjectCode);
     const isBmOrMt = editSubjectCode === 'BM' || editSubjectCode === 'MT';
+    const isTasmik = editSubjectCode === 'TASMIK' || slotId === 'TASMIK';
     const newCell: TimetableCell | null = editSubjectCode
       ? {
           subjectId: matchedRow?.id || editSubjectCode.toLowerCase(),
           subjectCode: editSubjectCode,
-          subjectName: matchedRow?.subjectName || editSubjectCode,
+          subjectName: matchedRow?.subjectName || (isTasmik ? 'PROGRAM TASMIK' : editSubjectCode),
           teacherCode: editTeacherCode,
           periodLength: slotId === 'PKAR' ? 0.5 : 1,
           isPemulihan: isBmOrMt ? editIsPemulihan : false,
+          isManualSlot: isTasmik,
         }
       : null;
 
@@ -117,6 +122,73 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
 
     onUpdateSchedule(newGrid);
     setEditingCell(null);
+  };
+
+  const handleCellDrop = (
+    targetGrade: number,
+    targetDay: DayOfWeek,
+    targetSlotId: string,
+    event: React.DragEvent
+  ) => {
+    event.preventDefault();
+    setDragOverCellKey(null);
+
+    // If teacher code was dragged from right-hand panel into cell
+    const droppedTeacherCode = event.dataTransfer.getData('application/teacher-code');
+    if (droppedTeacherCode && (!dragSource || !event.dataTransfer.types.includes('application/timetable-cell'))) {
+      const currentCell = schedule[targetGrade]?.[targetDay]?.[targetSlotId];
+      if (currentCell) {
+        const newGrid: ScheduleGrid = JSON.parse(JSON.stringify(schedule));
+        newGrid[targetGrade][targetDay][targetSlotId] = {
+          ...currentCell,
+          teacherCode: droppedTeacherCode.trim(),
+        };
+        autoPairPKARInGrid(newGrid);
+        onUpdateSchedule(newGrid);
+      }
+      return;
+    }
+
+    // Cell swap via Drag-and-Drop
+    const cellDataRaw = event.dataTransfer.getData('application/timetable-cell');
+    let source = dragSource;
+    if (!source && cellDataRaw) {
+      try {
+        source = JSON.parse(cellDataRaw);
+      } catch {
+        source = null;
+      }
+    }
+
+    if (!source) return;
+    const { grade: srcGrade, day: srcDay, slotId: srcSlotId } = source;
+
+    if (srcGrade === targetGrade && srcDay === targetDay && srcSlotId === targetSlotId) {
+      return;
+    }
+
+    // Guard against swapping REHAT or locked Tuesday W1 Perhimpunan
+    if (targetSlotId === 'REHAT' || srcSlotId === 'REHAT') return;
+    if (srcDay === 'SELASA' && srcSlotId === 'W1') return;
+    if (targetDay === 'SELASA' && targetSlotId === 'W1') return;
+
+    const newGrid: ScheduleGrid = JSON.parse(JSON.stringify(schedule));
+    if (!newGrid[srcGrade]) newGrid[srcGrade] = {} as any;
+    if (!newGrid[srcGrade][srcDay]) newGrid[srcGrade][srcDay] = {};
+    if (!newGrid[targetGrade]) newGrid[targetGrade] = {} as any;
+    if (!newGrid[targetGrade][targetDay]) newGrid[targetGrade][targetDay] = {};
+
+    const cellA = newGrid[srcGrade][srcDay][srcSlotId] || null;
+    const cellB = newGrid[targetGrade][targetDay][targetSlotId] || null;
+
+    newGrid[srcGrade][srcDay][srcSlotId] = cellB;
+    newGrid[targetGrade][targetDay][targetSlotId] = cellA;
+
+    // Dynamically re-bind PKAR teacher & +0.5 workload if pre-recess slot (W5) changed
+    autoPairPKARInGrid(newGrid);
+
+    onUpdateSchedule(newGrid);
+    setDragSource(null);
   };
 
   const handleTriggerAutoSchedule = () => {
@@ -154,19 +226,91 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     ? clashes
     : clashes.filter((c) => c.gradeA === selectedGrade || c.gradeB === selectedGrade);
 
-  // Common slots for 1-to-6 Master Table
-  // Mon/Tue: 11 teaching periods (W1-W5, PKAR, REHAT, W6-W11, TASMIK)
-  // Wed/Thu: 10 teaching periods (W1-W5, PKAR, REHAT, W6-W10, TASMIK)
-  // Friday: 7 teaching periods (T1-T3) / 8 teaching periods (T4-T6)
+  // Master Table Dual-Bell Period Alignment:
+  // Pre-recess: 
+  // Year 1 (KP2027): 07:15 Membaca, 07:30-09:30 W1-W4, 09:30-09:45 PKAR (0.5w), 09:45-10:15 REHAT
+  // Years 2-6 (KSSR): 07:15-09:45 W1-W5 (5w, no PKAR), 09:45-10:15 REHAT
+  // Post-recess: Both cohorts resume together at 10:15
   const getMasterSlotHeaders = (day: DayOfWeek) => {
     if (day === 'JUMAAT') {
-      return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'TASMIK'];
+      return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9'];
     }
     if (day === 'ISNIN' || day === 'SELASA') {
-      return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'TASMIK'];
+      return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'TASMIK', 'TASMIK_T1'];
     }
     // RABU, KHAMIS
-    return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'TASMIK'];
+    return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'TASMIK'];
+  };
+
+  const getMasterSlotLabel = (slotKey: string) => {
+    switch (slotKey) {
+      case 'MEMBACA': return { title: 'Membaca', sub: '07:15 (T1)' };
+      case 'W1': return { title: 'W1', sub: '07:15 / 07:30' };
+      case 'W2': return { title: 'W2', sub: '07:45 / 08:00' };
+      case 'W3': return { title: 'W3', sub: '08:15 / 08:30' };
+      case 'W4': return { title: 'W4', sub: '08:45 / 09:00' };
+      case 'W5': return { title: 'W5', sub: '09:15 (T2–6)' };
+      case 'PKAR': return { title: 'PKAR', sub: '09:30 (T1)' };
+      case 'REHAT': return { title: 'REHAT', sub: '09:45–10:15' };
+      case 'W6': return { title: 'W6 / W5', sub: '10:15' };
+      case 'W7': return { title: 'W7 / W6', sub: '10:45' };
+      case 'W8': return { title: 'W8 / W7', sub: '11:15' };
+      case 'W9': return { title: 'W9 / W8', sub: '11:45' };
+      case 'W10': return { title: 'W10 / W9', sub: '12:15' };
+      case 'W11': return { title: 'W11 / W10', sub: '12:45' };
+      case 'TASMIK': return { title: 'TASMIK / W11', sub: '13:15' };
+      case 'TASMIK_T1': return { title: 'TASMIK (T1)', sub: '13:45' };
+      default: return { title: slotKey, sub: '' };
+    }
+  };
+
+  const getMasterTargetSlotId = (grade: number, slotKey: string, day: DayOfWeek): string | null => {
+    if (slotKey === 'MEMBACA') return grade === 1 ? 'MEMBACA' : null;
+    if (slotKey === 'PKAR') return grade === 1 ? 'PKAR' : null;
+    if (slotKey === 'REHAT') return 'REHAT';
+    if (slotKey === 'W1' || slotKey === 'W2' || slotKey === 'W3' || slotKey === 'W4') return slotKey;
+    if (slotKey === 'W5') return grade === 1 ? null : 'W5';
+
+    // Post-recess columns (10:15 onwards)
+    if (slotKey === 'W6') return grade === 1 ? 'W5' : 'W6';
+    if (slotKey === 'W7') return grade === 1 ? 'W6' : 'W7';
+    if (slotKey === 'W8') {
+      if (day === 'JUMAAT') {
+        if (grade === 2 || grade === 3) return 'TASMIK'; // T2-3 Jumaat 7 regular + Tasmik
+      }
+      return grade === 1 ? 'W7' : 'W8';
+    }
+    if (slotKey === 'W9') {
+      if (day === 'JUMAAT') {
+        if (grade === 1) return 'TASMIK'; // T1 Jumaat 7 regular + Tasmik
+        if (grade >= 4) return 'TASMIK';  // T4-6 Jumaat 8 regular + Tasmik
+        return null;
+      }
+      return grade === 1 ? 'W8' : 'W9';
+    }
+    if (slotKey === 'W10') return grade === 1 ? 'W9' : 'W10';
+    if (slotKey === 'W11') {
+      if (day === 'RABU' || day === 'KHAMIS') {
+        if (grade > 1) return 'TASMIK'; // T2-6 Rabu/Khamis 10 regular + Tasmik
+      }
+      return grade === 1 ? 'W10' : 'W11';
+    }
+    if (slotKey === 'TASMIK') {
+      if (day === 'ISNIN' || day === 'SELASA') {
+        return grade === 1 ? 'W11' : 'TASMIK'; // T2-6 Isnin/Selasa 11 regular + Tasmik
+      }
+      if (day === 'RABU' || day === 'KHAMIS') {
+        return grade === 1 ? 'TASMIK' : null;  // T1 Rabu/Khamis 10 regular + Tasmik
+      }
+      return null;
+    }
+    if (slotKey === 'TASMIK_T1') {
+      if (day === 'ISNIN' || day === 'SELASA') {
+        return grade === 1 ? 'TASMIK' : null;  // T1 Isnin/Selasa 11 regular + Tasmik (13:45)
+      }
+      return null;
+    }
+    return slotKey;
   };
 
   const daysToDisplay = activeDayFilter === 'ALL' ? DAYS_OF_WEEK : [activeDayFilter];
@@ -214,10 +358,10 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
               onChange={(e) => onYearChange?.(e.target.value)}
               className="bg-transparent text-white font-black text-xs outline-none cursor-pointer"
             >
-              <option value="2026" className="bg-slate-900 text-white">2026 / 2027</option>
-              <option value="2027" className="bg-slate-900 text-white">2027 / 2028</option>
-              <option value="2028" className="bg-slate-900 text-white">2028 / 2029</option>
-              <option value="2029" className="bg-slate-900 text-white">2029 / 2030</option>
+              <option value="2026" className="bg-slate-900 text-white">Sesi 2026</option>
+              <option value="2027" className="bg-slate-900 text-white">Sesi 2027</option>
+              <option value="2028" className="bg-slate-900 text-white">Sesi 2028</option>
+              <option value="2029" className="bg-slate-900 text-white">Sesi 2029</option>
             </select>
           </div>
 
@@ -343,16 +487,28 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                     <tr className="bg-slate-950 text-slate-300 font-black text-[11px] uppercase border-b border-slate-800 text-center">
                       <th className="py-2.5 px-3 text-left w-28">Kelas</th>
                       <th className="py-2.5 px-3 text-left w-36">Guru Kelas</th>
-                      {masterSlots.map((slotKey) => (
-                        <th
-                          key={slotKey}
-                          className={`py-2 px-1 border-l border-slate-800 ${
-                            slotKey === 'REHAT' ? 'bg-amber-950/40 text-amber-300 w-16' : 'w-20'
-                          }`}
-                        >
-                          <div className="font-bold text-slate-300">{slotKey}</div>
-                        </th>
-                      ))}
+                      {masterSlots.map((slotKey) => {
+                        const { title, sub } = getMasterSlotLabel(slotKey);
+                        return (
+                          <th
+                            key={slotKey}
+                            className={`py-2 px-1 border-l border-slate-800 ${
+                              slotKey === 'REHAT'
+                                ? 'bg-amber-950/40 text-amber-300 w-16'
+                                : slotKey === 'PKAR'
+                                ? 'bg-emerald-950/40 text-emerald-300 w-16'
+                                : 'w-20'
+                            }`}
+                          >
+                            <div className="font-bold text-slate-300">{title}</div>
+                            {sub && (
+                              <div className="text-[8px] font-mono text-slate-500 font-normal">
+                                {sub}
+                              </div>
+                            )}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800 font-mono">
@@ -386,8 +542,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                               );
                             }
 
-                            // For Grade 2-6: MEMBACA does not apply
-                            if (slotKey === 'MEMBACA' && grade !== 1) {
+                            const targetSlotId = getMasterTargetSlotId(grade, slotKey, day);
+                            if (!targetSlotId) {
                               return (
                                 <td
                                   key={slotKey}
@@ -398,20 +554,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                               );
                             }
 
-                            // On Friday: W8 only applies to Upper Primary (Grade 4-6)
-                            if (day === 'JUMAAT' && slotKey === 'W8' && grade < 4) {
-                              return (
-                                <td
-                                  key={slotKey}
-                                  className="py-2 px-1 text-center bg-slate-950/40 text-slate-700 font-bold text-[10px] border-l border-slate-800 select-none"
-                                >
-                                  -
-                                </td>
-                              );
-                            }
-
-                            const targetSlotId = slotKey;
                             const cell = schedule[grade]?.[day]?.[targetSlotId];
+                            const isCellDraggable = Boolean(cell) && targetSlotId !== 'REHAT' && !(day === 'SELASA' && targetSlotId === 'W1');
+                            const cellKey = `m_${grade}_${day}_${targetSlotId}`;
 
                             // Check collision
                             const hasClash = clashes.some(
@@ -425,9 +570,33 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                             return (
                               <td
                                 key={slotKey}
+                                draggable={isCellDraggable}
+                                onDragStart={(e) => {
+                                  if (!isCellDraggable) return;
+                                  setDragSource({ grade, day, slotId: targetSlotId });
+                                  e.dataTransfer.setData('application/timetable-cell', JSON.stringify({ grade, day, slotId: targetSlotId }));
+                                  e.dataTransfer.effectAllowed = 'move';
+                                }}
+                                onDragOver={(e) => {
+                                  if (slotKey !== 'REHAT' && !(day === 'SELASA' && targetSlotId === 'W1')) {
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = 'move';
+                                    if (dragOverCellKey !== cellKey) setDragOverCellKey(cellKey);
+                                  }
+                                }}
+                                onDragLeave={() => {
+                                  if (dragOverCellKey === cellKey) setDragOverCellKey(null);
+                                }}
+                                onDrop={(e) => {
+                                  handleCellDrop(grade, day, targetSlotId, e);
+                                }}
                                 onClick={() => handleOpenEdit(grade, day, targetSlotId)}
-                                className={`py-2 px-1 text-center border-l border-slate-800/80 transition cursor-pointer relative group ${
-                                  hasClash
+                                className={`py-2 px-1 text-center border-l border-slate-800/80 transition relative group ${
+                                  isCellDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+                                } ${
+                                  dragOverCellKey === cellKey
+                                    ? 'ring-2 ring-blue-400 bg-blue-900/40 z-10'
+                                    : hasClash
                                     ? 'bg-rose-950/70 ring-2 ring-rose-500'
                                     : cell
                                     ? targetSlotId === 'PKAR'
@@ -536,6 +705,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
 
                       const cell = schedule[selectedGrade]?.[day]?.[slot.slotId];
                       const isLocked = slot.isSpecialLocked || (day === 'SELASA' && slot.slotId === 'W1');
+                      const isCellDraggable = Boolean(cell) && !slot.isRecess && !isLocked;
+                      const cellKey = `s_${selectedGrade}_${day}_${slot.slotId}`;
                       
                       // Check if this slot has a clash
                       const hasClash = clashes.some(
@@ -549,9 +720,33 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                       return (
                         <td
                           key={slot.slotId}
+                          draggable={isCellDraggable}
+                          onDragStart={(e) => {
+                            if (!isCellDraggable) return;
+                            setDragSource({ grade: selectedGrade, day, slotId: slot.slotId });
+                            e.dataTransfer.setData('application/timetable-cell', JSON.stringify({ grade: selectedGrade, day, slotId: slot.slotId }));
+                            e.dataTransfer.effectAllowed = 'move';
+                          }}
+                          onDragOver={(e) => {
+                            if (!slot.isRecess && !isLocked) {
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = 'move';
+                              if (dragOverCellKey !== cellKey) setDragOverCellKey(cellKey);
+                            }
+                          }}
+                          onDragLeave={() => {
+                            if (dragOverCellKey === cellKey) setDragOverCellKey(null);
+                          }}
+                          onDrop={(e) => {
+                            handleCellDrop(selectedGrade, day, slot.slotId, e);
+                          }}
                           onClick={() => handleOpenEdit(selectedGrade, day, slot.slotId)}
-                          className={`py-2 px-1 text-center border-l border-slate-800/80 transition cursor-pointer relative group ${
-                            hasClash
+                          className={`py-2 px-1 text-center border-l border-slate-800/80 transition relative group ${
+                            isCellDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+                          } ${
+                            dragOverCellKey === cellKey
+                              ? 'ring-2 ring-blue-400 bg-blue-900/40 z-10'
+                              : hasClash
                               ? 'bg-rose-950/70 ring-2 ring-rose-500'
                               : cell
                               ? isLocked
@@ -616,6 +811,30 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
             </div>
 
             <div className="space-y-3 text-xs">
+              {(editingCell.slotId === 'TASMIK' || editSubjectCode === 'TASMIK') && (
+                <div className="p-3 rounded-2xl bg-emerald-950/50 border border-emerald-600/50 text-emerald-300 text-xs space-y-1">
+                  <div className="flex items-center gap-1.5 font-black text-emerald-200 uppercase tracking-wider text-[11px]">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>Slot Khas Tasmik (Gabung Kelas Disokong)</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-300/90 leading-relaxed font-sans">
+                    Waktu pascawaktu sekolah (100% susunan manual oleh Guru Besar/PKP). Ustaz/Ustazah boleh mengajar gabungan berbilang kelas secara serentak tanpa amaran pertembungan waktu. Waktu ini dikira secara automatik ke dalam beban mengajar mingguan.
+                  </p>
+                </div>
+              )}
+
+              {editingCell.slotId === 'MEMBACA' && (
+                <div className="p-3 rounded-2xl bg-indigo-950/50 border border-indigo-600/50 text-indigo-300 text-xs space-y-1">
+                  <div className="flex items-center gap-1.5 font-black text-indigo-200 uppercase tracking-wider text-[11px]">
+                    <CheckCircle2 className="w-4 h-4 text-indigo-400" />
+                    <span>Program Membaca Tahun 1 (07:15 – 07:30)</span>
+                  </div>
+                  <p className="text-[11px] text-indigo-300/90 leading-relaxed font-sans">
+                    Slot pagi khas sebelum loceng pertama. Dikosongkan secara lalai untuk susunan manual oleh pihak pentadbir.
+                  </p>
+                </div>
+              )}
+
               <div>
                 <label className="block text-slate-400 font-bold mb-1 uppercase text-[10px]">
                   Mata Pelajaran:
@@ -626,8 +845,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                   className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-bold outline-none focus:border-blue-500 cursor-pointer"
                 >
                   <option value="">-- Kosong / Tiada Subjek --</option>
+                  <option value="TASMIK">TASMIK - Program Tasmik Pascawaktu (Gabung Kelas)</option>
                   {editingCell.slotId === 'MEMBACA' && (
-                    <option value="MEMBACA">MEMBACA - Program Membaca (07:15 - 07:30)</option>
+                    <option value="MEMBACA">MEMBACA - Program Membaca Tahun 1 (07:15 - 07:30)</option>
                   )}
                   {editingCell.slotId === 'PKAR' && (
                     <option value="PKAR">PKAR - Program Pembentukan Karakter (Auto Pre-Recess)</option>

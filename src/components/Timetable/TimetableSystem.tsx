@@ -402,10 +402,10 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
               onChange={(e) => setSelectedYear(e.target.value)}
               className="bg-transparent text-white font-black text-xs outline-none cursor-pointer"
             >
-              <option value="2026" className="bg-slate-900 text-white">2026 / 2027</option>
-              <option value="2027" className="bg-slate-900 text-white">2027 / 2028</option>
-              <option value="2028" className="bg-slate-900 text-white">2028 / 2029</option>
-              <option value="2029" className="bg-slate-900 text-white">2029 / 2030</option>
+              <option value="2026" className="bg-slate-900 text-white">Sesi 2026</option>
+              <option value="2027" className="bg-slate-900 text-white">Sesi 2027</option>
+              <option value="2028" className="bg-slate-900 text-white">Sesi 2028</option>
+              <option value="2029" className="bg-slate-900 text-white">Sesi 2029</option>
             </select>
           </div>
 

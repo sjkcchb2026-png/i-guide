@@ -133,43 +133,54 @@ export function getSubjectBlockDistribution(subjectCode: string, totalPeriods: n
 }
 
 /**
- * Auto-pairs PKAR (0.5 period) for each grade and day to the teacher in the pre-recess period
- * (W5 on Mon-Thu, W4 on Friday). Updates dynamically during drag-and-drop or manual editing.
+ * Auto-pairs PKAR (0.5 period) ONLY for Year 1 (Tahun 1) to the teacher in the pre-recess period (W4, 09:00 - 09:30).
+ * PKAR is 09:30 - 09:45, followed by Recess at 09:45.
+ * Years 2 to 6 do NOT have PKAR (starts 07:15, W1-W5, recess at 09:45).
  */
 export function autoPairPKARInGrid(grid: ScheduleGrid): void {
-  [1, 2, 3, 4, 5, 6].forEach((grade) => {
-    DAYS_OF_WEEK.forEach((day) => {
-      const preRecessSlot = day === 'JUMAAT' ? 'W4' : 'W5';
-      const preRecessCell = grid[grade]?.[day]?.[preRecessSlot];
+  // PKAR 只有一年级。二到六年级没有。
+  const grade = 1;
+  DAYS_OF_WEEK.forEach((day) => {
+    // 一年级下课前最后一节正课是 W4 (09:00 - 09:30)，接 09:30 - 09:45 PKAR，09:45 下课
+    const preRecessSlot = 'W4';
+    const preRecessCell = grid[grade]?.[day]?.[preRecessSlot];
 
-      const pkarSlot = getGradeDaySlots(grade, day).find((s) => s.slotId === 'PKAR');
-      if (pkarSlot) {
-        if (!grid[grade]) grid[grade] = {} as any;
-        if (!grid[grade][day]) grid[grade][day] = {};
+    const pkarSlot = getGradeDaySlots(grade, day).find((s) => s.slotId === 'PKAR');
+    if (pkarSlot) {
+      if (!grid[grade]) grid[grade] = {} as any;
+      if (!grid[grade][day]) grid[grade][day] = {};
 
-        if (preRecessCell && preRecessCell.teacherCode && preRecessCell.teacherCode.trim() !== '') {
-          grid[grade][day]['PKAR'] = {
-            subjectId: 'pkar',
-            subjectCode: 'PKAR',
-            subjectName: 'Program Pembentukan Karakter (15 Min)',
-            teacherCode: preRecessCell.teacherCode,
-            teacherName: preRecessCell.teacherName,
-            periodLength: 0.5,
-            isLocked: false,
-            isAutoPKAR: true,
-          };
-        } else {
-          grid[grade][day]['PKAR'] = {
-            subjectId: 'pkar',
-            subjectCode: 'PKAR',
-            subjectName: 'Program Pembentukan Karakter (15 Min)',
-            teacherCode: '',
-            teacherName: '',
-            periodLength: 0.5,
-            isLocked: false,
-            isAutoPKAR: true,
-          };
-        }
+      if (preRecessCell && preRecessCell.teacherCode && preRecessCell.teacherCode.trim() !== '') {
+        grid[grade][day]['PKAR'] = {
+          subjectId: 'pkar',
+          subjectCode: 'PKAR',
+          subjectName: 'Program Pembentukan Karakter (15 Min)',
+          teacherCode: preRecessCell.teacherCode,
+          teacherName: preRecessCell.teacherName,
+          periodLength: 0.5,
+          isLocked: true,
+          isAutoPKAR: true,
+        };
+      } else {
+        grid[grade][day]['PKAR'] = {
+          subjectId: 'pkar',
+          subjectCode: 'PKAR',
+          subjectName: 'Program Pembentukan Karakter (15 Min)',
+          teacherCode: '',
+          teacherName: '',
+          periodLength: 0.5,
+          isLocked: true,
+          isAutoPKAR: true,
+        };
+      }
+    }
+  });
+
+  // 严格确保二到六年级完全没有 PKAR 记录
+  [2, 3, 4, 5, 6].forEach((g) => {
+    DAYS_OF_WEEK.forEach((d) => {
+      if (grid[g]?.[d]?.['PKAR']) {
+        delete grid[g][d]['PKAR'];
       }
     });
   });
@@ -202,6 +213,18 @@ export function createEmptyScheduleGrid(): ScheduleGrid {
             isLocked: false,
             isManualSlot: true,
           };
+        } else if (s.slotId === 'TASMIK') {
+          // Dedicated post-school manual slot left empty by default
+          grid[grade][day][s.slotId] = {
+            subjectId: `manual_tasmik_${grade}_${day}`,
+            subjectCode: 'TASMIK',
+            subjectName: 'Slot Khas Tasmik (Selepas Sekolah)',
+            teacherCode: '',
+            teacherName: 'Klik untuk pilih Ustaz/Ustazah',
+            periodLength: 1,
+            isLocked: false,
+            isManualSlot: true,
+          };
         } else {
           grid[grade][day][s.slotId] = null;
         }
@@ -210,6 +233,7 @@ export function createEmptyScheduleGrid(): ScheduleGrid {
   });
   return grid;
 }
+
 
 /**
  * Scans the schedule grid and detects any teacher minute-overlap clashes
@@ -647,8 +671,34 @@ export function generateAutoSchedule(
     });
   });
 
-  // Sort queue by priority, then double blocks first
-  blocks.sort((a, b) => a.priority - b.priority || b.length - a.length);
+  // 1. Calculate global teacher workloads from matrix to enforce Heaviest-Workload Teacher First
+  const teacherTotalWorkload = new Map<string, number>();
+  cleanMatrix.forEach((r) => {
+    [1, 2, 3, 4, 5, 6].forEach((g) => {
+      const p = Number(r.periods[g] || 0);
+      const t1 = r.teachers[g];
+      if (t1 && p > 0) {
+        teacherTotalWorkload.set(t1, (teacherTotalWorkload.get(t1) || 0) + p);
+      }
+      const t2 = r.secondaryTeachers?.[g];
+      if (t2 && p > 0) {
+        teacherTotalWorkload.set(t2, (teacherTotalWorkload.get(t2) || 0) + p);
+      }
+    });
+  });
+
+  // Sort queue by priority first (constrained subjects like PM/PAI, AM, PJ), then Heaviest-Workload Teacher First, then double blocks first
+  blocks.sort((a, b) => {
+    if (a.priority !== b.priority) {
+      return a.priority - b.priority;
+    }
+    const loadA = teacherTotalWorkload.get(a.teacherCode) || 0;
+    const loadB = teacherTotalWorkload.get(b.teacherCode) || 0;
+    if (loadB !== loadA) {
+      return loadB - loadA; // Heaviest-Workload Teacher First!
+    }
+    return b.length - a.length;
+  });
 
   // Track subject day frequency to ensure healthy distribution
   const gradeSubjectDays = new Map<string, number>();
@@ -834,32 +884,10 @@ export function generateAutoSchedule(
   }
 
   // --------------------------------------------------------------------------
-  // STEP 4: PROGRAM TASMIK (POST-SCHOOL ON WED, THU, FRI — GABUNG KELAS ALLOWED)
+  // STEP 4: PROGRAM TASMIK (100% MANUAL POST-DISMISSAL ARRANGEMENT)
+  // Completely excluded from automated scheduling; Slot Khas Tasmik is seeded
+  // empty for manual click-assignment by Principal/PKP.
   // --------------------------------------------------------------------------
-  const tasmikRow = cleanMatrix.find((r) => r.subjectCode.toUpperCase() === 'TASMIK');
-  if (tasmikRow) {
-    [1, 2, 3, 4, 5, 6].forEach((grade) => {
-      const pCount = Number(tasmikRow.periods[grade] || 0);
-      if (pCount <= 0) return;
-      const teacher = tasmikRow.teachers[grade] || 'MFA';
-
-      // Schedule on Wednesday & Thursday post-school (e.g. W10 or W11)
-      const targetDays: DayOfWeek[] = ['RABU', 'KHAMIS'];
-      targetDays.slice(0, pCount).forEach((day) => {
-        const slots = getGradeDaySlots(grade, day);
-        // Find the last slot of the day
-        const lastSlot = slots[slots.length - 1];
-        if (lastSlot && grid[grade][day][lastSlot.slotId] === null) {
-          bookSlots(grade, day, [lastSlot], {
-            subjectId: `tasmik_${grade}_${day}`,
-            subjectCode: 'TASMIK',
-            subjectName: 'PROGRAM TASMIK (SELEPAS SEKOLAH)',
-            teacherCode: teacher,
-          });
-        }
-      });
-    });
-  }
 
   // --------------------------------------------------------------------------
   // STEP 5: GUARANTEED ZERO-GAP COMPACTION (不允许中间有空节)
@@ -926,7 +954,7 @@ export function generateAutoSchedule(
     for (let g = 1; g <= 6; g++) {
       for (const day of DAYS_OF_WEEK) {
         const slots = getGradeDaySlots(g, day);
-        const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 600 && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA');
+        const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 585 && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA');
         const aSlots = slots.filter((s) => !s.isRecess && s.startMinutes >= 615 && s.slotId !== 'PKAR' && s.slotId !== 'TASMIK');
         const anyAfternoon = aSlots.some((s) => grid[g][day][s.slotId] !== null);
 
@@ -958,7 +986,7 @@ export function generateAutoSchedule(
     for (const gap of gaps) {
       const { grade, day, slot, session } = gap;
       const slots = getGradeDaySlots(grade, day);
-      const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 600 && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA');
+      const mSlots = slots.filter((s) => !s.isRecess && s.endMinutes <= 585 && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA');
       const aSlots = slots.filter((s) => !s.isRecess && s.startMinutes >= 615 && s.slotId !== 'PKAR' && s.slotId !== 'TASMIK');
 
       // Strategy 1: Shift later lesson from same day into gap

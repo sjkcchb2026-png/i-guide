@@ -268,7 +268,8 @@ assert(
 assert(
   '5C: PKAR teacher matches the teacher of the period immediately before recess',
   autoPkarLessons.every((pkar) => {
-    const prePeriod = pkar.day === 'JUMAAT' ? 4 : 5;
+    // Year 1 starts at 07:30 daily, so period 4 (09:00-09:30) is the period immediately before PKAR (09:30-09:45) & Recess (09:45)
+    const prePeriod = 4;
     const preLesson = autoPairResult.lessons.find(
       (l) => l.classId === pkar.classId && l.day === pkar.day && l.periodNumber === prePeriod && !l.isPemulihan && l.countsAsClassPeriod
     );
