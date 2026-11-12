@@ -111,6 +111,55 @@ export function isPKARSubject(code?: string, name?: string): boolean {
 }
 
 // --------------------------------------------------------------------------
+// 1B. 真实时钟重叠检测器与连堂课寻优评分函数
+// --------------------------------------------------------------------------
+export interface TimeInterval {
+  day: string;
+  startMinutes: number; // 例如 11:45 = 11 * 60 + 45 = 705
+  endMinutes: number;   // 例如 12:15 = 12 * 60 + 15 = 735
+  classId: string;
+  subjectCode: string;
+}
+
+export function isTeacherBusyInTimeRange(
+  teacherIntervals: TimeInterval[],
+  day: string,
+  targetStartMin: number,
+  targetEndMin: number,
+  candidateSubjectCode: string
+): boolean {
+  for (const interval of teacherIntervals) {
+    if (interval.day !== day) continue;
+
+    // 判断两个时间段是否存在重叠: max(start1, start2) < min(end1, end2)
+    const hasOverlap =
+      Math.max(interval.startMinutes, targetStartMin) <
+      Math.min(interval.endMinutes, targetEndMin);
+
+    if (hasOverlap) {
+      // 特例豁免：如果是放学后的 TASMIK，允许同一位宗教老师跨班合班 (Gabung Kelas)
+      if ((interval.subjectCode === 'TASMIK' || interval.subjectCode === 'TAS') && 
+          (candidateSubjectCode === 'TASMIK' || candidateSubjectCode === 'TAS')) {
+        continue;
+      }
+      return true; // 存在时间重叠，严禁排入！
+    }
+  }
+  return false;
+}
+
+// 连堂课寻优评分函数：优先不跨下课，迫不得已时允许跨下课 (P5 -> Rehat -> P6)
+export function scoreDoubleSlotCandidate(
+  p1: number,
+  p2: number,
+  recessAfterPeriod: number = 5
+): number {
+  const crossesRecess = p1 === recessAfterPeriod && p2 === recessAfterPeriod + 1;
+  // 不跨下课得 100 分（优先采用）；跨下课扣 60 分（得 40 分，仅在无其他空位时作为次选保底）
+  return crossesRecess ? 40 : 100;
+}
+
+// --------------------------------------------------------------------------
 // 2. 体育课 PJ 候选配置
 // --------------------------------------------------------------------------
 export const validPJ3DayTriplets: Array<[string, string, string]> = [
@@ -127,10 +176,10 @@ export const validPJ2DayPairs: Array<[string, string]> = [
   ['SELASA', 'JUMAAT'],          // 星期 2, 5
 ];
 
-// 每个交易日在上午下课前可排 PJ 的节次（避开周二第1节周会，每日严禁排超过1节）
+// 每个交易日在上午下课前可排 PJ 的节次（避开周三第1节周会，每日严禁排超过1节）
 export const getMorningPJCandidates = (day: string): number[] => {
-  if (day === 'SELASA') {
-    return [2, 3, 4]; // 避开周二第1节周会
+  if (day === 'RABU' || day === 'SELASA') {
+    return [2, 3, 4]; // 避开第1节周会
   }
   return [1, 2, 3, 4];
 };
@@ -188,8 +237,8 @@ export function isTimetableConflict(
   // 如果是同一个老师，且科目都是 TASMIK（例如同时带 一年级 和 二年级 Tasmik）
   if (
     existingLesson.teacherId === newLessonCandidate.teacherId &&
-    existingLesson.subjectCode === 'TASMIK' &&
-    newLessonCandidate.subjectCode === 'TASMIK' &&
+    (existingLesson.subjectCode === 'TASMIK' || existingLesson.subjectCode === 'TAS') &&
+    (newLessonCandidate.subjectCode === 'TASMIK' || newLessonCandidate.subjectCode === 'TAS') &&
     existingLesson.day === newLessonCandidate.day &&
     existingLesson.periodNumber === newLessonCandidate.periodNumber
   ) {
@@ -201,18 +250,27 @@ export function isTimetableConflict(
   if (
     existingLesson.day === newLessonCandidate.day &&
     existingLesson.periodNumber === newLessonCandidate.periodNumber &&
-    (existingLesson.id === newLessonCandidate.parentTimetableSlotId ||
-      newLessonCandidate.id === existingLesson.parentTimetableSlotId)
+    ((existingLesson.id && existingLesson.id === newLessonCandidate.parentTimetableSlotId) ||
+      (newLessonCandidate.id && newLessonCandidate.id === existingLesson.parentTimetableSlotId))
   ) {
     return false;
   }
 
-  // 其余普通教学槽位正常拦截
-  return (
+  // 时钟区间重叠校验：若包含真实 startMinutes / endMinutes，按真实时钟判定
+  if (
     existingLesson.teacherId === newLessonCandidate.teacherId &&
-    existingLesson.day === newLessonCandidate.day &&
-    existingLesson.periodNumber === newLessonCandidate.periodNumber
-  );
+    existingLesson.day === newLessonCandidate.day
+  ) {
+    if (existingLesson.startMinutes !== undefined && newLessonCandidate.startMinutes !== undefined) {
+      return (
+        Math.max(existingLesson.startMinutes, newLessonCandidate.startMinutes) <
+        Math.min(existingLesson.endMinutes, newLessonCandidate.endMinutes)
+      );
+    }
+    return existingLesson.periodNumber === newLessonCandidate.periodNumber;
+  }
+
+  return false;
 }
 
 // --------------------------------------------------------------------------
@@ -333,17 +391,18 @@ export function runTimetableEngine(params: {
   );
 
   // --------------------------------------------------------------------------
-  // 1. 周会 (PN) 全员参与，所有在职教师自动 +1 节工作量 (SELASA Period 1)
+  // 1. 周会 (PN) 全员参与，所有在职教师自动 +1 节工作量 (RABU Period 1)
   // --------------------------------------------------------------------------
+  const assemblyDay = 'RABU';
   nonPrasekolahClasses.forEach((cls) => {
-    const classKey = `${cls.classId}_SELASA_1`;
+    const classKey = `${cls.classId}_${assemblyDay}_1`;
     classSlotOccupied.add(classKey);
-    recordSubjectPeriod(cls.classId, 'PN', 'SELASA', 1);
+    recordSubjectPeriod(cls.classId, 'PN', assemblyDay, 1);
 
     // 登记班级周会节次
     lessons.push({
-      id: `pn_${cls.classId}_SELASA_P1`,
-      day: 'SELASA',
+      id: `pn_${cls.classId}_${assemblyDay}_P1`,
+      day: assemblyDay,
       periodNumber: 1,
       classId: cls.classId,
       className: cls.className,
@@ -357,15 +416,15 @@ export function runTimetableEngine(params: {
     });
   });
 
-  // 为全校所有在职老师在周二第 1 节锁定槽位，并计入真实教学工作量 (+1)
+  // 为全校所有在职老师在周三第 1 节锁定槽位，并计入真实教学工作量 (+1)
   teachers.forEach((t) => {
-    teacherSlotOccupied.add(`${t.teacherId}_SELASA_1`);
-    incTeacherDayCount(t.teacherId, 'SELASA'); // 老师周二工作量计入 1 节
-    addTeacherPeriodOnDay(t.teacherId, 'SELASA', 1);
+    teacherSlotOccupied.add(`${t.teacherId}_${assemblyDay}_1`);
+    incTeacherDayCount(t.teacherId, assemblyDay); // 老师工作量计入 1 节
+    addTeacherPeriodOnDay(t.teacherId, assemblyDay, 1);
 
     lessons.push({
-      id: `pn_workload_${t.teacherId}_SELASA_P1`,
-      day: 'SELASA',
+      id: `pn_workload_${t.teacherId}_${assemblyDay}_P1`,
+      day: assemblyDay,
       periodNumber: 1,
       classId: 'ALL_CLASSES',
       className: 'Perhimpunan',

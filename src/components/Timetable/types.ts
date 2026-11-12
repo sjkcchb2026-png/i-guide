@@ -29,6 +29,8 @@ export interface TimetableCell {
   isLocked?: boolean;   // Monday W1 PN or daily 09:30 PKAR
   hasClash?: boolean;   // flagged if teacher double-booked across grades
   clashDetails?: string;
+  isPemulihan?: boolean; // Flagged if Pemulihan (PBM / PMT) attaches to mainstream BM/MT
+  pemulihanTeacherCode?: string;
 }
 
 // Full timetable store: [grade: 1-6][day: DayOfWeek][slotId: string] => TimetableCell

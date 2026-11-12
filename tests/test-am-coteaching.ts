@@ -118,8 +118,10 @@ console.log(`  - Generated auto schedule with ${Object.keys(autoResult.grid).len
 
 // Verify Year 1 contains AM slots with both teachers
 let amSlotCount = 0;
-['ISNIN', 'SELASA', 'RABU', 'KHAMIS', 'JUMAAT'].forEach((day) => {
-  Object.values(autoResult.grid[1][day]).forEach((cell) => {
+(['ISNIN', 'SELASA', 'RABU', 'KHAMIS', 'JUMAAT'] as const).forEach((day) => {
+  const daySchedule = autoResult.grid[1][day];
+  if (!daySchedule) return;
+  Object.values(daySchedule).forEach((cell: any) => {
     if (cell && cell.subjectCode === 'AM') {
       amSlotCount++;
       if (!cell.teacherCode.includes('/')) {

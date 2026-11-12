@@ -497,6 +497,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             matrixData={matrixData}
             displayMode={displayMode}
             teacherMapping={teacherMapping}
+            onUpdateSchedule={handleUpdateSchedule}
           />
         )}
 

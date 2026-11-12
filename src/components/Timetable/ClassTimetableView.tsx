@@ -17,6 +17,7 @@ interface ClassTimetableViewProps {
   matrixData: SubjectAllocationRow[];
   displayMode: 'NUMBER' | 'CODE';
   teacherMapping: { list: Array<{ id: string; num: number; code: string; name: string }> };
+  onUpdateSchedule?: (newSchedule: ScheduleGrid) => void;
 }
 
 export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
@@ -28,6 +29,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   matrixData,
   displayMode,
   teacherMapping,
+  onUpdateSchedule,
 }) => {
   const [selectedGrade, setSelectedGrade] = useState<number>(1);
 
@@ -179,22 +181,48 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                       }
 
                       const cell = schedule[selectedGrade]?.[day]?.[slot.slotId];
+                      const isBmOrMt = cell && (cell.subjectCode.toUpperCase() === 'BM' || cell.subjectCode.toUpperCase() === 'MT');
+
+                      const handleCellClick = () => {
+                        if (isBmOrMt && onUpdateSchedule) {
+                          const newSchedule = JSON.parse(JSON.stringify(schedule)) as ScheduleGrid;
+                          const target = newSchedule[selectedGrade]?.[day]?.[slot.slotId];
+                          if (target) {
+                            target.isPemulihan = !target.isPemulihan;
+                            onUpdateSchedule(newSchedule);
+                          }
+                        }
+                      };
 
                       return (
                         <td
                           key={slot.slotId}
-                          className={`p-2 border border-slate-400 ${
-                            cell ? 'bg-blue-50/60' : ''
-                          }`}
+                          onClick={handleCellClick}
+                          title={isBmOrMt ? 'Klik untuk aktifkan / nyahaktifkan lampiran Pemulihan Khas (PBM / PMT)' : undefined}
+                          className={`p-2 border border-slate-400 transition ${
+                            cell ? (cell.isPemulihan ? 'bg-emerald-50/80 ring-2 ring-emerald-500/50' : 'bg-blue-50/60') : ''
+                          } ${isBmOrMt ? 'cursor-pointer hover:bg-emerald-100/60' : ''}`}
                         >
                           {cell ? (
                             <div className="space-y-0.5">
-                              <div className="font-sans font-black text-sm text-slate-900">
+                              <div className="font-sans font-black text-sm text-slate-900 flex items-center justify-center gap-1">
                                 {cell.subjectCode}
+                                {cell.isCoTeaching && (
+                                  <span className="text-[9px] text-purple-600 font-bold">(Co)</span>
+                                )}
                               </div>
-                              <div className="text-[10px] font-bold text-blue-700">
-                                {getTeacherDisplay(cell.teacherCode)}
-                              </div>
+                              {cell.subjectCode !== 'PN' && (
+                                <div className="text-[10px] font-bold text-blue-700">
+                                  {getTeacherDisplay(cell.teacherCode)}
+                                </div>
+                              )}
+                              {cell.isPemulihan && (
+                                <div className="pt-0.5">
+                                  <span className="inline-block px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-emerald-600 text-white shadow-xs">
+                                    {cell.subjectCode === 'BM' ? 'PBM' : 'PMT'} PEMULIHAN
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <span className="text-slate-300">-</span>

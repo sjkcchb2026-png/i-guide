@@ -161,22 +161,22 @@ const result = runTimetableEngine({
   academicYear: '2027',
 });
 
-// Verify PN lessons generated for classes on Tuesday (SELASA) Period 1
+// Verify PN lessons generated for classes on Wednesday (RABU) Period 1
 const pnClassLessons = result.lessons.filter((l) => l.isPN && l.countsAsClassPeriod);
 assert(
-  '1A: Class PN lessons scheduled on SELASA Period 1 for all non-prasekolah classes',
+  '1A: Class PN lessons scheduled on RABU Period 1 for all non-prasekolah classes',
   pnClassLessons.length === mockClasses.length &&
-  pnClassLessons.every((l) => l.day === 'SELASA' && l.periodNumber === 1 && l.subjectCode === 'PN')
+  pnClassLessons.every((l) => l.day === 'RABU' && l.periodNumber === 1 && l.subjectCode === 'PN')
 );
 
-// Verify PN workload lessons generated for every teacher on Tuesday (SELASA) Period 1 (+1 period)
+// Verify PN workload lessons generated for every teacher on Wednesday (RABU) Period 1 (+1 period)
 const pnTeacherWorkloadLessons = result.lessons.filter(
   (l) => l.isPN && l.countsAsTeacherPeriod && !l.countsAsClassPeriod
 );
 assert(
-  '1B: All active teachers have PN workload lesson on SELASA Period 1 (+1 teaching workload)',
+  '1B: All active teachers have PN workload lesson on RABU Period 1 (+1 teaching workload)',
   pnTeacherWorkloadLessons.length === mockTeachers.length &&
-  pnTeacherWorkloadLessons.every((l) => l.day === 'SELASA' && l.periodNumber === 1 && l.countsAsTeacherPeriod === true)
+  pnTeacherWorkloadLessons.every((l) => l.day === 'RABU' && l.periodNumber === 1 && l.countsAsTeacherPeriod === true)
 );
 
 // --------------------------------------------------------------------------

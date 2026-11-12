@@ -58,6 +58,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
 
   const [editSubjectCode, setEditSubjectCode] = useState<string>('');
   const [editTeacherCode, setEditTeacherCode] = useState<string>('');
+  const [editIsPemulihan, setEditIsPemulihan] = useState<boolean>(false);
 
   const isKP = (g: number) => {
     const yr = parseInt(academicYear, 10) || 2027;
@@ -71,6 +72,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     setEditingCell({ grade, day, slotId, current });
     setEditSubjectCode(current?.subjectCode || '');
     setEditTeacherCode(current?.teacherCode || '');
+    setEditIsPemulihan(current?.isPemulihan || false);
   };
 
   const handleSaveCell = () => {
@@ -78,6 +80,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     const { grade, day, slotId } = editingCell;
 
     const matchedRow = matrixData.find((r) => r.subjectCode === editSubjectCode);
+    const isBmOrMt = editSubjectCode === 'BM' || editSubjectCode === 'MT';
     const newCell: TimetableCell | null = editSubjectCode
       ? {
           subjectId: matchedRow?.id || editSubjectCode.toLowerCase(),
@@ -85,6 +88,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
           subjectName: matchedRow?.subjectName || editSubjectCode,
           teacherCode: editTeacherCode,
           periodLength: slotId === 'PKAR' ? 0.5 : 1,
+          isPemulihan: isBmOrMt ? editIsPemulihan : false,
         }
       : null;
 
@@ -407,12 +411,24 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                               >
                                 {cell ? (
                                   <div className="space-y-0.5">
-                                    <div className="font-sans font-black text-xs text-white">
+                                    <div className="font-sans font-black text-xs text-white flex items-center justify-center gap-1">
                                       {cell.subjectCode}
+                                      {cell.isCoTeaching && (
+                                        <span className="text-[8px] text-purple-400 font-bold">(Co)</span>
+                                      )}
                                     </div>
-                                    <div className="text-[10px] font-bold text-blue-300">
-                                      {teacherLabel}
-                                    </div>
+                                    {cell.subjectCode !== 'PN' && (
+                                      <div className="text-[10px] font-bold text-blue-300">
+                                        {teacherLabel}
+                                      </div>
+                                    )}
+                                    {cell.isPemulihan && (
+                                      <div>
+                                        <span className="inline-block px-1 py-0.2 rounded text-[7px] font-black uppercase tracking-tight bg-emerald-600 text-white">
+                                          {cell.subjectCode === 'BM' ? 'PBM' : 'PMT'}
+                                        </span>
+                                      </div>
+                                    )}
                                   </div>
                                 ) : (
                                   <span className="text-slate-600 text-xs">-</span>
@@ -515,12 +531,24 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                         >
                           {cell ? (
                             <div className="space-y-0.5">
-                              <div className="font-sans font-black text-xs text-white">
+                              <div className="font-sans font-black text-xs text-white flex items-center justify-center gap-1">
                                 {cell.subjectCode}
+                                {cell.isCoTeaching && (
+                                  <span className="text-[8px] text-purple-400 font-bold">(Co)</span>
+                                )}
                               </div>
-                              <div className="text-[10px] font-bold text-blue-300">
-                                {teacherLabel}
-                              </div>
+                              {cell.subjectCode !== 'PN' && (
+                                <div className="text-[10px] font-bold text-blue-300">
+                                  {teacherLabel}
+                                </div>
+                              )}
+                              {cell.isPemulihan && (
+                                <div>
+                                  <span className="inline-block px-1 py-0.2 rounded text-[7px] font-black uppercase tracking-tight bg-emerald-600 text-white">
+                                    {cell.subjectCode === 'BM' ? 'PBM' : 'PMT'} PEMULIHAN
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <span className="text-slate-600 text-xs">-</span>
@@ -592,6 +620,25 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                   ))}
                 </select>
               </div>
+
+              {(editSubjectCode.toUpperCase() === 'BM' || editSubjectCode.toUpperCase() === 'MT') && (
+                <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-800/60 text-emerald-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={editIsPemulihan}
+                    onChange={(e) => setEditIsPemulihan(e.target.checked)}
+                    className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 bg-slate-900 border-slate-700 cursor-pointer"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-white block">
+                      Lampirkan Pemulihan Khas ({editSubjectCode.toUpperCase() === 'BM' ? 'PBM' : 'PMT'})
+                    </span>
+                    <span className="text-[10px] text-emerald-400/80">
+                      Murid pemulihan ditarik keluar semasa waktu mata pelajaran ini
+                    </span>
+                  </div>
+                </label>
+              )}
             </div>
 
             <div className="flex items-center justify-between pt-3 border-t border-slate-800 gap-2">

@@ -194,9 +194,11 @@ export const JUtamaView: React.FC<JUtamaViewProps> = ({
                                     <div className="font-black text-slate-900 text-xs font-sans">
                                       {cell.subjectCode}
                                     </div>
-                                    <div className="text-[10px] text-blue-700 font-bold">
-                                      {getTeacherLabel(cell.teacherCode)}
-                                    </div>
+                                    {cell.subjectCode !== 'PN' && (
+                                      <div className="text-[10px] text-blue-700 font-bold">
+                                        {getTeacherLabel(cell.teacherCode)}
+                                      </div>
+                                    )}
                                   </div>
                                 ) : (
                                   <span className="text-slate-300">-</span>
