@@ -765,8 +765,9 @@ export function generateAutoSchedule(
             subjectCode: block.subjectCode,
             subjectName: block.subjectName,
             teacherCode: block.teacherCode,
-            secondaryTeacherCode: block.secondaryTeacherCode,
-            isCoTeaching: Boolean(block.secondaryTeacherCode),
+            ...(block.secondaryTeacherCode
+              ? { secondaryTeacherCode: block.secondaryTeacherCode, isCoTeaching: true }
+              : {}),
           });
 
           incGradeSubjectDay(block.grade, block.subjectCode, day);
@@ -850,8 +851,9 @@ export function generateAutoSchedule(
               subjectCode: block.subjectCode,
               subjectName: block.subjectName,
               teacherCode: block.teacherCode,
-              secondaryTeacherCode: block.secondaryTeacherCode,
-              isCoTeaching: Boolean(block.secondaryTeacherCode),
+              ...(block.secondaryTeacherCode
+                ? { secondaryTeacherCode: block.secondaryTeacherCode, isCoTeaching: true }
+                : {}),
             });
             incGradeSubjectDay(block.grade, block.subjectCode, day);
             placed = true;
@@ -1061,5 +1063,8 @@ export function generateAutoSchedule(
 
   const clashes = detectScheduleClashes(grid);
 
-  return { grid, clashes, unplaced: unplacedBlocks };
+  // Deep sanitize grid to ensure 100% compatibility with Firestore setDoc
+  const sanitizedGrid: ScheduleGrid = JSON.parse(JSON.stringify(grid));
+
+  return { grid: sanitizedGrid, clashes, unplaced: unplacedBlocks };
 }

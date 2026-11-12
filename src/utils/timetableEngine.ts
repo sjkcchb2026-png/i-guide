@@ -118,36 +118,37 @@ export function isPKARSubject(code?: string, name?: string): boolean {
 // 1A. 每日正课节数配置与特色项目配置 (KP2027 & KSSR)
 // --------------------------------------------------------------------------
 // 1. 根据星期与年级 (level: 1~6) 动态返回正课节数与放学后 Tasmik 专属格位置
-export function getDayPeriodConfig(day: string, classLevel: number = 1) {
+export function getDayPeriodConfig(day: string, classLevel: number = 2) {
+  const isT1 = classLevel === 1;
   const isUpperPrimary = classLevel >= 4; // 四年级至六年级 (Tahun 4 - 6)
 
   switch (day.toUpperCase()) {
     case 'ISNIN':
     case 'SELASA':
       return {
-        teachingPeriods: 11,
-        preRecessPeriod: 5,
-        tasmikManualPeriod: 12,
+        teachingPeriods: isT1 ? 10 : 11,
+        preRecessPeriod: isT1 ? 4 : 5,
+        tasmikManualPeriod: isT1 ? 11 : 12,
       };
     case 'RABU':
     case 'KHAMIS':
       return {
-        teachingPeriods: 10,
-        preRecessPeriod: 5,
-        tasmikManualPeriod: 11,
+        teachingPeriods: isT1 ? 9 : 10,
+        preRecessPeriod: isT1 ? 4 : 5,
+        tasmikManualPeriod: isT1 ? 10 : 11,
       };
     case 'JUMAAT':
       return {
-        // 星期五：一至三年级 7 节课，四至六年级 8 节课
+        // 星期五：一年级 7 节课，二至三年级 7 节课，四至六年级 8 节课
         teachingPeriods: isUpperPrimary ? 8 : 7,
-        preRecessPeriod: 5,
-        tasmikManualPeriod: isUpperPrimary ? 9 : 8,
+        preRecessPeriod: isT1 ? 4 : 5,
+        tasmikManualPeriod: isT1 ? 8 : (isUpperPrimary ? 9 : 8),
       };
     default:
       return {
-        teachingPeriods: 10,
-        preRecessPeriod: 5,
-        tasmikManualPeriod: 11,
+        teachingPeriods: isT1 ? 9 : 10,
+        preRecessPeriod: isT1 ? 4 : 5,
+        tasmikManualPeriod: isT1 ? 10 : 11,
       };
   }
 }
@@ -217,8 +218,8 @@ export function seedManualTasmikSlots(classes: any[], days: string[], lessons: a
             ? '12:15 - 12:45'
             : '11:45 - 12:15'
           : day === 'ISNIN' || day === 'SELASA'
-          ? '13:45 - 14:15'
-          : '13:15 - 13:45';
+          ? '13:15 - 13:45'
+          : '12:45 - 13:15';
 
       lessons.push({
         id: `manual_tasmik_${cls.classId}_${day}_P${tasmikManualPeriod}`,

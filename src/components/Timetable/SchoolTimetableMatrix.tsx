@@ -680,16 +680,15 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     try {
       setSaveStatus('Menyimpan ke pangkalan data...');
       const targetDoc = doc(db, 'school_timetables', `matrix_${selectedYear}`);
-      await setDoc(
-        targetDoc,
-        {
+      const payload = JSON.parse(
+        JSON.stringify({
           academicYear: selectedYear,
           matrixData,
           classTeachers,
           updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
+        })
       );
+      await setDoc(targetDoc, payload, { merge: true });
 
       setSaveStatus('Tersimpan dengan jayanya!');
       setTimeout(() => setSaveStatus(null), 3000);
@@ -1060,7 +1059,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                         {gradeTotalPeriods[g]} Waktu {g === 1 ? ' (+2.5 PKAR)' : ''}
                       </div>
                       <div className="text-[10px] font-sans text-slate-300 font-bold mt-0.5">
-                        Sasaran: {g === 1 ? '49 (+2.5 PKAR)' : g <= 3 ? '49' : '50'} Waktu
+                        Sasaran: {g === 1 ? '45 (+2.5 PKAR)' : g <= 3 ? '49' : '50'} Waktu
                       </div>
                       <div className="text-[9px] font-sans text-slate-500 font-normal">
                         (Tasmik: Slot Khas Pascawaktu)

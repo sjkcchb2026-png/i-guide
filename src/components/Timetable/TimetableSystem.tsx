@@ -238,16 +238,17 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
 
       // Persist generated schedule to Firestore
       const scheduleDocRef = doc(db, 'school_timetables', `schedule_${selectedYear}`);
-      setDoc(
-        scheduleDocRef,
-        {
+      const payload = JSON.parse(
+        JSON.stringify({
           academicYear: selectedYear,
           schedule: grid,
           classTeachers: currentClassTeachers,
           updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      ).catch((err) => console.warn('Auto-save schedule notice:', err));
+        })
+      );
+      setDoc(scheduleDocRef, payload, { merge: true }).catch((err) =>
+        console.warn('Auto-save schedule notice:', err)
+      );
 
       if (unplaced.length > 0) {
         setSaveStatus(`Jadual waktu berjaya dijana! (${unplaced.length} waktu memerlukan pelarasan manual)`);
@@ -267,16 +268,15 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     try {
       setSaveStatus('Menyimpan jadual ke pangkalan data...');
       const scheduleDocRef = doc(db, 'school_timetables', `schedule_${selectedYear}`);
-      await setDoc(
-        scheduleDocRef,
-        {
+      const payload = JSON.parse(
+        JSON.stringify({
           academicYear: selectedYear,
           schedule,
           classTeachers,
           updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
+        })
       );
+      await setDoc(scheduleDocRef, payload, { merge: true });
       setSaveStatus('Jadual Waktu tersimpan dengan jayanya!');
       setTimeout(() => setSaveStatus(null), 3000);
     } catch (err: any) {

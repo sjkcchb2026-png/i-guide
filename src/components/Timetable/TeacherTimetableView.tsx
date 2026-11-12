@@ -68,13 +68,14 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
           if (cell && isAssigned) {
             // Find slot key
             let slotKey = gs.slotId;
-            // Map T1 W5 (which is 10:15-10:45) to reference W6
+            // Map T1 W5 (which is 10:15-10:45) to reference W6, up to W10 -> W11
             if (grade === 1) {
               if (gs.slotId === 'W5') slotKey = 'W6';
               else if (gs.slotId === 'W6') slotKey = 'W7';
               else if (gs.slotId === 'W7') slotKey = 'W8';
               else if (gs.slotId === 'W8') slotKey = 'W9';
               else if (gs.slotId === 'W9') slotKey = 'W10';
+              else if (gs.slotId === 'W10') slotKey = 'W11';
             }
 
             let subjCode = cell.subjectCode;

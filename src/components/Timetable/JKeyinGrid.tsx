@@ -230,16 +230,22 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
   // Pre-recess: 
   // Year 1 (KP2027): 07:15 Membaca, 07:30-09:30 W1-W4, 09:30-09:45 PKAR (0.5w), 09:45-10:15 REHAT
   // Years 2-6 (KSSR): 07:15-09:45 W1-W5 (5w, no PKAR), 09:45-10:15 REHAT
-  // Post-recess: Both cohorts resume together at 10:15
+  // Master Table Dual-Bell Period Alignment:
+  // Year 1 (KP2027): 07:15 Membaca, 07:30-09:30 W1-W4, 09:30-09:45 PKAR (0.5w), 09:45-10:15 REHAT
+  // Years 2-6 (KSSR): 07:15-09:45 W1-W5 (5w, no PKAR), 09:45-10:15 REHAT
+  // Post-recess:
+  // Mon/Tue: Year 1 W5-W10 (6w, ends 13:15), T2-6 W6-W11 (6w, ends 13:15), TASMIK 13:15-13:45
+  // Wed/Thu: Year 1 W5-W9 (5w, ends 12:45), T2-6 W6-W10 (5w, ends 12:45), TASMIK 12:45-13:15
+  // Friday: Year 1 W5-W7 (3w, ends 11:45), T2-3 W6-W7 (ends 11:15), T4-6 W6-W8 (ends 11:45)
   const getMasterSlotHeaders = (day: DayOfWeek) => {
     if (day === 'JUMAAT') {
       return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9'];
     }
     if (day === 'ISNIN' || day === 'SELASA') {
-      return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'TASMIK', 'TASMIK_T1'];
+      return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'TASMIK'];
     }
     // RABU, KHAMIS
-    return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'TASMIK'];
+    return ['MEMBACA', 'W1', 'W2', 'W3', 'W4', 'W5', 'PKAR', 'REHAT', 'W6', 'W7', 'W8', 'W9', 'W10', 'TASMIK'];
   };
 
   const getMasterSlotLabel = (slotKey: string) => {
@@ -258,8 +264,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
       case 'W9': return { title: 'W9 / W8', sub: '11:45' };
       case 'W10': return { title: 'W10 / W9', sub: '12:15' };
       case 'W11': return { title: 'W11 / W10', sub: '12:45' };
-      case 'TASMIK': return { title: 'TASMIK / W11', sub: '13:15' };
-      case 'TASMIK_T1': return { title: 'TASMIK (T1)', sub: '13:45' };
+      case 'TASMIK': return { title: 'TASMIK', sub: 'Selepas Sekolah' };
       default: return { title: slotKey, sub: '' };
     }
   };
@@ -290,25 +295,10 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     }
     if (slotKey === 'W10') return grade === 1 ? 'W9' : 'W10';
     if (slotKey === 'W11') {
-      if (day === 'RABU' || day === 'KHAMIS') {
-        if (grade > 1) return 'TASMIK'; // T2-6 Rabu/Khamis 10 regular + Tasmik
-      }
       return grade === 1 ? 'W10' : 'W11';
     }
     if (slotKey === 'TASMIK') {
-      if (day === 'ISNIN' || day === 'SELASA') {
-        return grade === 1 ? 'W11' : 'TASMIK'; // T2-6 Isnin/Selasa 11 regular + Tasmik
-      }
-      if (day === 'RABU' || day === 'KHAMIS') {
-        return grade === 1 ? 'TASMIK' : null;  // T1 Rabu/Khamis 10 regular + Tasmik
-      }
-      return null;
-    }
-    if (slotKey === 'TASMIK_T1') {
-      if (day === 'ISNIN' || day === 'SELASA') {
-        return grade === 1 ? 'TASMIK' : null;  // T1 Isnin/Selasa 11 regular + Tasmik (13:45)
-      }
-      return null;
+      return 'TASMIK';
     }
     return slotKey;
   };
@@ -685,13 +675,25 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-800 font-mono">
               {DAYS_OF_WEEK.map((day) => {
+                const headerSlots = getGradeDaySlots(selectedGrade, 'ISNIN');
                 const daySlots = getGradeDaySlots(selectedGrade, day);
                 return (
                   <tr key={day} className="hover:bg-slate-800/30 transition">
                     <td className="py-3 px-3 font-sans font-black text-white bg-slate-950/70 border-r border-slate-800">
                       {day}
                     </td>
-                    {daySlots.map((slot) => {
+                    {headerSlots.map((headerSlot) => {
+                      const slot = daySlots.find((s) => s.slotId === headerSlot.slotId);
+                      if (!slot) {
+                        return (
+                          <td
+                            key={headerSlot.slotId}
+                            className="py-2 px-1 text-center bg-slate-950/40 text-slate-700 font-bold text-xs border-l border-slate-800 select-none"
+                          >
+                            -
+                          </td>
+                        );
+                      }
                       if (slot.isRecess) {
                         return (
                           <td

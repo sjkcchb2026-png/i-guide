@@ -127,7 +127,7 @@ export const JUtamaView: React.FC<JUtamaViewProps> = ({
                     HARI: {day}
                   </span>
                   <span className="text-[10px] text-slate-500 font-mono">
-                    {isFri ? 'Waktu Tamat: 11:45 (T1–T3) / 12:15 (T4–T6)' : isMonTue ? 'Waktu Tamat: 13:45 (Tasmik hingga 14:15)' : 'Waktu Tamat: 13:15 (Tasmik hingga 13:45)'}
+                    {isFri ? 'Waktu Tamat: 11:45 (T1–T3) / 12:15 (T4–T6)' : isMonTue ? 'Waktu Tamat: 13:15 (Tasmik hingga 13:45)' : 'Waktu Tamat: 12:45 (Tasmik hingga 13:15)'}
                   </span>
                 </div>
 
@@ -174,18 +174,26 @@ export const JUtamaView: React.FC<JUtamaViewProps> = ({
                                 );
                               }
 
-                              if (isFri && slotKey === 'W8' && grade < 4) {
-                                return (
-                                  <td
-                                    key={slotKey}
-                                    className="p-1 border border-slate-400 bg-slate-100 text-slate-300 text-center text-[10px]"
-                                  >
-                                    -
-                                  </td>
-                                );
-                              }
+                              const resolveSlotId = (g: number, sk: string): string | null => {
+                                if (sk === 'PKAR') return g === 1 ? 'PKAR' : null;
+                                if (sk === 'W1' || sk === 'W2' || sk === 'W3' || sk === 'W4') return sk;
+                                if (sk === 'W5') return g === 1 ? null : 'W5';
+                                if (g === 1) {
+                                  if (sk === 'W6') return 'W5';
+                                  if (sk === 'W7') return 'W6';
+                                  if (sk === 'W8') return 'W7';
+                                  if (sk === 'W9') return 'W8';
+                                  if (sk === 'W10') return 'W9';
+                                  if (sk === 'W11') return 'W10';
+                                  if (sk === 'TASMIK') return 'TASMIK';
+                                  return null;
+                                }
+                                if (isFri && sk === 'W8' && g < 4) return null;
+                                return sk;
+                              };
 
-                              const cell = schedule[grade]?.[day]?.[slotKey];
+                              const targetSlotId = resolveSlotId(grade, slotKey);
+                              const cell = targetSlotId ? schedule[grade]?.[day]?.[targetSlotId] : null;
 
                               return (
                                 <td

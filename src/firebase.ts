@@ -1,5 +1,12 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import { 
+  getAuth, 
+  initializeAuth, 
+  browserLocalPersistence, 
+  browserSessionPersistence, 
+  inMemoryPersistence, 
+  GoogleAuthProvider 
+} from 'firebase/auth';
 import { 
   getFirestore, 
   doc, 
@@ -10,7 +17,17 @@ import firebaseConfig from '../firebase-applet-config.json';
 // Initialize primary Firebase App singleton
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+
+// Initialize Firebase Auth with localStorage & memory persistence to bypass IndexedDB FILE_ERROR_NO_SPACE leveldb crashes
+let authInstance;
+try {
+  authInstance = initializeAuth(app, {
+    persistence: [browserLocalPersistence, browserSessionPersistence, inMemoryPersistence],
+  });
+} catch {
+  authInstance = getAuth(app);
+}
+export const auth = authInstance;
 export const googleProvider = new GoogleAuthProvider();
 export { firebaseConfig };
 

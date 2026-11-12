@@ -162,13 +162,25 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-300 font-mono text-center">
               {DAYS_OF_WEEK.map((day) => {
+                const headerSlots = getGradeDaySlots(selectedGrade, 'ISNIN');
                 const daySlots = getGradeDaySlots(selectedGrade, day);
                 return (
                   <tr key={day} className="hover:bg-slate-50 transition">
                     <td className="p-3 border border-slate-400 font-sans font-black text-slate-900 bg-slate-50 text-left">
                       {day}
                     </td>
-                    {daySlots.map((slot) => {
+                    {headerSlots.map((headerSlot) => {
+                      const slot = daySlots.find((s) => s.slotId === headerSlot.slotId);
+                      if (!slot) {
+                        return (
+                          <td
+                            key={headerSlot.slotId}
+                            className="p-2 border border-slate-400 bg-slate-100 text-slate-300 text-center text-xs"
+                          >
+                            -
+                          </td>
+                        );
+                      }
                       if (slot.isRecess) {
                         return (
                           <td

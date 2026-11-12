@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
-import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
+import { 
+  signInWithEmailAndPassword, 
+  sendPasswordResetEmail,
+  setPersistence,
+  inMemoryPersistence
+} from 'firebase/auth';
 import { auth } from '../firebase';
 import { SchoolSettings } from '../types';
 import { 
@@ -112,6 +117,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
       onLoginSuccess();
     } catch (err: any) {
       console.error('Sign in error:', err);
+
+      // Auto-recover from IndexedDB FILE_ERROR_NO_SPACE / transaction aborted errors
+      const isStorageQuotaError =
+        err?.code === 'auth/internal-error' ||
+        String(err?.message || '').toLowerCase().includes('transaction was aborted') ||
+        String(err?.message || '').toLowerCase().includes('file_error_no_space') ||
+        String(err?.message || '').toLowerCase().includes('indexeddb');
+
+      if (isStorageQuotaError) {
+        try {
+          console.warn('Recovering from storage error using inMemoryPersistence...');
+          await setPersistence(auth, inMemoryPersistence);
+          await signInWithEmailAndPassword(auth, cleanEmail, password);
+          onLoginSuccess();
+          return;
+        } catch (retryErr: any) {
+          console.error('Retry sign in error:', retryErr);
+          err = retryErr;
+        }
+      }
+
       let msg = '登录失败，请检查账号与密码。';
       if (err.code === 'auth/operation-not-allowed') {
         msg = '⚠️ Firebase 控制台尚未启用【电子邮件/密码】登录方式！\n\n请前往 Firebase 控制台：\nAuthentication ➜ Sign-in method ➜ 点击「Email/Password」➜ 切换为「启用 (Enable)」并保存。\n保存后即可直接在此输入邮箱与密码登录。';
@@ -123,6 +149,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
         msg = '登录尝试次数过多，请稍候再试。\n(Terlalu banyak percubaan log masuk. Sila cuba sebentar lagi.)';
       } else if (err.code === 'auth/network-request-failed') {
         msg = '网络连接失败，请检查网络连接。\n(Gagal menyambung ke pelayan. Sila periksa internet.)';
+      } else if (err.code === 'auth/internal-error') {
+        msg = 'Pelayar anda mengalami masalah storan sementara (IndexedDB). Sila segarkan semula halaman (Refresh) atau gunakan mod inkognito.';
       }
       setErrorMsg(msg);
     } finally {
@@ -180,6 +208,21 @@ export const LoginView: React.FC<LoginViewProps> = ({
         await signInWithEmailAndPassword(auth, cleanEmail, principalPassword);
         onLoginSuccess();
       } catch (loginErr: any) {
+        if (
+          loginErr?.code === 'auth/internal-error' ||
+          String(loginErr?.message || '').toLowerCase().includes('transaction was aborted') ||
+          String(loginErr?.message || '').toLowerCase().includes('file_error_no_space') ||
+          String(loginErr?.message || '').toLowerCase().includes('indexeddb')
+        ) {
+          try {
+            await setPersistence(auth, inMemoryPersistence);
+            await signInWithEmailAndPassword(auth, cleanEmail, principalPassword);
+            onLoginSuccess();
+            return;
+          } catch (retryLoginErr) {
+            console.error('Retry setup login error:', retryLoginErr);
+          }
+        }
         if (loginErr.code === 'auth/operation-not-allowed' || loginErr.message?.includes('PASSWORD_LOGIN_DISABLED') || loginErr.code === 'auth/configuration-not-found') {
           setErrorMsg('学校档案已成功保存入库！检测到 Firebase 控制台尚未开启【电子邮件/密码】登录提供商。请在 Firebase 控制台 Authentication > Sign-in method 启用 Email/Password 即可登录。');
           setIsSetupMode(false);

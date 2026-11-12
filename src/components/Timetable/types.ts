@@ -88,7 +88,7 @@ export function getGradeDaySlots(grade: number, day: DayOfWeek): SlotTimeInfo[] 
     );
 
     if (isFriday) {
-      // Jumaat Year 1: 7 regular periods (W1-W7) + Tasmik (W8 manual)
+      // Jumaat Year 1: 7 regular periods (W1-W7) + Tasmik
       slots.push({
         slotId: 'TASMIK',
         label: 'TASMIK',
@@ -98,32 +98,21 @@ export function getGradeDaySlots(grade: number, day: DayOfWeek): SlotTimeInfo[] 
         endMinutes: 735,
         isSpecialLocked: true,
       });
-    } else {
-      // Isnin - Khamis: W8, W9, W10
+    } else if (isMonTue) {
+      // Isnin & Selasa Year 1: 10 regular periods (W1-W4, W5-W10) + Tasmik (13:15-13:45)
       slots.push(
         { slotId: 'W8', label: 'W8', startTime: '11:45', endTime: '12:15', startMinutes: 705, endMinutes: 735 },
         { slotId: 'W9', label: 'W9', startTime: '12:15', endTime: '12:45', startMinutes: 735, endMinutes: 765 },
-        { slotId: 'W10', label: 'W10', startTime: '12:45', endTime: '13:15', startMinutes: 765, endMinutes: 795 }
+        { slotId: 'W10', label: 'W10', startTime: '12:45', endTime: '13:15', startMinutes: 765, endMinutes: 795 },
+        { slotId: 'TASMIK', label: 'TASMIK', startTime: '13:15', endTime: '13:45', startMinutes: 795, endMinutes: 825, isSpecialLocked: true }
       );
-
-      if (isMonTue) {
-        // Mon/Tue: W11 + Tasmik
-        slots.push(
-          { slotId: 'W11', label: 'W11', startTime: '13:15', endTime: '13:45', startMinutes: 795, endMinutes: 825 },
-          { slotId: 'TASMIK', label: 'TASMIK', startTime: '13:45', endTime: '14:15', startMinutes: 825, endMinutes: 855, isSpecialLocked: true }
-        );
-      } else {
-        // Wed/Thu: 10 regular periods + Tasmik
-        slots.push({
-          slotId: 'TASMIK',
-          label: 'TASMIK',
-          startTime: '13:15',
-          endTime: '13:45',
-          startMinutes: 795,
-          endMinutes: 825,
-          isSpecialLocked: true,
-        });
-      }
+    } else {
+      // Rabu & Khamis Year 1: 9 regular periods (W1-W4, W5-W9) + Tasmik (12:45-13:15)
+      slots.push(
+        { slotId: 'W8', label: 'W8', startTime: '11:45', endTime: '12:15', startMinutes: 705, endMinutes: 735 },
+        { slotId: 'W9', label: 'W9', startTime: '12:15', endTime: '12:45', startMinutes: 735, endMinutes: 765 },
+        { slotId: 'TASMIK', label: 'TASMIK', startTime: '12:45', endTime: '13:15', startMinutes: 765, endMinutes: 795, isSpecialLocked: true }
+      );
     }
 
     return slots;
