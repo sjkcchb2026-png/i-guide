@@ -92,9 +92,37 @@ export default function App() {
         }
 
         const docRef = doc(db, 'users', currentUser.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setProfile(docSnap.data() as UserProfile);
+        let resolvedSnap = await getDoc(docRef);
+
+        if (!resolvedSnap.exists()) {
+          try {
+            const qUid = query(collection(db, 'users'), where('uid', '==', currentUser.uid));
+            const uidSnap = await getDocs(qUid);
+            if (!uidSnap.empty) resolvedSnap = uidSnap.docs[0];
+          } catch {}
+        }
+
+        if (!resolvedSnap.exists() && currentUser.email) {
+          try {
+            const cleanEmail = currentUser.email.toLowerCase().trim();
+            const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
+            const uSnap = await getDocs(qUsers);
+            if (!uSnap.empty) {
+              const targetDoc = uSnap.docs[0];
+              await setDoc(targetDoc.ref, {
+                uid: currentUser.uid,
+                email: cleanEmail,
+                isVerified: true,
+                isPreRegistered: false,
+                active: targetDoc.data()?.active !== false,
+              }, { merge: true });
+              resolvedSnap = await getDoc(targetDoc.ref);
+            }
+          } catch {}
+        }
+
+        if (resolvedSnap.exists()) {
+          setProfile(resolvedSnap.data() as UserProfile);
         } else {
           // Try to auto-match registered student email
           let autoMatched = false;
@@ -201,13 +229,24 @@ export default function App() {
     }
 
     const nameToUse = customTeacherName || user.displayName || 'Guru SJK(C) Chung Hua Balingian';
+    const cleanEmail = (user.email || 'staff@chbalingian.edu.my').toLowerCase().trim();
     const newProfile: UserProfile = {
       uid: user.uid,
       name: nameToUse.toUpperCase(),
-      email: user.email || 'staff@chbalingian.edu.my',
+      email: cleanEmail,
       role: targetRole,
+      isVerified: true,
+      isPreRegistered: false,
     };
-    await setDoc(doc(db, 'users', user.uid), newProfile, { merge: true });
+    let targetRef = doc(db, 'users', user.uid);
+    try {
+      const qExisting = query(collection(db, 'users'), where('email', '==', cleanEmail));
+      const exSnap = await getDocs(qExisting);
+      if (!exSnap.empty) {
+        targetRef = exSnap.docs[0].ref;
+      }
+    } catch {}
+    await setDoc(targetRef, newProfile, { merge: true });
     setProfile(newProfile);
     setShowRoleSelection(false);
   };

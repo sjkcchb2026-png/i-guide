@@ -6,8 +6,9 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, collection, query, where, getDocs, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, collection, query, where, getDocs, setDoc, serverTimestamp } from 'firebase/firestore';
 import { deepSanitizeFirestore } from './utils/sanitizeFirestore';
+import { deduplicateStaffRecords, deduplicateUsersSnapshotInFirestore, normalizeStaffIc } from './utils/staffNormalizer';
 import { UserProfile, SchoolSettings, UserRole, StaffCategory } from './types';
 import { Header } from './components/Header';
 import { LoginView } from './components/LoginView';
@@ -85,35 +86,87 @@ export default function App() {
           }, { merge: true }).catch(() => {});
         }
 
-        // 2. Fetch user profile from /users/{uid}
+        // 2. Fetch user profile from /users/{uid} OR existing in-place staff doc by uid/email
         const userDocRef = doc(db, 'users', user.uid);
-        const userSnap = await getDoc(userDocRef);
+        let resolvedUserSnap = await getDoc(userDocRef);
 
-        let resolvedUserSnap = userSnap;
+        if (!resolvedUserSnap.exists()) {
+          try {
+            const qByUid = query(collection(db, 'users'), where('uid', '==', user.uid));
+            const uidSnap = await getDocs(qByUid);
+            if (!uidSnap.empty) {
+              resolvedUserSnap = uidSnap.docs[0];
+            }
+          } catch {
+            // Fall through to email lookup
+          }
+        }
 
-        // 3. If user document does not exist by auth UID, resolve by email across users, personnel, teachers & backend roster
+        // If doc already exists at /users/{uid} and email also has another duplicate (e.g. staff_<uuid>), merge them cleanly
+        if (resolvedUserSnap.exists() && userEmail) {
+          try {
+            const qDup = query(collection(db, 'users'), where('email', '==', userEmail));
+            const dupSnap = await getDocs(qDup);
+            if (dupSnap.docs.length > 1) {
+              const rawDocs = dupSnap.docs.map((d) => ({ ...d.data(), _docId: d.id }));
+              const { dedupedUsers } = await deduplicateUsersSnapshotInFirestore(db, rawDocs, isAdmin);
+              const canonical = dedupedUsers[0];
+              if (canonical) {
+                const canonId = canonical._docId || canonical.uid || resolvedUserSnap.id;
+                resolvedUserSnap = await getDoc(doc(db, 'users', canonId));
+              }
+            } else if (resolvedUserSnap.data()?.isPreRegistered !== false || !resolvedUserSnap.data()?.isVerified) {
+              await setDoc(resolvedUserSnap.ref, {
+                uid: user.uid,
+                email: userEmail,
+                isVerified: true,
+                isPreRegistered: false,
+                updatedAt: serverTimestamp(),
+              }, { merge: true });
+              resolvedUserSnap = await getDoc(resolvedUserSnap.ref);
+            }
+          } catch (mergeErr) {
+            console.warn('Duplicate check on existing user notice:', mergeErr);
+          }
+        }
+
+        // 3. If user document does not exist yet by UID, resolve by email across users, personnel, teachers & backend roster
         if (!resolvedUserSnap.exists() && user.email) {
           const cleanEmail = user.email.toLowerCase().trim();
 
-          // Stage A: Query `users` collection by email
+          // Stage A: Query `users` collection by email and update existing doc IN-PLACE (zero duplicate creation!)
           try {
             const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
             const querySnap = await getDocs(qUsers);
             if (!querySnap.empty) {
-              const matchedDoc = querySnap.docs[0];
-              const preData = matchedDoc.data() as UserProfile;
+              const rawDocs = querySnap.docs.map((d) => ({ ...d.data(), _docId: d.id } as any));
+              const [mergedPre] = deduplicateStaffRecords(rawDocs);
+              const targetDoc =
+                querySnap.docs.find((d) => d.id === mergedPre?._docId) || querySnap.docs[0];
+
               const linkedProfile = deepSanitizeFirestore({
-                ...preData,
+                ...(mergedPre || targetDoc.data()),
                 uid: user.uid,
+                email: cleanEmail,
+                isVerified: true,
                 isPreRegistered: false,
-                active: preData.active !== false,
+                active: (mergedPre || (targetDoc.data() as UserProfile)).active !== false,
                 updatedAt: serverTimestamp(),
               });
-              await setDoc(userDocRef, linkedProfile, { merge: true });
-              if (matchedDoc.id !== user.uid) {
-                await setDoc(matchedDoc.ref, { uid: user.uid, isPreRegistered: false, active: true }, { merge: true }).catch(() => {});
+              delete (linkedProfile as any)._docId;
+
+              // Update existing doc in-place (DO NOT create a second users/{user.uid} doc!)
+              await setDoc(targetDoc.ref, linkedProfile, { merge: true });
+
+              // If duplicates already existed for this email and caller is admin, clean up redundant docs
+              if (querySnap.docs.length > 1 && isAdmin) {
+                await deduplicateUsersSnapshotInFirestore(
+                  db,
+                  querySnap.docs.map((d) => ({ ...d.data(), _docId: d.id })),
+                  true
+                );
               }
-              resolvedUserSnap = await getDoc(userDocRef);
+              resolvedUserSnap = await getDoc(targetDoc.ref);
             }
           } catch (syncErr) {
             console.warn('Stage A users email lookup:', syncErr);
@@ -133,6 +186,17 @@ export default function App() {
                 const isAkpUser = catUpper === 'AKP' || posUpper.includes('PKA') || posUpper.includes('PPM') || posUpper.includes('PT') || posUpper.includes('PEMBANTU') || posUpper.includes('KERANI') || posUpper.includes('OPERASI');
                 const resolvedRole: UserRole = isPrincipalUser ? 'PRINCIPAL' : (isAkpUser ? 'AKP' : 'GURU');
                 const resolvedCat: StaffCategory = isPrincipalUser ? 'PRINCIPAL' : (isAkpUser ? 'AKP' : 'GURU');
+                const cleanIc = normalizeStaffIc(pData.ic);
+
+                // Check if staff_<ic> doc already exists in users before creating a new doc
+                let targetRef = userDocRef;
+                if (cleanIc) {
+                  const staffRef = doc(db, 'users', `staff_${cleanIc}`);
+                  const staffSnap = await getDoc(staffRef).catch(() => null);
+                  if (staffSnap && staffSnap.exists()) {
+                    targetRef = staffRef;
+                  }
+                }
 
                 const linkedProfile = deepSanitizeFirestore({
                   uid: user.uid,
@@ -140,19 +204,20 @@ export default function App() {
                   email: cleanEmail,
                   category: resolvedCat,
                   role: resolvedRole,
-                  ic: pData.ic || '',
+                  ic: cleanIc || pData.ic || '',
                   phone: pData.phone || pData.noTel || '',
                   grade: pData.grade || pData.gred || '',
                   position: pData.position || pData.jawatan || '',
                   staffFileNo: pData.staffFileNo || pData.noFail || '',
                   personnelId: pDoc.id,
                   active: true,
+                  isVerified: true,
                   isPreRegistered: false,
                   createdAt: serverTimestamp(),
                   updatedAt: serverTimestamp(),
                 });
-                await setDoc(userDocRef, linkedProfile, { merge: true });
-                resolvedUserSnap = await getDoc(userDocRef);
+                await setDoc(targetRef, linkedProfile, { merge: true });
+                resolvedUserSnap = await getDoc(targetRef);
               }
             } catch (pErr) {
               console.warn('Stage B personnel email lookup:', pErr);
@@ -167,21 +232,32 @@ export default function App() {
               if (!tSnap.empty) {
                 const tDoc = tSnap.docs[0];
                 const tData: any = tDoc.data();
+                const cleanIc = normalizeStaffIc(tData.ic);
+                let targetRef = userDocRef;
+                if (cleanIc) {
+                  const staffRef = doc(db, 'users', `staff_${cleanIc}`);
+                  const staffSnap = await getDoc(staffRef).catch(() => null);
+                  if (staffSnap && staffSnap.exists()) {
+                    targetRef = staffRef;
+                  }
+                }
+
                 const linkedProfile = deepSanitizeFirestore({
                   uid: user.uid,
                   name: tData.name || user.displayName || cleanEmail.split('@')[0],
                   email: cleanEmail,
                   category: 'GURU',
                   role: 'GURU',
-                  ic: tData.ic || '',
+                  ic: cleanIc || tData.ic || '',
                   personnelId: tDoc.id,
                   active: true,
+                  isVerified: true,
                   isPreRegistered: false,
                   createdAt: serverTimestamp(),
                   updatedAt: serverTimestamp(),
                 });
-                await setDoc(userDocRef, linkedProfile, { merge: true });
-                resolvedUserSnap = await getDoc(userDocRef);
+                await setDoc(targetRef, linkedProfile, { merge: true });
+                resolvedUserSnap = await getDoc(targetRef);
               }
             } catch (tErr) {
               console.warn('Stage C teachers email lookup:', tErr);
@@ -203,15 +279,26 @@ export default function App() {
               if (res.ok) {
                 const data = await res.json();
                 if (data.profile) {
+                  const cleanIc = normalizeStaffIc(data.profile.ic);
+                  let targetRef = userDocRef;
+                  if (cleanIc) {
+                    const staffRef = doc(db, 'users', `staff_${cleanIc}`);
+                    const staffSnap = await getDoc(staffRef).catch(() => null);
+                    if (staffSnap && staffSnap.exists()) {
+                      targetRef = staffRef;
+                    }
+                  }
                   const linkedProfile = deepSanitizeFirestore({
                     ...data.profile,
                     uid: user.uid,
+                    email: cleanEmail,
+                    isVerified: true,
                     isPreRegistered: false,
                     active: true,
                     updatedAt: serverTimestamp(),
                   });
-                  await setDoc(userDocRef, linkedProfile, { merge: true });
-                  resolvedUserSnap = await getDoc(userDocRef);
+                  await setDoc(targetRef, linkedProfile, { merge: true });
+                  resolvedUserSnap = await getDoc(targetRef);
                 }
               }
             } catch (apiErr) {

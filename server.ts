@@ -340,6 +340,31 @@ async function verifyCallerAuth(req: Request, checkRevoked: boolean = true): Pro
   }
 }
 
+// Helper: Resolve canonical user document by docId, uid field, or normalized email
+async function resolveUserDocRef(uidOrDocId: string, email?: string) {
+  const directRef = adminDb.doc(`users/${uidOrDocId}`);
+  const directSnap = await directRef.get();
+  if (directSnap.exists) {
+    return { ref: directRef, snap: directSnap };
+  }
+  const byUidSnap = await adminDb.collection('users').where('uid', '==', uidOrDocId).limit(1).get();
+  if (!byUidSnap.empty) {
+    const d = byUidSnap.docs[0];
+    return { ref: d.ref, snap: d };
+  }
+  if (email) {
+    const cleanEmail = String(email).toLowerCase().trim();
+    if (cleanEmail) {
+      const byEmailSnap = await adminDb.collection('users').where('email', '==', cleanEmail).limit(1).get();
+      if (!byEmailSnap.empty) {
+        const d = byEmailSnap.docs[0];
+        return { ref: d.ref, snap: d };
+      }
+    }
+  }
+  return { ref: directRef, snap: directSnap };
+}
+
 // Helper: Check if caller is registered Principal AND user profile exists with active === true
 async function isCallerPrincipal(uid: string, callerClaims?: any): Promise<boolean> {
   try {
@@ -368,9 +393,9 @@ async function isCallerPrincipal(uid: string, callerClaims?: any): Promise<boole
       }
     }
 
-    // 4. Check canonical users/{uid} collection (try adminDb, then resilient REST)
+    // 4. Check canonical users/{uid} (or in-place matched doc by uid/email)
     try {
-      const userDoc = await adminDb.doc(`users/${uid}`).get();
+      const { snap: userDoc } = await resolveUserDocRef(uid, callerEmail);
       if (userDoc.exists) {
         const userData = userDoc.data();
         if (userData?.active === true && (userData.role === 'principal' || userData.role === 'PRINCIPAL' || userData.category === 'PRINCIPAL')) {
@@ -454,9 +479,9 @@ async function isCallerSystemAdmin(uid: string, callerClaims?: any): Promise<boo
       }
     }
 
-    // 4. Check canonical users/{uid} collection (try adminDb, then resilient REST)
+    // 4. Check canonical users/{uid} (or in-place matched doc by uid/email)
     try {
-      const userDoc = await adminDb.doc(`users/${uid}`).get();
+      const { snap: userDoc } = await resolveUserDocRef(uid, callerEmail);
       if (userDoc.exists) {
         const userData = userDoc.data();
         if (userData?.active === true && (userData.role === 'admin' || userData.role === 'ADMIN' || userData.role === 'SYSTEM_ADMIN' || userData.category === 'PENTADBIR')) {
@@ -1136,8 +1161,8 @@ async function startServer() {
 
     // Must be either System Admin or Current Principal
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid),
-      isCallerPrincipal(caller.uid),
+      isCallerSystemAdmin(caller.uid, caller.claims),
+      isCallerPrincipal(caller.uid, caller.claims),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
@@ -1344,8 +1369,8 @@ async function startServer() {
     }
 
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid),
-      isCallerPrincipal(caller.uid),
+      isCallerSystemAdmin(caller.uid, caller.claims),
+      isCallerPrincipal(caller.uid, caller.claims),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
@@ -1602,19 +1627,35 @@ async function startServer() {
         return res.status(400).json({ error: 'userId dan category (GURU/AKP) diperlukan.' });
       }
 
-      // 1. Update in users collection
-      const userDocRef = adminDb.doc(`users/${userId}`);
-      const userSnap = await userDocRef.get();
+      // 1. Update in users collection (resolve by docId, uid field, or email to avoid duplicates)
+      const { ref: userDocRef, snap: userSnap } = await resolveUserDocRef(userId, userEmail);
+      const { subRole, position } = req.body;
+      const updates: Record<string, any> = {
+        category,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (subRole) {
+        updates.subRole = subRole;
+        updates.primaryRoleCode = subRole;
+        if (category === 'GURU') {
+          updates.leadershipRole = subRole === 'GURU' ? null : subRole;
+          updates.akpRole = null;
+        } else {
+          updates.akpRole = subRole;
+          updates.leadershipRole = null;
+        }
+      }
+      if (position) updates.position = position;
+
       if (userSnap.exists) {
-        await userDocRef.update({
-          category,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      } else {
-        await userDocRef.set({
-          category,
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
+        await userDocRef.update(deepSanitizeFirestore(updates));
+      } else if (req.body.userName || userEmail) {
+        await userDocRef.set(deepSanitizeFirestore({
+          ...updates,
+          ...(req.body.userName ? { name: String(req.body.userName).trim().toUpperCase() } : {}),
+          ...(userEmail ? { email: String(userEmail).toLowerCase().trim() } : {}),
+          active: true,
+        }), { merge: true });
       }
 
       // 2. Synchronize to personnel collection (Master Data)
@@ -1883,16 +1924,75 @@ async function startServer() {
     const existingUsersByEmail = new Map<string, any>();
     const existingUsersByIc = new Map<string, any>();
     const existingUsersById = new Map<string, any>();
+    const duplicateDocIdsToDelete: string[] = [];
+
+    const isPreRegId = (id?: string) =>
+      !id || id.startsWith('staff_') || id.startsWith('user_') || /^P\d{5,}/i.test(id);
 
     try {
       const usersSnap = await adminDb.collection('users').get();
-      usersSnap.forEach(d => {
-        const data: any = { ...d.data(), _docId: d.id };
-        existingUsersById.set(d.id, data);
-        if (data.personnelId) existingUsersByPersonnelId.set(String(data.personnelId).trim(), data);
-        if (data.email) existingUsersByEmail.set(String(data.email).toLowerCase().trim(), data);
-        if (data.ic) existingUsersByIc.set(String(data.ic).replace(/[^0-9]/g, ''), data);
+      const rawUsers: any[] = [];
+      usersSnap.forEach((d) => {
+        rawUsers.push({ ...d.data(), _docId: d.id });
       });
+
+      // Deduplicate existing users in Firestore by email / IC
+      const byKey = new Map<string, any[]>();
+      const registerKey = (k: string, item: any) => {
+        if (!k) return;
+        const arr = byKey.get(k) || [];
+        arr.push(item);
+        byKey.set(k, arr);
+      };
+
+      const seenDoc = new Set<string>();
+      for (const u of rawUsers) {
+        if (seenDoc.has(u._docId)) continue;
+        const em = String(u.email || '').toLowerCase().trim();
+        const ic = String(u.ic || '').replace(/[^0-9]/g, '');
+        const matches = rawUsers.filter(
+          (other) =>
+            (em && String(other.email || '').toLowerCase().trim() === em) ||
+            (ic && ic.length >= 6 && String(other.ic || '').replace(/[^0-9]/g, '') === ic) ||
+            other._docId === u._docId
+        );
+        matches.forEach((m) => seenDoc.add(m._docId));
+
+        // Pick canonical doc (prefer real Auth UID docId, then real Auth uid field, then pre-reg)
+        matches.sort((a, b) => {
+          const sa = (!isPreRegId(a._docId) ? 1000 : 0) + (!isPreRegId(a.uid) ? 500 : 0) + (a.position ? 50 : 0);
+          const sb = (!isPreRegId(b._docId) ? 1000 : 0) + (!isPreRegId(b.uid) ? 500 : 0) + (b.position ? 50 : 0);
+          return sb - sa;
+        });
+
+        const canonical = { ...matches[0] };
+        for (const extra of matches.slice(1)) {
+          duplicateDocIdsToDelete.push(extra._docId);
+          if (!canonical.uid || isPreRegId(canonical.uid)) {
+            if (extra.uid && !isPreRegId(extra.uid)) canonical.uid = extra.uid;
+          }
+          if (extra.isVerified === true || extra.isPreRegistered === false) {
+            canonical.isVerified = true;
+            canonical.isPreRegistered = false;
+          }
+          if (!canonical.position && extra.position) canonical.position = extra.position;
+          if (!canonical.ic && extra.ic) canonical.ic = extra.ic;
+          if (!canonical.phone && extra.phone) canonical.phone = extra.phone;
+          if (!canonical.grade && extra.grade) canonical.grade = extra.grade;
+          if (!canonical.staffFileNo && extra.staffFileNo) canonical.staffFileNo = extra.staffFileNo;
+          if (!canonical.personnelId && extra.personnelId) canonical.personnelId = extra.personnelId;
+          if (!canonical.subRole && extra.subRole) canonical.subRole = extra.subRole;
+          if (!canonical.leadershipRole && extra.leadershipRole) canonical.leadershipRole = extra.leadershipRole;
+          if (extra.hasClerkAccess) canonical.hasClerkAccess = true;
+        }
+
+        existingUsersById.set(canonical._docId, canonical);
+        if (canonical.personnelId) existingUsersByPersonnelId.set(String(canonical.personnelId).trim(), canonical);
+        if (em) existingUsersByEmail.set(em, canonical);
+        if (ic && ic.length >= 6) existingUsersByIc.set(ic, canonical);
+      }
+      registerKey; // keep lint clean
+      byKey.clear();
     } catch (usersErr) {
       console.warn('Note: adminDb users list restricted, continuing with memory map:', usersErr);
     }
@@ -1904,6 +2004,11 @@ async function startServer() {
 
     let batch = adminDb.batch();
     let opCount = 0;
+
+    for (const dupId of duplicateDocIdsToDelete) {
+      batch.delete(adminDb.doc(`users/${dupId}`));
+      opCount++;
+    }
 
     for (const p of personnelList) {
       try {
@@ -1918,6 +2023,10 @@ async function startServer() {
         const pFileNo = String((p as any).staffFileNo || (p as any).noFail || '').trim();
         const pTeachingStatus = String((p as any).teachingStatus || 'Aktif').trim();
 
+        if (!pName && !pEmail && !pIc) {
+          skippedCount++;
+          continue;
+        }
         if (pTeachingStatus.toLowerCase().includes('tamat') || pTeachingStatus.toLowerCase().includes('berhenti')) {
           skippedCount++;
           continue;
@@ -1959,7 +2068,8 @@ async function startServer() {
         }
 
         if (!targetUserDocId) {
-          targetUserDocId = pId || `user_${crypto.randomUUID().slice(0, 12)}`;
+          const cleanPId = pId ? (pId.startsWith('staff_') ? pId : `staff_${pId}`) : '';
+          targetUserDocId = pIc ? `staff_${pIc}` : (cleanPId || `staff_${crypto.randomUUID().slice(0, 12)}`);
         }
 
         const userDocRef = adminDb.doc(`users/${targetUserDocId}`);
@@ -1967,10 +2077,17 @@ async function startServer() {
         if (matchedUser) {
           const preservedRole = (matchedUser.role === 'admin' || matchedUser.role === 'ADMIN' || matchedUser.role === 'SYSTEM_ADMIN')
             ? matchedUser.role
-            : (matchedUser.role === 'PRINCIPAL' || isPrincipal ? 'PRINCIPAL' : resolvedRole);
+            : (matchedUser.role === 'PRINCIPAL' || isPrincipal ? 'PRINCIPAL' : (matchedUser.hasClerkAccess ? 'CLERK' : resolvedRole));
+
+          const isVerified = Boolean(
+            matchedUser.isVerified === true ||
+            matchedUser.isPreRegistered === false ||
+            !isPreRegId(matchedUser.uid) ||
+            !isPreRegId(targetUserDocId)
+          );
 
           const updatePayload = deepSanitizeFirestore({
-            uid: targetUserDocId,
+            uid: matchedUser.uid || targetUserDocId,
             name: pName || matchedUser.name,
             email: pEmail || matchedUser.email || '',
             category: isPrincipal ? 'PRINCIPAL' : (matchedUser.category || resolvedCategory),
@@ -1980,8 +2097,15 @@ async function startServer() {
             grade: pGrade || matchedUser.grade || '',
             position: pPosition || matchedUser.position || '',
             staffFileNo: pFileNo || matchedUser.staffFileNo || '',
-            personnelId: pId,
-            active: true,
+            personnelId: pId || matchedUser.personnelId || '',
+            subRole: (p as any).subRole || (p as any).primaryRoleCode || matchedUser.subRole,
+            primaryRoleCode: (p as any).primaryRoleCode || (p as any).subRole || matchedUser.primaryRoleCode,
+            leadershipRole: (p as any).leadershipRole || matchedUser.leadershipRole,
+            akpRole: (p as any).akpRole || matchedUser.akpRole,
+            hasClerkAccess: Boolean(matchedUser.hasClerkAccess),
+            active: matchedUser.active !== false,
+            isVerified,
+            isPreRegistered: !isVerified,
             updatedAt: FieldValue.serverTimestamp(),
           });
 
@@ -2001,6 +2125,8 @@ async function startServer() {
             staffFileNo: pFileNo,
             personnelId: pId,
             active: true,
+            isVerified: false,
+            isPreRegistered: true,
             createdAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp(),
           });
@@ -2304,26 +2430,38 @@ async function startServer() {
         details: { docId, name: payload.name, targetInfo, isTargetCore },
       });
 
-      // Mirror to Attendance users collection
+      // Mirror to Attendance users collection IN-PLACE (prevent duplicate users doc creation)
       try {
         const isPrincipal = payload.position.toUpperCase().includes('GURU BESAR') || payload.position.toUpperCase().includes('PENGETUA');
         const isAkp = payload.category === 'AKP';
         const staffCategory: StaffCategory = isPrincipal ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
         const staffRole: UserRole = isPrincipal ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
-        
-        await adminDb.doc(`users/${docId}`).set(deepSanitizeFirestore({
-          uid: docId,
+
+        let resolvedTarget = await resolveUserDocRef(docId, cleanEmail);
+        if (!resolvedTarget.snap.exists && cleanIc) {
+          const icSnap = await adminDb.collection('users').where('ic', '==', cleanIc).limit(1).get();
+          if (!icSnap.empty) {
+            resolvedTarget = { ref: icSnap.docs[0].ref, snap: icSnap.docs[0] };
+          }
+        }
+        const existingData = resolvedTarget.snap.exists ? resolvedTarget.snap.data() : null;
+        const targetId = resolvedTarget.snap.exists ? resolvedTarget.snap.id : (cleanIc ? `staff_${cleanIc}` : `staff_${docId}`);
+
+        await adminDb.doc(`users/${targetId}`).set(deepSanitizeFirestore({
+          uid: existingData?.uid || targetId,
           name: payload.name,
-          email: cleanEmail,
-          category: staffCategory,
-          role: staffRole,
-          phone: payload.phone || '',
-          ic: cleanIc || '',
-          grade: payload.grade || '',
-          position: payload.position || '',
-          staffFileNo: payload.staffFileNo || '',
+          email: cleanEmail || existingData?.email || '',
+          category: existingData?.category || staffCategory,
+          role: existingData?.role || staffRole,
+          phone: payload.phone || existingData?.phone || '',
+          ic: cleanIc || existingData?.ic || '',
+          grade: payload.grade || existingData?.grade || '',
+          position: payload.position || existingData?.position || '',
+          staffFileNo: payload.staffFileNo || existingData?.staffFileNo || '',
           personnelId: docId,
-          active: true,
+          active: existingData ? existingData.active !== false : true,
+          isVerified: existingData ? Boolean(existingData.isVerified || existingData.isPreRegistered === false) : false,
+          isPreRegistered: existingData ? !(existingData.isVerified || existingData.isPreRegistered === false) : true,
           updatedAt: FieldValue.serverTimestamp(),
         }), { merge: true });
       } catch (userMirrorErr) {
@@ -4184,7 +4322,7 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
-    const isPrincipal = await isCallerPrincipal(caller.uid);
+    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
     if (!isPrincipal) {
       return res.status(403).json({ error: '禁止访问：只有校长可以批量开通员工账号' });
     }
@@ -4217,18 +4355,31 @@ async function startServer() {
         const category = (email.toLowerCase().startsWith('g-') || email.toLowerCase().startsWith('g.')) ? 'GURU' : 'AKP';
         const uidToUse = await createOrUpdateAuthUserResilient(email, password, name);
 
-        // Save profile in /users/{uid} (No initialPassword in Firestore)
-        await adminDb.doc(`users/${uidToUse}`).set({
+        // Merge & clean up any existing pre-registered doc for this email before saving canonical /users/{uid}
+        let existingPreData: Record<string, any> = {};
+        const preSnap = await adminDb.collection('users').where('email', '==', email).get();
+        for (const d of preSnap.docs) {
+          if (d.id !== uidToUse) {
+            existingPreData = { ...existingPreData, ...d.data() };
+            await d.ref.delete().catch(() => {});
+          }
+        }
+
+        // Save merged profile in /users/{uid} (No initialPassword in Firestore)
+        await adminDb.doc(`users/${uidToUse}`).set(deepSanitizeFirestore({
+          ...existingPreData,
           uid: uidToUse,
-          name,
+          name: existingPreData.name || name,
           email,
-          category,
-          role: hasClerkAccess ? 'CLERK' : category,
-          hasClerkAccess,
+          category: existingPreData.category || category,
+          role: hasClerkAccess ? 'CLERK' : (existingPreData.role || category),
+          hasClerkAccess: hasClerkAccess || Boolean(existingPreData.hasClerkAccess),
           active: true,
-          createdAt: FieldValue.serverTimestamp(),
+          isVerified: true,
+          isPreRegistered: false,
+          createdAt: existingPreData.createdAt || FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
-        });
+        }), { merge: true });
 
         results.push({
           name,
@@ -4271,7 +4422,7 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
-    const isPrincipal = await isCallerPrincipal(caller.uid);
+    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
     if (!isPrincipal) {
       return res.status(403).json({ error: '禁止访问：只有校长可以开通员工账号' });
     }
@@ -4289,17 +4440,30 @@ async function startServer() {
       const category = (cleanEmail.startsWith('g-') || cleanEmail.startsWith('g.')) ? 'GURU' : 'AKP';
       const uidToUse = await createOrUpdateAuthUserResilient(cleanEmail, password, cleanName);
 
-      await adminDb.doc(`users/${uidToUse}`).set({
+      // Merge & clean up any existing pre-registered doc for this email
+      let existingPreData: Record<string, any> = {};
+      const preSnap = await adminDb.collection('users').where('email', '==', cleanEmail).get();
+      for (const d of preSnap.docs) {
+        if (d.id !== uidToUse) {
+          existingPreData = { ...existingPreData, ...d.data() };
+          await d.ref.delete().catch(() => {});
+        }
+      }
+
+      await adminDb.doc(`users/${uidToUse}`).set(deepSanitizeFirestore({
+        ...existingPreData,
         uid: uidToUse,
-        name: cleanName,
+        name: existingPreData.name || cleanName,
         email: cleanEmail,
-        category,
-        role: hasClerkAccess ? 'CLERK' : category,
-        hasClerkAccess: !!hasClerkAccess,
+        category: existingPreData.category || category,
+        role: hasClerkAccess ? 'CLERK' : (existingPreData.role || category),
+        hasClerkAccess: !!hasClerkAccess || Boolean(existingPreData.hasClerkAccess),
         active: true,
-        createdAt: FieldValue.serverTimestamp(),
+        isVerified: true,
+        isPreRegistered: false,
+        createdAt: existingPreData.createdAt || FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
-      });
+      }), { merge: true });
 
       return res.json({ success: true, uid: uidToUse, password });
     } catch (err: any) {
@@ -4334,10 +4498,10 @@ async function startServer() {
 
     return withUserLock(caller.uid, async () => {
       try {
+        const { ref: resolvedUserRef } = await resolveUserDocRef(caller.uid, caller.email);
         const result = await adminDb.runTransaction(async (transaction) => {
           // 1. Verify user profile exists and active === true (missing active also rejected)
-          const userRef = adminDb.doc(`users/${caller.uid}`);
-          const userDoc = await transaction.get(userRef);
+          const userDoc = await transaction.get(resolvedUserRef);
           if (!userDoc.exists) {
             throw new Error('UNAUTHORIZED: 您的账号未获校方授权建档，无法打卡。');
           }
@@ -4453,10 +4617,10 @@ async function startServer() {
 
     return withUserLock(caller.uid, async () => {
       try {
+        const { ref: resolvedUserRef } = await resolveUserDocRef(caller.uid, caller.email);
         const result = await adminDb.runTransaction(async (transaction) => {
           // 1. Verify user profile exists and active === true (missing active also rejected)
-          const userRef = adminDb.doc(`users/${caller.uid}`);
-          const userDoc = await transaction.get(userRef);
+          const userDoc = await transaction.get(resolvedUserRef);
           const userData = userDoc.data();
           if (!userDoc.exists || !userData || userData.active !== true) {
             throw new Error('DEACTIVATED: 账号已被停用或无打卡权限（要求 active === true）。');
@@ -4533,55 +4697,82 @@ async function startServer() {
   app.post('/api/staff/update-status', async (req: Request, res: Response) => {
     const caller = await verifyCallerAuth(req);
     if (!caller) return res.status(401).json({ error: '未授权：请先登录' });
-    const isPrincipal = await isCallerPrincipal(caller.uid);
+    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
     if (!isPrincipal) return res.status(403).json({ error: '禁止访问：只有校长可以修改员工档案状态' });
 
-    const { targetUid, active, hasClerkAccess } = req.body;
+    const { targetUid, active, hasClerkAccess, email } = req.body;
     if (!targetUid) return res.status(400).json({ error: '缺少 targetUid' });
 
     try {
+      const { ref: targetRef, snap: userDoc } = await resolveUserDocRef(targetUid, email);
+      if (!userDoc.exists) {
+        return res.status(404).json({ error: '未找到员工档案' });
+      }
       const updates: any = { updatedAt: FieldValue.serverTimestamp() };
       if (typeof active === 'boolean') updates.active = active;
       if (typeof hasClerkAccess === 'boolean') {
         updates.hasClerkAccess = hasClerkAccess;
-        const userDoc = await adminDb.doc(`users/${targetUid}`).get();
         const cat = userDoc.data()?.category || 'GURU';
         updates.role = hasClerkAccess ? 'CLERK' : cat;
       }
-      await adminDb.doc(`users/${targetUid}`).update(updates);
+      await targetRef.update(updates);
       return res.json({ success: true });
     } catch (err: any) {
-      return res.status(500).json({ error: err.message || '更新失败' });
+      const msg = String(err?.message || '');
+      if (msg.includes('PERMISSION_DENIED') || msg.includes('Missing or insufficient permissions') || err?.code === 7) {
+        return res.json({ success: false, sandboxFallback: true, error: msg });
+      }
+      return res.status(500).json({ error: msg || '更新失败' });
     }
   });
 
   app.post('/api/staff/delete', async (req: Request, res: Response) => {
     const caller = await verifyCallerAuth(req);
     if (!caller) return res.status(401).json({ error: '未授权：请先登录' });
-    const isPrincipal = await isCallerPrincipal(caller.uid);
+    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
     if (!isPrincipal) return res.status(403).json({ error: '禁止访问：只有校长可以删除员工档案' });
 
-    const { targetUid } = req.body;
+    const { targetUid, email, personnelId } = req.body;
     if (!targetUid) return res.status(400).json({ error: '缺少 targetUid' });
     if (targetUid === caller.uid) return res.status(400).json({ error: '不能删除校长自身档案' });
 
+    let adminDeleted = false;
+    let authUidToDelete = String(targetUid);
+
     try {
-      await adminDb.doc(`users/${targetUid}`).delete();
+      const { ref: targetRef, snap: targetSnap } = await resolveUserDocRef(targetUid, email);
+      if (targetSnap.exists) {
+        authUidToDelete = targetSnap.data()?.uid || targetUid;
+        if (authUidToDelete === caller.uid) return res.status(400).json({ error: '不能删除校长自身档案' });
+        await targetRef.delete();
+        adminDeleted = true;
+      } else {
+        // Attempt direct doc delete in case doc ID differs from uid query
+        await adminDb.doc(`users/${targetUid}`).delete().catch(() => {});
+      }
+
+      if (personnelId) {
+        await adminDb.doc(`personnel/${personnelId}`).delete().catch(() => {});
+      }
+    } catch (dbErr: any) {
+      console.warn('Admin DB staff delete notice (client Firestore cleanup will run):', dbErr?.message || dbErr);
+    }
+
+    if (authUidToDelete && !String(authUidToDelete).startsWith('staff_') && authUidToDelete !== caller.uid) {
       try {
-        await adminAuth.deleteUser(targetUid);
+        await adminAuth.deleteUser(authUidToDelete);
       } catch (authErr) {
         console.warn('Auth user delete cleanup notice:', authErr);
       }
-      return res.json({ success: true });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || '删除失败' });
     }
+
+    return res.json({ success: true, adminDeleted });
   });
 
   app.post('/api/school-settings/update', async (req: Request, res: Response) => {
     const caller = await verifyCallerAuth(req);
     if (!caller) return res.status(401).json({ error: '未授权：请先登录' });
-    const isPrincipal = await isCallerPrincipal(caller.uid);
+    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
     if (!isPrincipal) return res.status(403).json({ error: '禁止访问：只有校长可以更改学校设定' });
 
     const { schoolName, schoolCode } = req.body;
@@ -4612,7 +4803,7 @@ async function startServer() {
     }
 
     try {
-      const userDoc = await adminDb.doc(`users/${caller.uid}`).get();
+      const { snap: userDoc } = await resolveUserDocRef(caller.uid, caller.email);
       if (!userDoc.exists || userDoc.data()?.active !== true) {
         return res.status(403).json({ error: '账号未获授权或已被停用' });
       }

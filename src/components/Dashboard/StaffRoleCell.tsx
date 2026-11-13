@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { UserCheck, Briefcase, CheckCircle2, Shield } from 'lucide-react';
 
@@ -16,6 +16,7 @@ export interface StaffRoleCellProps {
   // Backwards compatibility props:
   currentRole?: string;
   userEmail?: string;
+  userName?: string;
   onRoleUpdated?: (newRole: 'GURU' | 'AKP') => void;
 }
 
@@ -83,6 +84,7 @@ export const StaffRoleCell: React.FC<StaffRoleCellProps> = ({
   onUpdated,
   currentRole,
   userEmail,
+  userName,
   onRoleUpdated,
 }) => {
   // Infer initial category
@@ -164,6 +166,7 @@ export const StaffRoleCell: React.FC<StaffRoleCellProps> = ({
             body: JSON.stringify({
               userId,
               userEmail,
+              userName,
               category: newCategory,
               subRole: newSubRole,
               position: posTitle,
@@ -179,34 +182,53 @@ export const StaffRoleCell: React.FC<StaffRoleCellProps> = ({
 
       // 2. Direct Firestore update to users, personnel, teacher_profiles
       if (!serverUpdated && userId) {
-        // Update users
+        // Update users only if doc exists OR we have valid name/email (never create nameless ghost docs)
         try {
-          await setDoc(doc(db, 'users', userId), rolePayload, { merge: true });
+          const userRef = doc(db, 'users', userId);
+          const existingSnap = await getDoc(userRef).catch(() => null);
+          if (existingSnap && existingSnap.exists()) {
+            await updateDoc(userRef, rolePayload).catch(() => setDoc(userRef, rolePayload, { merge: true }));
+          } else if (userName || userEmail) {
+            await setDoc(
+              userRef,
+              {
+                ...rolePayload,
+                ...(userName ? { name: userName.trim().toUpperCase() } : {}),
+                ...(userEmail ? { email: userEmail.toLowerCase().trim() } : {}),
+                active: true,
+              },
+              { merge: true }
+            );
+          }
         } catch (e) {
           console.warn('Update users error:', e);
         }
 
         // Update personnel
         try {
-          await setDoc(doc(db, 'personnel', userId), rolePayload, { merge: true });
-        } catch (_) {
-          if (userEmail) {
-            try {
-              const pQuery = query(
-                collection(db, 'personnel'),
-                where('email', '==', userEmail.toLowerCase().trim())
-              );
-              const pSnap = await getDocs(pQuery);
-              for (const pDoc of pSnap.docs) {
-                await setDoc(doc(db, 'personnel', pDoc.id), rolePayload, { merge: true });
-              }
-            } catch (_) {}
+          const pRef = doc(db, 'personnel', userId);
+          const pExisting = await getDoc(pRef).catch(() => null);
+          if (pExisting && pExisting.exists()) {
+            await updateDoc(pRef, rolePayload);
+          } else if (userEmail) {
+            const pQuery = query(
+              collection(db, 'personnel'),
+              where('email', '==', userEmail.toLowerCase().trim())
+            );
+            const pSnap = await getDocs(pQuery);
+            for (const pDoc of pSnap.docs) {
+              await setDoc(doc(db, 'personnel', pDoc.id), rolePayload, { merge: true });
+            }
           }
-        }
+        } catch (_) {}
 
-        // Update teacher_profiles
+        // Update teacher_profiles only if doc exists
         try {
-          await setDoc(doc(db, 'teacher_profiles', userId), rolePayload, { merge: true });
+          const tpRef = doc(db, 'teacher_profiles', userId);
+          const tpExisting = await getDoc(tpRef).catch(() => null);
+          if (tpExisting && tpExisting.exists()) {
+            await updateDoc(tpRef, rolePayload);
+          }
         } catch (_) {}
       }
 
@@ -219,7 +241,6 @@ export const StaffRoleCell: React.FC<StaffRoleCellProps> = ({
       if (onRoleUpdated) onRoleUpdated(newCategory);
     } catch (err: any) {
       console.error('Failed to update staff role:', err);
-      alert(`Gagal mengemaskini peranan staf: ${err.message}`);
     } finally {
       setUpdating(false);
     }

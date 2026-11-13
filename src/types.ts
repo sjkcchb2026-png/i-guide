@@ -31,6 +31,12 @@ export interface UserProfile {
   staffFileNo?: string;
   personnelId?: string;
   isPreRegistered?: boolean;
+  isVerified?: boolean;
+  subRole?: string;
+  primaryRoleCode?: string;
+  leadershipRole?: string;
+  akpRole?: string;
+  _docId?: string;
   createdAt?: any;
   updatedAt?: any;
 }

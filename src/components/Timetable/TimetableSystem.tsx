@@ -4,6 +4,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
 import { PersonnelProfile } from '../../types';
 import { isTeacherForTimetable } from '../../utils/checkoutRules';
+import { deduplicateStaffRecords } from '../../utils/staffNormalizer';
 import { SchoolTimetableMatrix, SubjectAllocationRow } from './SchoolTimetableMatrix';
 import { JKeyinGrid } from './JKeyinGrid';
 import { JUtamaView } from './JUtamaView';
@@ -90,7 +91,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           pSnap.forEach((d) => {
             const data = d.data();
             if (isTeacherForTimetable(data)) {
-              teachers.push({ id: d.id, ...data } as PersonnelProfile);
+              teachers.push({ id: d.id, _docId: d.id, ...data } as any);
             }
           });
         }
@@ -107,7 +108,9 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           }
         });
 
-        if (isMounted) setPersonnelList(teachers);
+        // Deduplicate by email/IC/uid before storing in state
+        const dedupedTeachers = deduplicateStaffRecords(teachers as any[]) as PersonnelProfile[];
+        if (isMounted) setPersonnelList(dedupedTeachers);
 
         // 2. Load Matrix Data (Fallback to official default curriculum allocation if not yet saved)
         const matrixDocRef = doc(db, 'school_timetables', `matrix_${selectedYear}`);

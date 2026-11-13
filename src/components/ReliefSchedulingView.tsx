@@ -157,7 +157,10 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
 
         usersSnap.docs.forEach((d) => {
           const data = d.data();
-          if (!map.has(d.id)) {
+          const cleanEm = String(data.email || '').toLowerCase().trim();
+          const emailExists =
+            cleanEm && Array.from(map.values()).some((v) => String(v.email || '').toLowerCase().trim() === cleanEm);
+          if (!map.has(d.id) && !emailExists) {
             const cleanName = data.name || d.id;
             map.set(d.id, {
               id: d.id,

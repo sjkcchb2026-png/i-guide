@@ -359,10 +359,19 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           });
         });
 
-        // Supplement from users
+        // Supplement from users (deduplicated by doc ID or normalized email)
+        const findByEmail = (em?: string) => {
+          const clean = String(em || '').toLowerCase().trim();
+          if (!clean) return undefined;
+          for (const val of map.values()) {
+            if (String(val.email || '').toLowerCase().trim() === clean) return val;
+          }
+          return undefined;
+        };
+
         usersSnap.docs.forEach((d) => {
           const data = d.data();
-          const existing = map.get(d.id);
+          const existing = map.get(d.id) || findByEmail(data.email);
           if (!existing) {
             map.set(d.id, {
               teacherId: d.id,

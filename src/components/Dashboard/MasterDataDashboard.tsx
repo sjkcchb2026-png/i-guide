@@ -31,6 +31,13 @@ import {
 } from '../../types';
 import { GuruImportRow, GuruImportPreviewResponse, ApdmStudentImportRow, ApdmStudentImportPreviewResponse } from '../../types/isepadu';
 import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
+import {
+  deduplicateAndCleanUsersInFirestore,
+  deduplicateUsersSnapshotInFirestore,
+  isRealAuthUid,
+  normalizeStaffEmail,
+  normalizeStaffIc,
+} from '../../utils/staffNormalizer';
 import { StudentProfileModal } from '../Student/StudentProfileModal';
 import { TimetableSystem } from '../Timetable/TimetableSystem';
 import { StaffRoleCell } from './StaffRoleCell';
@@ -741,19 +748,25 @@ export default function MasterDataDashboard() {
         }
       }
 
-      // 2. Direct client-side batch write into `users` collection
+      // 2. Direct client-side deduplication + in-place sync into `users` collection
       let localSyncCount = 0;
       try {
         const usersSnap = await getDocs(collection(db, 'users')).catch(() => null);
         const existingUsersByEmail = new Map<string, any>();
         const existingUsersByIc = new Map<string, any>();
+        const existingUsersByPersonnelId = new Map<string, any>();
         const existingUsersById = new Map<string, any>();
         if (usersSnap) {
-          usersSnap.forEach(d => {
-            const u = d.data();
-            existingUsersById.set(d.id, { ...u, _docId: d.id });
-            if (u.email) existingUsersByEmail.set(u.email.toLowerCase().trim(), { ...u, _docId: d.id });
-            if ((u as any).ic) existingUsersByIc.set(String((u as any).ic).replace(/[^0-9]/g, ''), { ...u, _docId: d.id });
+          const rawUsers = usersSnap.docs.map((d) => ({ ...d.data(), _docId: d.id }));
+          const cleaned = await deduplicateUsersSnapshotInFirestore(db, rawUsers, true);
+          cleaned.dedupedUsers.forEach((u: any) => {
+            const docId = u._docId || u.uid;
+            existingUsersById.set(docId, u);
+            if (u.personnelId) existingUsersByPersonnelId.set(String(u.personnelId).trim(), u);
+            const em = normalizeStaffEmail(u.email);
+            if (em) existingUsersByEmail.set(em, u);
+            const ic = normalizeStaffIc(u.ic);
+            if (ic) existingUsersByIc.set(ic, u);
           });
         }
 
@@ -761,8 +774,8 @@ export default function MasterDataDashboard() {
         for (const p of roster) {
           const pName = String((p as any).name || (p as any).nama || '').trim().toUpperCase();
           if (!pName) continue;
-          const pEmail = String((p as any).email || '').toLowerCase().trim();
-          const pIc = String((p as any).ic || '').replace(/[^0-9]/g, '');
+          const pEmail = normalizeStaffEmail((p as any).email);
+          const pIc = normalizeStaffIc((p as any).ic);
           const pPosition = String((p as any).position || (p as any).jawatan || '').trim();
           const pCategory = String((p as any).category || '').toUpperCase().trim();
           const posUpper = pPosition.toUpperCase();
@@ -771,27 +784,47 @@ export default function MasterDataDashboard() {
           const resolvedRole = isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
           const resolvedCat = isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
 
-          const matched = (pEmail && existingUsersByEmail.get(pEmail)) ||
-                          (pIc && existingUsersByIc.get(pIc)) ||
-                          existingUsersById.get(p.id);
+          const matched =
+            (pEmail && existingUsersByEmail.get(pEmail)) ||
+            (pIc && existingUsersByIc.get(pIc)) ||
+            (p.id && existingUsersByPersonnelId.get(String(p.id).trim())) ||
+            existingUsersById.get(p.id);
 
-          const targetDocId = matched ? matched._docId : (pIc ? `staff_${pIc}` : (p.id ? `staff_${p.id}` : `staff_${Date.now()}_${localSyncCount}`));
+          const cleanPId = p.id
+            ? String(p.id).startsWith('staff_')
+              ? String(p.id)
+              : `staff_${p.id}`
+            : '';
+          const targetDocId = matched
+            ? String(matched._docId || matched.uid)
+            : pIc
+            ? `staff_${pIc}`
+            : cleanPId || `staff_${Date.now()}_${localSyncCount}`;
           const userRef = doc(db, 'users', targetDocId);
+
+          const matchedVerified = Boolean(
+            matched && (matched.isVerified === true || matched.isPreRegistered === false || isRealAuthUid(matched.uid))
+          );
 
           const userPayload: any = {
             uid: matched ? (matched.uid || targetDocId) : targetDocId,
             name: pName,
-            email: pEmail,
+            email: pEmail || matched?.email || '',
             category: matched?.category || resolvedCat,
             role: matched?.role || resolvedRole,
-            ic: pIc,
-            phone: String((p as any).phone || (p as any).noTel || '').trim(),
-            grade: String((p as any).grade || (p as any).gred || '').trim(),
-            position: pPosition,
-            staffFileNo: String((p as any).staffFileNo || (p as any).noFail || '').trim(),
-            personnelId: p.id,
-            active: true,
-            isPreRegistered: matched ? (matched.isPreRegistered ?? (typeof matched.uid === 'string' && matched.uid.startsWith('staff_'))) : true,
+            ic: pIc || matched?.ic || '',
+            phone: String((p as any).phone || (p as any).noTel || matched?.phone || '').trim(),
+            grade: String((p as any).grade || (p as any).gred || matched?.grade || '').trim(),
+            position: pPosition || matched?.position || '',
+            staffFileNo: String((p as any).staffFileNo || (p as any).noFail || matched?.staffFileNo || '').trim(),
+            personnelId: p.id || matched?.personnelId || '',
+            subRole: (p as any).subRole || (p as any).primaryRoleCode || matched?.subRole,
+            primaryRoleCode: (p as any).primaryRoleCode || (p as any).subRole || matched?.primaryRoleCode,
+            leadershipRole: (p as any).leadershipRole || matched?.leadershipRole,
+            akpRole: (p as any).akpRole || matched?.akpRole,
+            active: matched ? matched.active !== false : true,
+            isVerified: matchedVerified,
+            isPreRegistered: !matchedVerified,
             updatedAt: serverTimestamp(),
           };
 
@@ -1832,32 +1865,53 @@ export default function MasterDataDashboard() {
               email: row.data.email?.toLowerCase().trim()
             }, { merge: true });
 
-            // Automatically mirror into users collection for Staff Attendance Accounts
+            // Automatically mirror into users collection IN-PLACE (match by email or IC first so no duplicates are created)
             try {
-              const cleanEmail = row.data.email?.toLowerCase().trim() || '';
+              const cleanEmail = normalizeStaffEmail(row.data.email);
               const posUpper = String(row.data.position || row.data.jawatan || '').toUpperCase();
               const isGb = posUpper.includes('GURU BESAR') || posUpper === 'GB' || row.data.leadershipRole === 'GURU_BESAR';
               const catUpper = String(row.data.category || '').toUpperCase();
               const isAkp = catUpper === 'AKP' || posUpper.includes('PKA') || posUpper.includes('PPM') || posUpper.includes('PT') || posUpper.includes('PEMBANTU') || posUpper.includes('KERANI') || posUpper.includes('OPERASI');
-              const cleanIc = String(row.data.ic || '').replace(/[^0-9]/g, '');
-              const userDocId = cleanIc ? `staff_${cleanIc}` : `staff_${row.key}`;
+              const cleanIc = normalizeStaffIc(row.data.ic);
 
-              await setDoc(doc(db, 'users', userDocId), {
-                uid: userDocId,
+              let existingUserDoc: any = null;
+              if (cleanEmail) {
+                const uByEmail = await getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail))).catch(() => null);
+                if (uByEmail && !uByEmail.empty) {
+                  const preferred = uByEmail.docs.find((d) => isRealAuthUid(d.id)) || uByEmail.docs[0];
+                  existingUserDoc = { id: preferred.id, ...preferred.data() };
+                }
+              }
+              if (!existingUserDoc && cleanIc) {
+                const uByIc = await getDocs(query(collection(db, 'users'), where('ic', '==', cleanIc))).catch(() => null);
+                if (uByIc && !uByIc.empty) {
+                  const preferred = uByIc.docs.find((d) => isRealAuthUid(d.id)) || uByIc.docs[0];
+                  existingUserDoc = { id: preferred.id, ...preferred.data() };
+                }
+              }
+
+              const userDocId = existingUserDoc ? existingUserDoc.id : (cleanIc ? `staff_${cleanIc}` : `staff_${row.key}`);
+              const alreadyVerified = Boolean(
+                existingUserDoc && (existingUserDoc.isVerified === true || existingUserDoc.isPreRegistered === false || isRealAuthUid(existingUserDoc.uid))
+              );
+
+              await setDoc(doc(db, 'users', userDocId), deepSanitizeFirestore({
+                uid: existingUserDoc ? (existingUserDoc.uid || userDocId) : userDocId,
                 name: row.data.name,
-                email: cleanEmail,
-                category: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
-                role: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
-                ic: row.data.ic || '',
-                phone: row.data.phone || '',
-                grade: row.data.grade || '',
-                position: row.data.position || '',
-                staffFileNo: row.data.staffFileNo || '',
+                email: cleanEmail || existingUserDoc?.email || '',
+                category: existingUserDoc?.category || (isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU')),
+                role: existingUserDoc?.role || (isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU')),
+                ic: cleanIc || row.data.ic || existingUserDoc?.ic || '',
+                phone: row.data.phone || existingUserDoc?.phone || '',
+                grade: row.data.grade || existingUserDoc?.grade || '',
+                position: row.data.position || existingUserDoc?.position || '',
+                staffFileNo: row.data.staffFileNo || existingUserDoc?.staffFileNo || '',
                 personnelId: row.key,
-                active: true,
-                isPreRegistered: true,
+                active: existingUserDoc ? existingUserDoc.active !== false : true,
+                isVerified: alreadyVerified,
+                isPreRegistered: !alreadyVerified,
                 updatedAt: new Date().toISOString(),
-              }, { merge: true });
+              }), { merge: true });
             } catch (userMirrorErr) {
               console.warn('Note: Master Data user mirror notice:', userMirrorErr);
             }
@@ -1867,6 +1921,11 @@ export default function MasterDataDashboard() {
           }
           successCount++;
         }
+      }
+
+      // Guard pass: clean any duplicate user docs created prior to import
+      if (importType === 'personnel') {
+        await deduplicateAndCleanUsersInFirestore(db, true).catch(() => {});
       }
 
       // Record Import Session metadata
