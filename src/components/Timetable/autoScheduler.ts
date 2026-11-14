@@ -554,7 +554,7 @@ export function auditScheduleWorkload(
       if (minTarget > 0) {
         loads.forEach((v) => {
           if (v < minTarget) {
-            lowPenalty += (minTarget - v) * 50_000;
+            lowPenalty += (minTarget - v) * 300_000;
           }
         });
       }
@@ -3307,8 +3307,13 @@ function runSingleScheduleAttempt(
                     }
 
                     if (newAfterRuns.length <= 5 && totalAfterSlotsOccupied - ar.cells.length + mRunCells.length <= aSlots.length) {
+                      const checkSubs1E = Array.from(new Set([ar.subjectCode, ...newAfterRuns.map((r) => r.subjectCode)]));
                       const tryAfterPermMorn = (usedMask: number, offset: number, prevSub?: string): boolean => {
-                        if (usedMask === (1 << newAfterRuns.length) - 1) return true;
+                        if (usedMask === (1 << newAfterRuns.length) - 1) {
+                          return !checkSubs1E.some((sc) =>
+                            hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, day, sc).existingPositions, [])
+                          );
+                        }
                         for (let ri = 0; ri < newAfterRuns.length; ri++) {
                           if (usedMask & (1 << ri)) continue;
                           const run = newAfterRuns[ri];
@@ -3331,7 +3336,11 @@ function runSingleScheduleAttempt(
                         return false;
                       };
 
-                      if (tryAfterPermMorn(0, 0)) {
+                      const arCreates3C = hasThreeConsecutiveSameSubject(
+                        getGradeDayRegularInfo(grade, day, ar.subjectCode).existingPositions,
+                        []
+                      );
+                      if (!arCreates3C && tryAfterPermMorn(0, 0)) {
                         return true;
                       }
                     }
@@ -3492,20 +3501,26 @@ function runSingleScheduleAttempt(
                     })
                   ) {
                     shiftedMornSlots.forEach((s, idx) => bookSlots(grade, day, [s], mRunCells[idx]));
-                    for (const otherDay of DAYS_OF_WEEK) {
-                      if (otherDay === day || anyMoved) continue;
-                      const oSlots = getGradeDaySlots(grade, otherDay, academicYear).filter(
-                        (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
-                      );
-                      for (let k = oSlots.length - 1; k >= 0; k--) {
-                        const src = oSlots[k];
-                        const sCell = grid[grade][otherDay][src.slotId];
-                        if (sCell && !sCell.isLocked) {
-                          const isTail = oSlots.slice(k + 1).every((s) => grid[grade][otherDay][s.slotId] === null);
-                          if (isTail && canMove(sCell, otherDay, src, day, openedSlot, grade)) {
-                            executeMove(grade, otherDay, src, day, openedSlot);
-                            anyMoved = true;
-                            break;
+                    const creates3C1FM = hasThreeConsecutiveSameSubject(
+                      getGradeDayRegularInfo(grade, day, candSub).existingPositions,
+                      []
+                    );
+                    if (!creates3C1FM) {
+                      for (const otherDay of DAYS_OF_WEEK) {
+                        if (otherDay === day || anyMoved) continue;
+                        const oSlots = getGradeDaySlots(grade, otherDay, academicYear).filter(
+                          (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
+                        );
+                        for (let k = oSlots.length - 1; k >= 0; k--) {
+                          const src = oSlots[k];
+                          const sCell = grid[grade][otherDay][src.slotId];
+                          if (sCell && !sCell.isLocked) {
+                            const isTail = oSlots.slice(k + 1).every((s) => grid[grade][otherDay][s.slotId] === null);
+                            if (isTail && canMove(sCell, otherDay, src, day, openedSlot, grade)) {
+                              executeMove(grade, otherDay, src, day, openedSlot);
+                              anyMoved = true;
+                              break;
+                            }
                           }
                         }
                       }
@@ -3535,20 +3550,25 @@ function runSingleScheduleAttempt(
                     shiftedMornSlots.forEach((s, idx) => bookSlots(grade, day, [s], cand.runCells[idx]));
                     cand.runSlots.forEach((s, idx) => bookSlots(grade, day, [s], mRunCells[idx]));
 
-                    for (const otherDay of DAYS_OF_WEEK) {
-                      if (otherDay === day || anyMoved) continue;
-                      const oSlots = getGradeDaySlots(grade, otherDay, academicYear).filter(
-                        (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
-                      );
-                      for (let k = oSlots.length - 1; k >= 0; k--) {
-                        const src = oSlots[k];
-                        const sCell = grid[grade][otherDay][src.slotId];
-                        if (sCell && !sCell.isLocked) {
-                          const isTail = oSlots.slice(k + 1).every((s) => grid[grade][otherDay][s.slotId] === null);
-                          if (isTail && canMove(sCell, otherDay, src, day, openedSlot, grade)) {
-                            executeMove(grade, otherDay, src, day, openedSlot);
-                            anyMoved = true;
-                            break;
+                    const creates3C1FA = [candSub, mTailCell.subjectCode].some((sc) =>
+                      hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, day, sc).existingPositions, [])
+                    );
+                    if (!creates3C1FA) {
+                      for (const otherDay of DAYS_OF_WEEK) {
+                        if (otherDay === day || anyMoved) continue;
+                        const oSlots = getGradeDaySlots(grade, otherDay, academicYear).filter(
+                          (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
+                        );
+                        for (let k = oSlots.length - 1; k >= 0; k--) {
+                          const src = oSlots[k];
+                          const sCell = grid[grade][otherDay][src.slotId];
+                          if (sCell && !sCell.isLocked) {
+                            const isTail = oSlots.slice(k + 1).every((s) => grid[grade][otherDay][s.slotId] === null);
+                            if (isTail && canMove(sCell, otherDay, src, day, openedSlot, grade)) {
+                              executeMove(grade, otherDay, src, day, openedSlot);
+                              anyMoved = true;
+                              break;
+                            }
                           }
                         }
                       }
@@ -3658,12 +3678,19 @@ function runSingleScheduleAttempt(
               mr.slots.forEach((s, idx) => bookSlots(grade, day, [s], ar.cells[idx]));
 
               const newAfterRuns = aUnlockedRuns.map((r, idx) => (idx === aIdx ? { ...mr, slots: mr.slots } : r));
-              // Pack newAfterRuns contiguously from index 0 of aSlots via permutation
-              const tryAfterPerm = (usedMask: number, offset: number): boolean => {
-                if (usedMask === (1 << newAfterRuns.length) - 1) return true;
+              const checkSubsAfterPerm = Array.from(new Set([ar.subjectCode, ...newAfterRuns.map((r) => r.subjectCode)]));
+              const leftBoundaryAfter = mSlots.length > 0 ? grid[grade][day][mSlots[mSlots.length - 1].slotId]?.subjectCode : undefined;
+              // Pack newAfterRuns contiguously from index 0 of aSlots via permutation (strictly forbidding 3-consecutive!)
+              const tryAfterPerm = (usedMask: number, offset: number, prevSub?: string): boolean => {
+                if (usedMask === (1 << newAfterRuns.length) - 1) {
+                  return !checkSubsAfterPerm.some((sc) =>
+                    hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, day, sc).existingPositions, [])
+                  );
+                }
                 for (let ri = 0; ri < newAfterRuns.length; ri++) {
                   if (usedMask & (1 << ri)) continue;
                   const run = newAfterRuns[ri];
+                  if ((offset === 0 ? leftBoundaryAfter : prevSub) === run.subjectCode) continue;
                   const destSlots = aSlots.slice(offset, offset + run.cells.length);
                   if (destSlots.length !== run.cells.length) continue;
                   if (
@@ -3674,14 +3701,18 @@ function runSingleScheduleAttempt(
                     })
                   ) {
                     destSlots.forEach((ds, idx) => bookSlots(grade, day, [ds], run.cells[idx]));
-                    if (tryAfterPerm(usedMask | (1 << ri), offset + run.cells.length)) return true;
+                    if (tryAfterPerm(usedMask | (1 << ri), offset + run.cells.length, run.subjectCode)) return true;
                     unbookSlots(grade, day, destSlots);
                   }
                 }
                 return false;
               };
 
-              if (tryAfterPerm(0, 0)) {
+              const arCreates3CMorn = hasThreeConsecutiveSameSubject(
+                getGradeDayRegularInfo(grade, day, ar.subjectCode).existingPositions,
+                []
+              );
+              if (!arCreates3CMorn && tryAfterPerm(0, 0)) {
                 anyMoved = true;
                 break;
               } else {
@@ -3955,7 +3986,7 @@ function runSingleScheduleAttempt(
           // Check if contiguousAfter can shift 1 slot left safely
           const afterCells = contiguousAfter.map((s) => grid[grade][otherDay][s.slotId]!);
           const destAfter = [src, ...contiguousAfter.slice(0, -1)];
-          unbookSlots(grade, otherDay, contiguousAfter);
+          unbookSlots(grade, otherDay, [src, ...contiguousAfter]);
           const shiftOk = afterCells.every((ac, idx) =>
             isSlotFreeForTeacher(ac.teacherCode, otherDay, [destAfter[idx]], ac.subjectCode, grade, {
               dailyCapOverride: 8,
@@ -3963,8 +3994,17 @@ function runSingleScheduleAttempt(
               allowSingleDayOver7: true,
             })
           );
-          contiguousAfter.forEach((s, idx) => bookSlots(grade, otherDay, [s], afterCells[idx]));
+          let shiftCreates3C = false;
           if (shiftOk) {
+            destAfter.forEach((ds, idx) => bookSlots(grade, otherDay, [ds], afterCells[idx]));
+            shiftCreates3C = Array.from(new Set(afterCells.map((ac) => ac.subjectCode))).some((sc) =>
+              hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, otherDay, sc).existingPositions, [])
+            );
+            unbookSlots(grade, otherDay, destAfter);
+          }
+          bookSlots(grade, otherDay, [src], cell);
+          contiguousAfter.forEach((s, idx) => bookSlots(grade, otherDay, [s], afterCells[idx]));
+          if (shiftOk && !shiftCreates3C) {
             executeMove(grade, otherDay, src, day, slot);
             for (let idx = 0; idx < contiguousAfter.length; idx++) {
               executeMove(grade, otherDay, contiguousAfter[idx], otherDay, destAfter[idx]);
@@ -4214,8 +4254,13 @@ function runSingleScheduleAttempt(
                   const packedRuns = dayRunsSess.map((r, idx) =>
                     idx === rIdx ? { cells: [oc1, oc2], subjectCode: oc1.subjectCode, teacherCode: oc1.teacherCode } : r
                   );
+                  const checkSubs3D = Array.from(new Set(packedRuns.map((r) => r.subjectCode)));
                   const tryPack3D = (usedMask: number, offset: number, prevSub?: string): boolean => {
-                    if (usedMask === (1 << packedRuns.length) - 1) return true;
+                    if (usedMask === (1 << packedRuns.length) - 1) {
+                      return !checkSubs3D.some((sc) =>
+                        hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, day, sc).existingPositions, [])
+                      );
+                    }
                     for (let pi = 0; pi < packedRuns.length; pi++) {
                       if (usedMask & (1 << pi)) continue;
                       const run = packedRuns[pi];
@@ -4413,7 +4458,7 @@ function runSingleScheduleAttempt(
             if (canCompleteMove && sameAfterSess && contiguousAfter.length > 0) {
               const afterCells = contiguousAfter.map((s) => grid[grade][otherDay][s.slotId]!);
               const destAfter = [src, ...contiguousAfter.slice(0, -1)];
-              unbookSlots(grade, otherDay, contiguousAfter);
+              unbookSlots(grade, otherDay, [src, ...contiguousAfter]);
               canCompleteMove = afterCells.every((ac, idx) =>
                 isSlotFreeForTeacher(ac.teacherCode, otherDay, [destAfter[idx]], ac.subjectCode, grade, {
                   dailyCapOverride: 8,
@@ -4421,6 +4466,15 @@ function runSingleScheduleAttempt(
                   allowSingleDayOver7: true,
                 })
               );
+              if (canCompleteMove) {
+                destAfter.forEach((ds, idx) => bookSlots(grade, otherDay, [ds], afterCells[idx]));
+                const shiftCreates3C = Array.from(new Set(afterCells.map((ac) => ac.subjectCode))).some((sc) =>
+                  hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, otherDay, sc).existingPositions, [])
+                );
+                unbookSlots(grade, otherDay, destAfter);
+                canCompleteMove = !shiftCreates3C;
+              }
+              bookSlots(grade, otherDay, [src], srcCell);
               contiguousAfter.forEach((s, idx) => bookSlots(grade, otherDay, [s], afterCells[idx]));
               if (canCompleteMove) {
                 executeMove(grade, otherDay, src, day, slot);
@@ -4542,6 +4596,13 @@ function runSingleScheduleAttempt(
           }
 
           if (shiftOk) {
+            const shift5ACreates3C = Array.from(new Set(afterCells.map((ac) => ac.subjectCode))).some((sc) =>
+              hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, otherDay, sc).existingPositions, [])
+            );
+            if (shift5ACreates3C) shiftOk = false;
+          }
+
+          if (shiftOk) {
             const tList = c2.teacherCode.split('/').map((t) => t.trim()).filter(Boolean);
             const tFree = tList.every((t) => {
               const addedPkar = isKP2027Year1 && grade === 1 && slot.slotId === 'W4' ? 0.5 : 0;
@@ -4653,9 +4714,13 @@ function runSingleScheduleAttempt(
                 if (arFitsMorn) {
                   [prevSlot, slot].forEach((ds, idx) => bookSlots(grade, day, [ds], ar.cells[idx]));
                   let off = 0;
-                  let remOk = true;
+                  let remOk = !hasThreeConsecutiveSameSubject(
+                    getGradeDayRegularInfo(grade, day, ar.cells[0].subjectCode).existingPositions,
+                    []
+                  );
                   const packedSlots: SlotTimeInfo[] = [];
                   for (const rr of remRuns) {
+                    if (!remOk) break;
                     const dss = aSlots.slice(off, off + rr.cells.length);
                     if (
                       dss.length !== rr.cells.length ||
@@ -4674,7 +4739,12 @@ function runSingleScheduleAttempt(
                     });
                     off += rr.cells.length;
                   }
-                  if (remOk) {
+                  if (
+                    remOk &&
+                    !Array.from(new Set(remRuns.map((r) => r.cells[0].subjectCode))).some((sc) =>
+                      hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, day, sc).existingPositions, [])
+                    )
+                  ) {
                     anyMoved = true;
                     break;
                   }
@@ -4805,12 +4875,18 @@ function runSingleScheduleAttempt(
                         remRuns.push({ slots: [], cells: [prevCell], subjectCode: prevCell.subjectCode, teacherCode: prevCell.teacherCode });
                       }
 
+                      const checkSubs5C = Array.from(new Set([oc1.subjectCode, ...remRuns.map((r) => r.subjectCode)]));
                       const tryPack5C = (usedMask: number, offset: number, prevSub?: string): boolean => {
-                        if (usedMask === (1 << remRuns.length) - 1) return true;
+                        if (usedMask === (1 << remRuns.length) - 1) {
+                          return !checkSubs5C.some((sc) =>
+                            hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, day, sc).existingPositions, [])
+                          );
+                        }
                         for (let ri = 0; ri < remRuns.length; ri++) {
                           if (usedMask & (1 << ri)) continue;
                           const run = remRuns[ri];
                           if (prevSub && prevSub === run.subjectCode) continue;
+                          if (offset === 0 && oc1.subjectCode === run.subjectCode) continue;
                           const ds = aSlots.slice(offset, offset + run.cells.length);
                           if (ds.length !== run.cells.length) continue;
                           if (
@@ -4828,7 +4904,11 @@ function runSingleScheduleAttempt(
                         return false;
                       };
 
-                      if (remRuns.length <= 4 && tryPack5C(0, 0)) {
+                      const morn5C3C = hasThreeConsecutiveSameSubject(
+                        getGradeDayRegularInfo(grade, day, oc1.subjectCode).existingPositions,
+                        []
+                      );
+                      if (!morn5C3C && remRuns.length <= 4 && tryPack5C(0, 0)) {
                         anyMoved = true;
                         break;
                       }
@@ -5112,7 +5192,13 @@ function runSingleScheduleAttempt(
                         bookSlots(grade, day, [ds], rc);
                         bookedShift.push(ds);
                       }
-                      if (shiftOk) return true;
+                      if (shiftOk) {
+                        const checkSubs5EC = Array.from(new Set([dCell.subjectCode, ...restCells.map((rc) => rc.subjectCode)]));
+                        const has3C5EC = checkSubs5EC.some((sc) =>
+                          hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, day, sc).existingPositions, [])
+                        );
+                        if (!has3C5EC) return true;
+                      }
                       unbookSlots(grade, day, [vacatedFrontSlot, ...bookedShift]);
                       return false;
                     };
@@ -5368,12 +5454,18 @@ function runSingleScheduleAttempt(
                       remRuns.push({ slots: [], cells: [mPrevCell], subjectCode: mPrevCell.subjectCode, teacherCode: mPrevCell.teacherCode });
                     }
 
+                    const checkSubs5F = Array.from(new Set([oc1.subjectCode, ...remRuns.map((r) => r.subjectCode)]));
                     const tryPack5F = (usedMask: number, offset: number, prevSub?: string): boolean => {
-                      if (usedMask === (1 << remRuns.length) - 1) return true;
+                      if (usedMask === (1 << remRuns.length) - 1) {
+                        return !checkSubs5F.some((sc) =>
+                          hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, day, sc).existingPositions, [])
+                        );
+                      }
                       for (let ri = 0; ri < remRuns.length; ri++) {
                         if (usedMask & (1 << ri)) continue;
                         const run = remRuns[ri];
                         if (prevSub && prevSub === run.subjectCode) continue;
+                        if (offset === 0 && oc1.subjectCode === run.subjectCode) continue;
                         const ds = aSlots.slice(offset, offset + run.cells.length);
                         if (ds.length !== run.cells.length) continue;
                         if (
@@ -5391,7 +5483,11 @@ function runSingleScheduleAttempt(
                       return false;
                     };
 
-                    if (remRuns.length <= 4 && tryPack5F(0, 0)) {
+                    const morn5F3C = hasThreeConsecutiveSameSubject(
+                      getGradeDayRegularInfo(grade, day, oc1.subjectCode).existingPositions,
+                      []
+                    );
+                    if (!morn5F3C && remRuns.length <= 4 && tryPack5F(0, 0)) {
                       anyMoved = true;
                       break;
                     }
@@ -5581,11 +5677,17 @@ function runSingleScheduleAttempt(
                 const destFlexSlots = [...flexMSlots, ...flexASlots.slice(0, targetAfterLen)];
                 unbookSlots(1, day, origFlexSlots);
 
-                const tryRepackDay = (usedMask: number, offset: number): boolean => {
-                  if (usedMask === (1 << rawRuns.length) - 1) return true;
+                const checkSubs5G = Array.from(new Set(rawRuns.map((r) => r.subjectCode)));
+                const tryRepackDay = (usedMask: number, offset: number, prevSub?: string): boolean => {
+                  if (usedMask === (1 << rawRuns.length) - 1) {
+                    return !checkSubs5G.some((sc) =>
+                      hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(1, day, sc).existingPositions, [])
+                    );
+                  }
                   for (let ri = 0; ri < rawRuns.length; ri++) {
                     if (usedMask & (1 << ri)) continue;
                     const run = rawRuns[ri];
+                    if (prevSub && prevSub === run.subjectCode) continue;
                     const ds = destFlexSlots.slice(offset, offset + run.cells.length);
                     if (ds.length !== run.cells.length) continue;
                     // Never split a [2]-block across recess!
@@ -5605,7 +5707,7 @@ function runSingleScheduleAttempt(
                       })
                     ) {
                       ds.forEach((dslot, idx) => bookSlots(1, day, [dslot], run.cells[idx]));
-                      if (tryRepackDay(usedMask | (1 << ri), offset + run.cells.length)) return true;
+                      if (tryRepackDay(usedMask | (1 << ri), offset + run.cells.length, run.subjectCode)) return true;
                       unbookSlots(1, day, ds);
                     }
                   }
@@ -5725,12 +5827,18 @@ function runSingleScheduleAttempt(
                             remRuns.push({ slots: [], cells: [mPrevCell], subjectCode: mPrevCell.subjectCode, teacherCode: mPrevCell.teacherCode });
                           }
 
+                          const checkSubs5GB = Array.from(new Set([oc1.subjectCode, ...remRuns.map((r) => r.subjectCode)]));
                           const tryPack5G = (usedMask: number, offset: number, prevSub?: string): boolean => {
-                            if (usedMask === (1 << remRuns.length) - 1) return true;
+                            if (usedMask === (1 << remRuns.length) - 1) {
+                              return !checkSubs5GB.some((sc) =>
+                                hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(1, day, sc).existingPositions, [])
+                              );
+                            }
                             for (let ri = 0; ri < remRuns.length; ri++) {
                               if (usedMask & (1 << ri)) continue;
                               const run = remRuns[ri];
                               if (prevSub && prevSub === run.subjectCode) continue;
+                              if (offset === 0 && oc1.subjectCode === run.subjectCode) continue;
                               const ds = aSlots.slice(offset, offset + run.cells.length);
                               if (ds.length !== run.cells.length) continue;
                               if (
@@ -5748,7 +5856,11 @@ function runSingleScheduleAttempt(
                             return false;
                           };
 
-                          if (remRuns.length <= 4 && tryPack5G(0, 0)) {
+                          const morn5G3C = hasThreeConsecutiveSameSubject(
+                            getGradeDayRegularInfo(1, day, oc1.subjectCode).existingPositions,
+                            []
+                          );
+                          if (!morn5G3C && remRuns.length <= 4 && tryPack5G(0, 0)) {
                             anyMoved = true;
                             break;
                           }
@@ -5787,6 +5899,7 @@ function runSingleScheduleAttempt(
   // STEP 6: DAILY WORKLOAD REBALANCE SWAP (Smooths heavy-day vs light-day spikes)
   // Swaps two occupied regular slots across days within the same grade (zero gaps, zero clashes)
   // --------------------------------------------------------------------------
+  const runStep6Rebalance = () => {
   for (let rebalanceIter = 0; rebalanceIter < 40; rebalanceIter++) {
     let swapped = false;
     const unbalanced = Array.from(allTeacherCodesSet)
@@ -5808,7 +5921,7 @@ function runSingleScheduleAttempt(
       if (swapped) break;
       const targetT = item.t;
       const highDays = item.loads
-        .filter((x) => x.load >= item.minVal + 2.0 || x.load > 7.0)
+        .filter((x) => x.load >= item.minVal + 1.5 || x.load > 7.0)
         .sort((a, b) => b.load - a.load)
         .map((x) => x.day);
       const lowDays = item.loads
@@ -5842,7 +5955,7 @@ function runSingleScheduleAttempt(
                 const mean = sum / 5;
                 const variance = arr.reduce((a, x) => a + (x - mean) * (x - mean), 0);
                 const mt = getTeacherMinDailyTarget(sum);
-                const lowPen = mt > 0 ? arr.reduce((p, x) => p + (x < mt ? (mt - x) * 50_000 : 0), 0) : 0;
+                const lowPen = mt > 0 ? arr.reduce((p, x) => p + (x < mt ? (mt - x) * 300_000 : 0), 0) : 0;
                 const rangeSpike = sum >= 25 && mx - mn > 2.5 ? (mx - mn - 2.5) * 8_000 : 0;
                 const rangePen = sum >= 25 && mx - mn > 3.0 + 1e-6 ? 250_000 + (mx - mn - 3.0) * 30_000 : 0;
                 const fridayPen = sum >= 25 && arr[4] < Math.floor(sum / 5) - 1 ? 5_000 : 0;
@@ -5850,7 +5963,218 @@ function runSingleScheduleAttempt(
                 return acc + variance * 25 + (mx - mn) * (mx - mn) * 60 + lowPen + rangeSpike + rangePen + fridayPen + over7Pen;
               }, 0);
 
-            // Pass A: Swap standalone [1]-blocks across highDay <-> lowDay
+            // Helper: check day subject-multiset eligibility (ignoring exact slot positions if permutation can fix adjacency)
+            const checkDaySubjectMultiset = (
+              dDay: DayOfWeek,
+              addSub: string,
+              addLen: number,
+              excludeIds: Set<string>,
+              allowT1FiveFlag: boolean,
+              candidatePos?: number[]
+            ): boolean => {
+              const infoAfter = getGradeDayRegularInfo(grade, dDay, addSub, excludeIds);
+              const baseCap = getMaxSubjectsPerDay(grade) + (allowT1FiveFlag ? 1 : 0);
+              const currentMaxSub =
+                grade <= 3
+                  ? Math.min(5, Math.max(baseCap, infoAfter.distinctCount))
+                  : Math.max(baseCap, infoAfter.distinctCount);
+              return canAddSubjectToClassDay(infoAfter.lessonsList, addSub, addLen, grade, {
+                maxSubjectsOverride: currentMaxSub,
+                existingPeriodPositions: infoAfter.existingPositions,
+                ...(candidatePos ? { candidatePeriodPositions: candidatePos } : {}),
+              });
+            };
+
+            // Helper: verify full day regularity (no 3-consecutive same subject, no 1+1+1 split, max daily caps respected)
+            const isGradeDayClean = (dDay: DayOfWeek, subsToCheck: string[]): boolean => {
+              for (const sc of subsToCheck) {
+                const info = getGradeDayRegularInfo(grade, dDay, sc);
+                const pos = [...info.existingPositions].sort((a, b) => a - b);
+                if (hasThreeConsecutiveSameSubject(pos, [])) return false;
+                if (pos.length === 2 && pos[1] - pos[0] !== 1) return false;
+                if (pos.length === 3 && pos[1] - pos[0] !== 1 && pos[2] - pos[1] !== 1) return false;
+              }
+              return true;
+            };
+
+            // Helper: permute unpinned runs within a single session (or across recess on short days like JUMAAT) so replacedSlots receives newCells
+            const tryPermuteDaySessionCore = (
+              dDay: DayOfWeek,
+              replacedSlots: SlotTimeInfo[],
+              newCells: TimetableCell[],
+              allowCrossRecess: boolean
+            ): { restore: () => void } | null => {
+              const allSlots = getGradeDaySlots(grade, dDay, academicYear).filter(
+                (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
+              );
+              const isMorn = replacedSlots[0].endMinutes <= 585;
+              const sessSlots = allowCrossRecess
+                ? allSlots
+                : allSlots.filter((s) => (isMorn ? s.endMinutes <= 585 : s.startMinutes >= 615));
+              const replacedIds = new Set(replacedSlots.map((s) => s.slotId));
+
+              const snapCells: (TimetableCell | null)[] = sessSlots.map((s) => grid[grade]?.[dDay]?.[s.slotId] ?? null);
+
+              const isSlotPinned = (s: SlotTimeInfo, c: TimetableCell | null, isRepl: boolean): boolean => {
+                if (isRepl) return false;
+                if (!c) return true;
+                if (c.isLocked || c.subjectCode === 'PJ') return true;
+                if (isKP2027Year1 && grade === 1 && s.slotId === 'W4') return true;
+                return false;
+              };
+
+              const runs: Array<{ cells: TimetableCell[]; subjectCode: string; teacherCode: string }> = [];
+              const pinnedMask: boolean[] = sessSlots.map((s, idx) => {
+                const isRepl = replacedIds.has(s.slotId);
+                return isSlotPinned(s, snapCells[idx], isRepl);
+              });
+
+              const sameSess = (a: SlotTimeInfo, b: SlotTimeInfo) => (a.endMinutes <= 585) === (b.endMinutes <= 585);
+
+              let si = 0;
+              while (si < sessSlots.length) {
+                if (pinnedMask[si]) {
+                  si++;
+                  continue;
+                }
+                const sl = sessSlots[si];
+                if (replacedIds.has(sl.slotId)) {
+                  let len = 1;
+                  while (
+                    si + len < sessSlots.length &&
+                    replacedIds.has(sessSlots[si + len].slotId) &&
+                    sameSess(sl, sessSlots[si + len])
+                  ) {
+                    len++;
+                  }
+                  if (len !== newCells.length) return null;
+                  runs.push({
+                    cells: [...newCells],
+                    subjectCode: newCells[0].subjectCode,
+                    teacherCode: newCells[0].teacherCode,
+                  });
+                  si += len;
+                  continue;
+                }
+                const sc = snapCells[si]!;
+                const rc: TimetableCell[] = [sc];
+                let len = 1;
+                while (
+                  si + len < sessSlots.length &&
+                  !pinnedMask[si + len] &&
+                  !replacedIds.has(sessSlots[si + len].slotId) &&
+                  sameSess(sl, sessSlots[si + len]) &&
+                  snapCells[si + len]?.subjectCode === sc.subjectCode
+                ) {
+                  rc.push(snapCells[si + len]!);
+                  len++;
+                }
+                runs.push({ cells: rc, subjectCode: sc.subjectCode, teacherCode: sc.teacherCode });
+                si += len;
+              }
+
+              const maxRuns = allowCrossRecess ? 6 : 5;
+              if (runs.length < 2 || runs.length > maxRuns) return null;
+
+              const unpinnedSlots: SlotTimeInfo[] = [];
+              sessSlots.forEach((s, idx) => {
+                if (!pinnedMask[idx]) {
+                  unpinnedSlots.push(s);
+                  if (grid[grade]?.[dDay]?.[s.slotId]) {
+                    unbookSlots(grade, dDay, [s]);
+                  }
+                }
+              });
+
+              const subsToVerify = Array.from(new Set(runs.map((r) => r.subjectCode)));
+
+              const dfsPlace = (slotIdx: number, usedMask: number, prevSub?: string): boolean => {
+                while (slotIdx < sessSlots.length && pinnedMask[slotIdx]) {
+                  prevSub = snapCells[slotIdx]?.subjectCode;
+                  slotIdx++;
+                }
+                if (usedMask === (1 << runs.length) - 1) {
+                  return isGradeDayClean(dDay, subsToVerify);
+                }
+                if (slotIdx >= sessSlots.length) return false;
+
+                // Contiguous unpinned span within same session (never straddle recess)
+                let spanEnd = slotIdx;
+                while (
+                  spanEnd < sessSlots.length &&
+                  !pinnedMask[spanEnd] &&
+                  sameSess(sessSlots[slotIdx], sessSlots[spanEnd])
+                ) {
+                  spanEnd++;
+                }
+                const spanLen = spanEnd - slotIdx;
+
+                for (let ri = 0; ri < runs.length; ri++) {
+                  if (usedMask & (1 << ri)) continue;
+                  const run = runs[ri];
+                  if (run.cells.length > spanLen) continue;
+                  if (prevSub && prevSub === run.subjectCode) continue;
+                  const targetSlots = sessSlots.slice(slotIdx, slotIdx + run.cells.length);
+                  if (isKP2027Year1 && grade === 1 && targetSlots.some((ts) => ts.slotId === 'W4')) continue;
+                  if (
+                    slotIdx + run.cells.length === spanEnd &&
+                    spanEnd < sessSlots.length &&
+                    snapCells[spanEnd]?.subjectCode === run.subjectCode
+                  ) {
+                    continue;
+                  }
+                  if (
+                    isSlotFreeForTeacher(run.teacherCode, dDay, targetSlots, run.subjectCode, grade, {
+                      dailyCapOverride: 8,
+                      enforceBreaks: false,
+                      allowSingleDayOver7: true,
+                    })
+                  ) {
+                    targetSlots.forEach((ts, idx) => bookSlots(grade, dDay, [ts], run.cells[idx]));
+                    if (dfsPlace(slotIdx + run.cells.length, usedMask | (1 << ri), run.subjectCode)) {
+                      return true;
+                    }
+                    unbookSlots(grade, dDay, targetSlots);
+                  }
+                }
+                return false;
+              };
+
+              if (dfsPlace(0, 0)) {
+                return {
+                  restore: () => {
+                    unbookSlots(grade, dDay, unpinnedSlots);
+                    sessSlots.forEach((s, idx) => {
+                      if (!pinnedMask[idx] && snapCells[idx]) {
+                        bookSlots(grade, dDay, [s], snapCells[idx]!);
+                      }
+                    });
+                  },
+                };
+              }
+
+              sessSlots.forEach((s, idx) => {
+                if (!pinnedMask[idx] && snapCells[idx]) {
+                  bookSlots(grade, dDay, [s], snapCells[idx]!);
+                }
+              });
+              return null;
+            };
+
+            const tryPermuteDaySession = (
+              dDay: DayOfWeek,
+              replacedSlots: SlotTimeInfo[],
+              newCells: TimetableCell[]
+            ): { restore: () => void } | null => {
+              const singleSess = tryPermuteDaySessionCore(dDay, replacedSlots, newCells, false);
+              if (singleSess) return singleSess;
+              if (dDay === 'JUMAAT') {
+                return tryPermuteDaySessionCore(dDay, replacedSlots, newCells, true);
+              }
+              return null;
+            };
+
+            // Pass A: Swap standalone [1]-blocks across highDay <-> lowDay (with symmetric session-permutation fallback)
             for (const sHigh of highSlots) {
               if (swapped) break;
               const cellHigh = grid[grade]?.[highDay]?.[sHigh.slotId];
@@ -5925,85 +6249,136 @@ function runSingleScheduleAttempt(
                   }
                 }
 
-                // Verify class subject daily cap & compact subject ceiling remain valid on both days
                 const allowT1Five = grade <= 3 && (item.belowTarget > 0 || item.range > 3.0 + 1e-6);
-                const baseCapA = getMaxSubjectsPerDay(grade) + (allowT1Five ? 1 : 0);
                 const highInfoAfter = getGradeDayRegularInfo(grade, highDay, cellLow.subjectCode, new Set([sHigh.slotId]));
                 const highPos = highInfoAfter.regularSlots.findIndex((rs) => rs.slotId === sHigh.slotId);
-                const highCurrentMaxSub = grade <= 3 ? Math.min(5, Math.max(baseCapA, highInfoAfter.distinctCount)) : Math.max(baseCapA, highInfoAfter.distinctCount);
-                if (
-                  !canAddSubjectToClassDay(highInfoAfter.lessonsList, cellLow.subjectCode, 1, grade, {
-                    maxSubjectsOverride: highCurrentMaxSub,
-                    existingPeriodPositions: highInfoAfter.existingPositions,
-                    candidatePeriodPositions: [highPos],
-                  })
-                ) {
+                const lowInfoAfter = getGradeDayRegularInfo(grade, lowDay, cellHigh.subjectCode, new Set([sLow.slotId]));
+                const lowPos = lowInfoAfter.regularSlots.findIndex((rs) => rs.slotId === sLow.slotId);
+
+                // Multiset feasibility check (allow session permutation to fix adjacency when 2 periods already exist on dest day)
+                const highMultiOk = checkDaySubjectMultiset(
+                  highDay,
+                  cellLow.subjectCode,
+                  1,
+                  new Set([sHigh.slotId]),
+                  allowT1Five,
+                  highInfoAfter.existingPositions.length === 1 ? [highPos] : undefined
+                );
+                const lowMultiOk = checkDaySubjectMultiset(
+                  lowDay,
+                  cellHigh.subjectCode,
+                  1,
+                  new Set([sLow.slotId]),
+                  allowT1Five,
+                  lowInfoAfter.existingPositions.length === 1 ? [lowPos] : undefined
+                );
+                if (!highMultiOk || !lowMultiOk) continue;
+
+                const involved = Array.from(new Set([...highTeachers, ...lowTeachers]));
+                const beforeScore = scoreInvolvedTeachers(involved);
+
+                const directHighAdjOk = checkDaySubjectMultiset(
+                  highDay,
+                  cellLow.subjectCode,
+                  1,
+                  new Set([sHigh.slotId]),
+                  allowT1Five,
+                  [highPos]
+                );
+                const directLowAdjOk = checkDaySubjectMultiset(
+                  lowDay,
+                  cellHigh.subjectCode,
+                  1,
+                  new Set([sLow.slotId]),
+                  allowT1Five,
+                  [lowPos]
+                );
+
+                // Evaluate potential score gain (teachers' daily loads only depend on day, not slot index within day)
+                unbookSlots(grade, highDay, [sHigh]);
+                unbookSlots(grade, lowDay, [sLow]);
+                bookSlots(grade, lowDay, [sLow], cellHigh);
+                bookSlots(grade, highDay, [sHigh], cellLow);
+                const afterScore = scoreInvolvedTeachers(involved);
+                unbookSlots(grade, lowDay, [sLow]);
+                unbookSlots(grade, highDay, [sHigh]);
+
+                if (afterScore + 0.1 >= beforeScore) {
+                  bookSlots(grade, highDay, [sHigh], cellHigh);
+                  bookSlots(grade, lowDay, [sLow], cellLow);
                   continue;
                 }
 
-                const lowInfoAfter = getGradeDayRegularInfo(grade, lowDay, cellHigh.subjectCode, new Set([sLow.slotId]));
-                const lowPos = lowInfoAfter.regularSlots.findIndex((rs) => rs.slotId === sLow.slotId);
-                const lowCurrentMaxSub = grade <= 3 ? Math.min(5, Math.max(baseCapA, lowInfoAfter.distinctCount)) : Math.max(baseCapA, lowInfoAfter.distinctCount);
-                if (
-                  !canAddSubjectToClassDay(lowInfoAfter.lessonsList, cellHigh.subjectCode, 1, grade, {
-                    maxSubjectsOverride: lowCurrentMaxSub,
-                    existingPeriodPositions: lowInfoAfter.existingPositions,
-                    candidatePeriodPositions: [lowPos],
-                  })
-                ) {
-                  continue;
-                }
+                // Restore temporarily before trying direct / session-permuted placements cleanly
+                bookSlots(grade, highDay, [sHigh], cellHigh);
+                bookSlots(grade, lowDay, [sLow], cellLow);
 
                 unbookSlots(grade, highDay, [sHigh]);
                 unbookSlots(grade, lowDay, [sLow]);
 
-                const highFitsOnLow = isSlotFreeForTeacher(
-                  cellHigh.teacherCode,
-                  lowDay,
-                  [sLow],
-                  cellHigh.subjectCode,
-                  grade,
-                  { dailyCapOverride: 8, enforceBreaks: false, allowSingleDayOver7: true }
-                );
-                const lowFitsOnHigh =
-                  highFitsOnLow &&
-                  isSlotFreeForTeacher(
-                    cellLow.teacherCode,
-                    highDay,
-                    [sHigh],
-                    cellLow.subjectCode,
-                    grade,
-                    { dailyCapOverride: 8, enforceBreaks: false, allowSingleDayOver7: true }
-                  );
+                const highFitsDirect =
+                  directLowAdjOk &&
+                  isSlotFreeForTeacher(cellHigh.teacherCode, lowDay, [sLow], cellHigh.subjectCode, grade, {
+                    dailyCapOverride: 8,
+                    enforceBreaks: false,
+                    allowSingleDayOver7: true,
+                  });
+                const lowFitsDirect =
+                  directHighAdjOk &&
+                  isSlotFreeForTeacher(cellLow.teacherCode, highDay, [sHigh], cellLow.subjectCode, grade, {
+                    dailyCapOverride: 8,
+                    enforceBreaks: false,
+                    allowSingleDayOver7: true,
+                  });
 
-                if (highFitsOnLow && lowFitsOnHigh) {
-                  const involved = Array.from(new Set([...highTeachers, ...lowTeachers]));
+                if (highFitsDirect && lowFitsDirect) {
                   bookSlots(grade, lowDay, [sLow], cellHigh);
                   bookSlots(grade, highDay, [sHigh], cellLow);
-                  const afterScore = scoreInvolvedTeachers(involved);
+                  swapped = true;
+                  break;
+                }
 
+                // Try symmetric session permutation on whichever day(s) failed direct placement
+                bookSlots(grade, highDay, [sHigh], cellHigh);
+                bookSlots(grade, lowDay, [sLow], cellLow);
+
+                let lowPerm: { restore: () => void } | null = null;
+                let highPerm: { restore: () => void } | null = null;
+                let lowBookedDirect = false;
+
+                if (highFitsDirect) {
                   unbookSlots(grade, lowDay, [sLow]);
-                  unbookSlots(grade, highDay, [sHigh]);
-                  bookSlots(grade, highDay, [sHigh], cellHigh);
-                  bookSlots(grade, lowDay, [sLow], cellLow);
-                  const beforeScore = scoreInvolvedTeachers(involved);
+                  bookSlots(grade, lowDay, [sLow], cellHigh);
+                  lowBookedDirect = true;
+                } else {
+                  lowPerm = tryPermuteDaySession(lowDay, [sLow], [cellHigh]);
+                }
 
-                  if (afterScore + 0.1 < beforeScore) {
+                if (lowBookedDirect || lowPerm) {
+                  if (lowFitsDirect) {
                     unbookSlots(grade, highDay, [sHigh]);
-                    unbookSlots(grade, lowDay, [sLow]);
-                    bookSlots(grade, lowDay, [sLow], cellHigh);
                     bookSlots(grade, highDay, [sHigh], cellLow);
                     swapped = true;
                     break;
+                  } else {
+                    highPerm = tryPermuteDaySession(highDay, [sHigh], [cellLow]);
+                    if (highPerm) {
+                      swapped = true;
+                      break;
+                    }
                   }
-                } else {
-                  bookSlots(grade, highDay, [sHigh], cellHigh);
+                }
+
+                if (lowPerm) lowPerm.restore();
+                if (lowBookedDirect) {
+                  unbookSlots(grade, lowDay, [sLow]);
                   bookSlots(grade, lowDay, [sLow], cellLow);
                 }
+                if (highPerm) highPerm.restore();
               }
             }
 
-            // Pass B: Swap intact same-session [2]-blocks across highDay <-> lowDay (including intact PM/PAI [2]-blocks!)
+            // Pass B: Swap intact same-session [2]-blocks across highDay <-> lowDay (with symmetric session-perm & cross-grade slide fallback)
             for (let hi = 0; hi < highSlots.length - 1 && !swapped; hi++) {
               const hs1 = highSlots[hi];
               const hs2 = highSlots[hi + 1];
@@ -6050,57 +6425,70 @@ function runSingleScheduleAttempt(
                 }
 
                 const allowT1FiveB = grade <= 3 && (item.belowTarget > 0 || item.range > 3.0 + 1e-6);
-                const baseCapB = getMaxSubjectsPerDay(grade) + (allowT1FiveB ? 1 : 0);
                 const highInfoAfter = getGradeDayRegularInfo(grade, highDay, lc1.subjectCode, new Set([hs1.slotId, hs2.slotId]));
                 const highPos = [hs1, hs2].map((sg) => highInfoAfter.regularSlots.findIndex((rs) => rs.slotId === sg.slotId));
-                const highCurrentMaxSub = grade <= 3 ? Math.min(5, Math.max(baseCapB, highInfoAfter.distinctCount)) : Math.max(baseCapB, highInfoAfter.distinctCount);
+                const lowInfoAfter = getGradeDayRegularInfo(grade, lowDay, hc1.subjectCode, new Set([ls1.slotId, ls2.slotId]));
+                const lowPos = [ls1, ls2].map((sg) => lowInfoAfter.regularSlots.findIndex((rs) => rs.slotId === sg.slotId));
+
                 if (
-                  !canAddSubjectToClassDay(highInfoAfter.lessonsList, lc1.subjectCode, 2, grade, {
-                    maxSubjectsOverride: highCurrentMaxSub,
-                    existingPeriodPositions: highInfoAfter.existingPositions,
-                    candidatePeriodPositions: highPos,
-                  })
+                  !checkDaySubjectMultiset(highDay, lc1.subjectCode, 2, new Set([hs1.slotId, hs2.slotId]), allowT1FiveB) ||
+                  !checkDaySubjectMultiset(lowDay, hc1.subjectCode, 2, new Set([ls1.slotId, ls2.slotId]), allowT1FiveB)
                 ) {
                   continue;
                 }
 
-                const lowInfoAfter = getGradeDayRegularInfo(grade, lowDay, hc1.subjectCode, new Set([ls1.slotId, ls2.slotId]));
-                const lowPos = [ls1, ls2].map((sg) => lowInfoAfter.regularSlots.findIndex((rs) => rs.slotId === sg.slotId));
-                const lowCurrentMaxSub = grade <= 3 ? Math.min(5, Math.max(baseCapB, lowInfoAfter.distinctCount)) : Math.max(baseCapB, lowInfoAfter.distinctCount);
-                if (
-                  !canAddSubjectToClassDay(lowInfoAfter.lessonsList, hc1.subjectCode, 2, grade, {
-                    maxSubjectsOverride: lowCurrentMaxSub,
-                    existingPeriodPositions: lowInfoAfter.existingPositions,
-                    candidatePeriodPositions: lowPos,
-                  })
-                ) {
-                  continue;
-                }
+                const involved = Array.from(new Set([...highTeachers, ...lowTeachers]));
+                const beforeScore = scoreInvolvedTeachers(involved);
 
                 unbookSlots(grade, highDay, [hs1, hs2]);
                 unbookSlots(grade, lowDay, [ls1, ls2]);
+                bookSlots(grade, lowDay, [ls1], hc1);
+                bookSlots(grade, lowDay, [ls2], hc2);
+                bookSlots(grade, highDay, [hs1], lc1);
+                bookSlots(grade, highDay, [hs2], lc2);
+                const afterScore = scoreInvolvedTeachers(involved);
+                unbookSlots(grade, lowDay, [ls1, ls2]);
+                unbookSlots(grade, highDay, [hs1, hs2]);
 
-                const highFitsOnLow = isSlotFreeForTeacher(
-                  hc1.teacherCode,
-                  lowDay,
-                  [ls1, ls2],
-                  hc1.subjectCode,
-                  grade,
-                  { dailyCapOverride: 8, enforceBreaks: false, allowSingleDayOver7: true }
-                );
-                const lowFitsOnHigh = isSlotFreeForTeacher(
-                  lc1.teacherCode,
-                  highDay,
-                  [hs1, hs2],
-                  lc1.subjectCode,
-                  grade,
-                  { dailyCapOverride: 8, enforceBreaks: false, allowSingleDayOver7: true }
-                );
+                if (afterScore + 0.1 >= beforeScore) {
+                  bookSlots(grade, highDay, [hs1], hc1);
+                  bookSlots(grade, highDay, [hs2], hc2);
+                  bookSlots(grade, lowDay, [ls1], lc1);
+                  bookSlots(grade, lowDay, [ls2], lc2);
+                  continue;
+                }
 
-                // Helper: if 1 of the two directions fails ONLY due to a single grade's session time-overlap on that day,
-                // try sliding that other grade's session runs on that day cleanly to clear the time window!
-                let slideRollback: (() => void) | null = null;
-                if (highFitsOnLow !== lowFitsOnHigh) {
+                const directHighAdjB = checkDaySubjectMultiset(highDay, lc1.subjectCode, 2, new Set([hs1.slotId, hs2.slotId]), allowT1FiveB, highPos);
+                const directLowAdjB = checkDaySubjectMultiset(lowDay, hc1.subjectCode, 2, new Set([ls1.slotId, ls2.slotId]), allowT1FiveB, lowPos);
+
+                const highFitsOnLow =
+                  directLowAdjB &&
+                  isSlotFreeForTeacher(hc1.teacherCode, lowDay, [ls1, ls2], hc1.subjectCode, grade, {
+                    dailyCapOverride: 8,
+                    enforceBreaks: false,
+                    allowSingleDayOver7: true,
+                  });
+                const lowFitsOnHigh =
+                  directHighAdjB &&
+                  isSlotFreeForTeacher(lc1.teacherCode, highDay, [hs1, hs2], lc1.subjectCode, grade, {
+                    dailyCapOverride: 8,
+                    enforceBreaks: false,
+                    allowSingleDayOver7: true,
+                  });
+
+                if (highFitsOnLow && lowFitsOnHigh) {
+                  bookSlots(grade, lowDay, [ls1], hc1);
+                  bookSlots(grade, lowDay, [ls2], hc2);
+                  bookSlots(grade, highDay, [hs1], lc1);
+                  bookSlots(grade, highDay, [hs2], lc2);
+                  swapped = true;
+                  break;
+                }
+
+                // Helper: if 1 of the two directions fails ONLY due to a single other grade's session time-overlap on that day,
+                // try sliding that other grade's session runs on that day cleanly to clear the time window
+                let slideWorked = false;
+                if (highFitsOnLow !== lowFitsOnHigh && directHighAdjB && directLowAdjB) {
                   const fixDay = highFitsOnLow ? highDay : lowDay;
                   const fixSlots = highFitsOnLow ? [hs1, hs2] : [ls1, ls2];
                   const fixTeacherCode = highFitsOnLow ? lc1.teacherCode : hc1.teacherCode;
@@ -6160,8 +6548,13 @@ function runSingleScheduleAttempt(
                       const destRange = ogSess.slice(0, origOgSlots.length);
                       if (origOgSlots.length === destRange.length) {
                         unbookSlots(og, fixDay, origOgSlots);
-                        const trySlideOg = (usedMask: number, offset: number): boolean => {
+                        const checkOgSubs = Array.from(new Set(ogRuns.map((r) => r.subjectCode)));
+                        const trySlideOg = (usedMask: number, offset: number, prevSub?: string): boolean => {
                           if (usedMask === (1 << ogRuns.length) - 1) {
+                            const has3C = checkOgSubs.some((sc) =>
+                              hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(og, fixDay, sc).existingPositions, [])
+                            );
+                            if (has3C) return false;
                             return isSlotFreeForTeacher(fixTeacherCode, fixDay, fixSlots, fixSubjectCode, grade, {
                               dailyCapOverride: 8,
                               enforceBreaks: false,
@@ -6171,6 +6564,7 @@ function runSingleScheduleAttempt(
                           for (let ri = 0; ri < ogRuns.length; ri++) {
                             if (usedMask & (1 << ri)) continue;
                             const run = ogRuns[ri];
+                            if (prevSub && prevSub === run.subjectCode) continue;
                             const ds = destRange.slice(offset, offset + run.cells.length);
                             if (
                               isSlotFreeForTeacher(run.teacherCode, fixDay, ds, run.subjectCode, og, {
@@ -6180,7 +6574,7 @@ function runSingleScheduleAttempt(
                               })
                             ) {
                               ds.forEach((dslot, idx) => bookSlots(og, fixDay, [dslot], run.cells[idx]));
-                              if (trySlideOg(usedMask | (1 << ri), offset + run.cells.length)) return true;
+                              if (trySlideOg(usedMask | (1 << ri), offset + run.cells.length, run.subjectCode)) return true;
                               unbookSlots(og, fixDay, ds);
                             }
                           }
@@ -6188,10 +6582,13 @@ function runSingleScheduleAttempt(
                         };
 
                         if (trySlideOg(0, 0)) {
-                          slideRollback = () => {
-                            unbookSlots(og, fixDay, destRange);
-                            origOgSlots.forEach((s, idx) => bookSlots(og, fixDay, [s], origOgCells[idx]));
-                          };
+                          bookSlots(grade, lowDay, [ls1], hc1);
+                          bookSlots(grade, lowDay, [ls2], hc2);
+                          bookSlots(grade, highDay, [hs1], lc1);
+                          bookSlots(grade, highDay, [hs2], lc2);
+                          slideWorked = true;
+                          swapped = true;
+                          break;
                         } else {
                           origOgSlots.forEach((s, idx) => bookSlots(og, fixDay, [s], origOgCells[idx]));
                         }
@@ -6200,39 +6597,171 @@ function runSingleScheduleAttempt(
                   }
                 }
 
-                if ((highFitsOnLow && lowFitsOnHigh) || slideRollback !== null) {
-                  const involved = Array.from(new Set([...highTeachers, ...lowTeachers]));
-                  bookSlots(grade, lowDay, [ls1], hc1);
-                  bookSlots(grade, lowDay, [ls2], hc2);
-                  bookSlots(grade, highDay, [hs1], lc1);
-                  bookSlots(grade, highDay, [hs2], lc2);
-                  const afterScore = scoreInvolvedTeachers(involved);
-
-                  unbookSlots(grade, lowDay, [ls1, ls2]);
-                  unbookSlots(grade, highDay, [hs1, hs2]);
+                if (!slideWorked) {
+                  // Restore before trying symmetric session permutation on highDay / lowDay
                   bookSlots(grade, highDay, [hs1], hc1);
                   bookSlots(grade, highDay, [hs2], hc2);
                   bookSlots(grade, lowDay, [ls1], lc1);
                   bookSlots(grade, lowDay, [ls2], lc2);
-                  const beforeScore = scoreInvolvedTeachers(involved);
 
-                  if (afterScore + 0.1 < beforeScore) {
-                    unbookSlots(grade, highDay, [hs1, hs2]);
+                  let lowPermB: { restore: () => void } | null = null;
+                  let highPermB: { restore: () => void } | null = null;
+                  let lowDirectB = false;
+
+                  if (highFitsOnLow) {
                     unbookSlots(grade, lowDay, [ls1, ls2]);
                     bookSlots(grade, lowDay, [ls1], hc1);
                     bookSlots(grade, lowDay, [ls2], hc2);
-                    bookSlots(grade, highDay, [hs1], lc1);
-                    bookSlots(grade, highDay, [hs2], lc2);
-                    swapped = true;
-                    break;
-                  } else if (slideRollback) {
-                    slideRollback();
+                    lowDirectB = true;
+                  } else {
+                    lowPermB = tryPermuteDaySession(lowDay, [ls1, ls2], [hc1, hc2]);
                   }
-                } else {
-                  bookSlots(grade, highDay, [hs1], hc1);
-                  bookSlots(grade, highDay, [hs2], hc2);
-                  bookSlots(grade, lowDay, [ls1], lc1);
-                  bookSlots(grade, lowDay, [ls2], lc2);
+
+                  if (lowDirectB || lowPermB) {
+                    if (lowFitsOnHigh) {
+                      unbookSlots(grade, highDay, [hs1, hs2]);
+                      bookSlots(grade, highDay, [hs1], lc1);
+                      bookSlots(grade, highDay, [hs2], lc2);
+                      swapped = true;
+                      break;
+                    } else {
+                      highPermB = tryPermuteDaySession(highDay, [hs1, hs2], [lc1, lc2]);
+                      if (highPermB) {
+                        swapped = true;
+                        break;
+                      }
+                    }
+                  }
+
+                  if (lowPermB) lowPermB.restore();
+                  if (lowDirectB) {
+                    unbookSlots(grade, lowDay, [ls1, ls2]);
+                    bookSlots(grade, lowDay, [ls1], lc1);
+                    bookSlots(grade, lowDay, [ls2], lc2);
+                  }
+                  if (highPermB) highPermB.restore();
+                }
+              }
+            }
+
+            // Pass C: Move a standalone [1]-block of targetT on highDay into a trailing empty slot on lowDay
+            if (!swapped) {
+              const lowMorn = lowSlots.filter((s) => s.endMinutes <= 585);
+              const lowAftern = lowSlots.filter((s) => s.startMinutes >= 615);
+              const anyLowAftern = lowAftern.some((s) => grid[grade]?.[lowDay]?.[s.slotId] !== null);
+              let trailingEmptyLow: SlotTimeInfo | null = null;
+              const firstEmptyAftern = lowAftern.find((s) => grid[grade]?.[lowDay]?.[s.slotId] === null);
+              if (firstEmptyAftern) {
+                const idx = lowAftern.indexOf(firstEmptyAftern);
+                if (!lowAftern.slice(idx + 1).some((s) => grid[grade]?.[lowDay]?.[s.slotId] !== null)) {
+                  trailingEmptyLow = firstEmptyAftern;
+                }
+              } else if (!anyLowAftern) {
+                const firstEmptyMorn = lowMorn.find((s) => grid[grade]?.[lowDay]?.[s.slotId] === null);
+                if (firstEmptyMorn) {
+                  const idx = lowMorn.indexOf(firstEmptyMorn);
+                  if (!lowMorn.slice(idx + 1).some((s) => grid[grade]?.[lowDay]?.[s.slotId] !== null)) {
+                    trailingEmptyLow = firstEmptyMorn;
+                  }
+                }
+              }
+
+              if (trailingEmptyLow && !(isKP2027Year1 && grade === 1 && trailingEmptyLow.slotId === 'W4')) {
+                const allowT1FiveC = grade <= 3 && (item.belowTarget > 0 || item.range > 3.0 + 1e-6);
+                const baseCapC = getMaxSubjectsPerDay(grade) + (allowT1FiveC ? 1 : 0);
+
+                for (let hi = highSlots.length - 1; hi >= 0 && !swapped; hi--) {
+                  const sHigh = highSlots[hi];
+                  const cellHigh = grid[grade]?.[highDay]?.[sHigh.slotId];
+                  if (!cellHigh || cellHigh.isLocked || cellHigh.subjectCode === 'PJ' || cellHigh.subjectCode === 'PM/PAI') continue;
+                  if (isKP2027Year1 && grade === 1 && sHigh.slotId === 'W4') continue;
+                  const highTeachers = cellHigh.teacherCode.split('/').map((x) => x.trim()).filter(Boolean);
+                  if (!highTeachers.includes(targetT)) continue;
+
+                  // Only detach standalone [1] or outer end of a same-session 3-block
+                  const sPrev = hi > 0 ? grid[grade][highDay][highSlots[hi - 1].slotId]?.subjectCode === cellHigh.subjectCode : false;
+                  const sNext = hi + 1 < highSlots.length ? grid[grade][highDay][highSlots[hi + 1].slotId]?.subjectCode === cellHigh.subjectCode : false;
+                  if (sPrev || sNext) continue;
+
+                  // Ensure removing sHigh keeps highDay gap-free (either trailing in its session or left-shiftable)
+                  const isHighMorn = sHigh.endMinutes <= 585;
+                  const highSess = isHighMorn
+                    ? highSlots.filter((s) => s.endMinutes <= 585)
+                    : highSlots.filter((s) => s.startMinutes >= 615);
+                  const hSessIdx = highSess.findIndex((s) => s.slotId === sHigh.slotId);
+                  const afterInSess = highSess.slice(hSessIdx + 1).filter((s) => grid[grade]?.[highDay]?.[s.slotId] !== null);
+                  if (isHighMorn && highSlots.some((s) => s.startMinutes >= 615 && grid[grade][highDay][s.slotId] !== null)) {
+                    continue;
+                  }
+                  if (
+                    afterInSess.some((s) => {
+                      const c = grid[grade][highDay][s.slotId];
+                      return !c || c.isLocked || c.subjectCode === 'PJ' || (isKP2027Year1 && grade === 1 && s.slotId === 'W4');
+                    })
+                  ) {
+                    continue;
+                  }
+
+                  const lowInfoAfter = getGradeDayRegularInfo(grade, lowDay, cellHigh.subjectCode);
+                  const lowPos = lowInfoAfter.regularSlots.findIndex((rs) => rs.slotId === trailingEmptyLow!.slotId);
+                  const lowCurrentMaxSub =
+                    grade <= 3 ? Math.min(5, Math.max(baseCapC, lowInfoAfter.distinctCount)) : Math.max(baseCapC, lowInfoAfter.distinctCount);
+
+                  if (
+                    !canAddSubjectToClassDay(lowInfoAfter.lessonsList, cellHigh.subjectCode, 1, grade, {
+                      maxSubjectsOverride: lowCurrentMaxSub,
+                      existingPeriodPositions: lowInfoAfter.existingPositions,
+                      candidatePeriodPositions: [lowPos],
+                    })
+                  ) {
+                    continue;
+                  }
+
+                  const beforeScore = scoreInvolvedTeachers(highTeachers);
+                  const shiftCells = afterInSess.map((s) => grid[grade][highDay][s.slotId]!);
+                  const shiftDests = highSess.slice(hSessIdx, hSessIdx + afterInSess.length);
+
+                  unbookSlots(grade, highDay, [sHigh, ...afterInSess]);
+
+                  const fitsLow = isSlotFreeForTeacher(
+                    cellHigh.teacherCode,
+                    lowDay,
+                    [trailingEmptyLow],
+                    cellHigh.subjectCode,
+                    grade,
+                    { dailyCapOverride: 8, enforceBreaks: false, allowSingleDayOver7: true }
+                  );
+                  const shiftFits =
+                    fitsLow &&
+                    shiftCells.every((sc, idx) =>
+                      isSlotFreeForTeacher(sc.teacherCode, highDay, [shiftDests[idx]], sc.subjectCode, grade, {
+                        dailyCapOverride: 8,
+                        enforceBreaks: false,
+                        allowSingleDayOver7: true,
+                      })
+                    );
+
+                  let validMove = false;
+                  if (shiftFits) {
+                    bookSlots(grade, lowDay, [trailingEmptyLow], cellHigh);
+                    shiftDests.forEach((ds, idx) => bookSlots(grade, highDay, [ds], shiftCells[idx]));
+                    const shift3C = Array.from(new Set(shiftCells.map((sc) => sc.subjectCode))).some((sc) =>
+                      hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(grade, highDay, sc).existingPositions, [])
+                    );
+                    const afterScore = scoreInvolvedTeachers(highTeachers);
+                    if (!shift3C && afterScore + 0.1 < beforeScore) {
+                      validMove = true;
+                      swapped = true;
+                    } else {
+                      unbookSlots(grade, lowDay, [trailingEmptyLow]);
+                      unbookSlots(grade, highDay, shiftDests);
+                    }
+                  }
+
+                  if (!validMove) {
+                    bookSlots(grade, highDay, [sHigh], cellHigh);
+                    afterInSess.forEach((s, idx) => bookSlots(grade, highDay, [s], shiftCells[idx]));
+                  }
                 }
               }
             }
@@ -6242,6 +6771,8 @@ function runSingleScheduleAttempt(
     }
     if (!swapped) break;
   }
+  };
+  runStep6Rebalance();
 
   // --------------------------------------------------------------------------
   // STEP 5.5: MANDATORY POST-COMPACTION & INTRA-CLASS SWAP REPAIR PASS (ZERO BLANK GUARANTEE)
@@ -6473,7 +7004,7 @@ function runSingleScheduleAttempt(
         if (!canMove(cell, srcDay, src, dstDay, dstSlot, 1, relaxY1)) continue;
         const afterCells = contiguousAfter.map((s) => grid[1][srcDay][s.slotId]!);
         const destAfter = [src, ...contiguousAfter.slice(0, -1)];
-        unbookSlots(1, srcDay, contiguousAfter);
+        unbookSlots(1, srcDay, [src, ...contiguousAfter]);
         const shiftOk = afterCells.every((ac, idx) =>
           isSlotFreeForTeacher(ac.teacherCode, srcDay, [destAfter[idx]], ac.subjectCode, 1, {
             dailyCapOverride: 8,
@@ -6481,8 +7012,17 @@ function runSingleScheduleAttempt(
             allowSingleDayOver7: true,
           })
         );
-        contiguousAfter.forEach((s, idx) => bookSlots(1, srcDay, [s], afterCells[idx]));
+        let shift3C = false;
         if (shiftOk) {
+          destAfter.forEach((ds, idx) => bookSlots(1, srcDay, [ds], afterCells[idx]));
+          shift3C = Array.from(new Set(afterCells.map((ac) => ac.subjectCode))).some((sc) =>
+            hasThreeConsecutiveSameSubject(getGradeDayRegularInfo(1, srcDay, sc).existingPositions, [])
+          );
+          unbookSlots(1, srcDay, destAfter);
+        }
+        bookSlots(1, srcDay, [src], cell);
+        contiguousAfter.forEach((s, idx) => bookSlots(1, srcDay, [s], afterCells[idx]));
+        if (shiftOk && !shift3C) {
           executeMove(1, srcDay, src, dstDay, dstSlot);
           for (let idx = 0; idx < contiguousAfter.length; idx++) {
             executeMove(1, srcDay, contiguousAfter[idx], srcDay, destAfter[idx]);
@@ -6540,6 +7080,10 @@ function runSingleScheduleAttempt(
     }
   }
 
+  // Re-run daily workload rebalance after Step 5.5 repair & Y1 W4 fix so emergency placements are evenly balanced
+  runStep6Rebalance();
+  runStep5Compaction();
+
   // Finalize Year 1 auto-PKAR pairing
   autoPairPKARInGrid(grid, academicYear);
 
@@ -6594,8 +7138,8 @@ function scoreCandidateAttempt(
   score -= audit.tahap1SubjectExcessDays * 12_000;
   score -= audit.totalDistinctSubjectDays * 1_200;
 
-  if (audit.middleGaps === 0) score += 1_500_000;
-  else score -= audit.middleGaps * 250_000;
+  if (audit.middleGaps === 0) score += 5_000_000;
+  else score -= audit.middleGaps * 3_000_000;
 
   // Prefer fewer days > 7.0 across school while focusing on overall daily balance
   score -= audit.totalDaysOver7 * 8_000;
@@ -6665,9 +7209,9 @@ export function generateAutoSchedule(
     const candidate = runSingleScheduleAttempt(cleanMatrix, classTeachers, academicYear, seed);
     const score = scoreCandidateAttempt(candidate, prevSig);
 
-    // Zero unplaced and zero clashes strictly outrank candidates with any unplaced periods
-    const candidateCleanCount = candidate.unplaced.length === 0 ? 1 : 0;
-    const bestCleanCount = bestCandidate && bestCandidate.unplaced.length === 0 ? 1 : 0;
+    // Zero unplaced, zero clashes, and zero middle gaps strictly outrank candidates with any unplaced periods or middle gaps
+    const candidateCleanCount = candidate.unplaced.length === 0 && candidate.audit.middleGaps === 0 ? 1 : 0;
+    const bestCleanCount = bestCandidate && bestCandidate.unplaced.length === 0 && bestCandidate.audit.middleGaps === 0 ? 1 : 0;
     if (
       !bestCandidate ||
       candidateCleanCount > bestCleanCount ||

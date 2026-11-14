@@ -10,6 +10,13 @@ import {
 } from './types';
 import { SubjectAllocationRow } from './SchoolTimetableMatrix';
 import { autoPairPKARInGrid, auditScheduleWorkload } from './autoScheduler';
+import {
+  computeUnscheduledLessons,
+  DragLessonCandidate,
+  evaluateSlotDropRadar,
+  SlotRadarStatus,
+  UnscheduledLessonCard,
+} from './holdingDock';
 import { 
   Sparkles, 
   AlertTriangle, 
@@ -20,7 +27,9 @@ import {
   Calendar,
   Table as TableIcon,
   ShieldCheck,
-  X
+  X,
+  Inbox,
+  ArrowDownToLine
 } from 'lucide-react';
 
 interface JKeyinGridProps {
@@ -64,7 +73,10 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
   const [editIsPemulihan, setEditIsPemulihan] = useState<boolean>(false);
 
   const [dragSource, setDragSource] = useState<{ grade: number; day: DayOfWeek; slotId: string } | null>(null);
+  const [activeDragLesson, setActiveDragLesson] = useState<DragLessonCandidate | null>(null);
   const [dragOverCellKey, setDragOverCellKey] = useState<string | null>(null);
+  const [dragOverDock, setDragOverDock] = useState<boolean>(false);
+  const [dockGradeFilter, setDockGradeFilter] = useState<number | 'ALL'>('ALL');
   const [workloadAlert, setWorkloadAlert] = useState<string | null>(null);
 
   const teacherCodesList = useMemo(
@@ -73,16 +85,65 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
   );
 
   const workloadAudit = useMemo(
-    () => auditScheduleWorkload(schedule, teacherCodesList),
-    [schedule, teacherCodesList]
+    () => auditScheduleWorkload(schedule, teacherCodesList, academicYear),
+    [schedule, teacherCodesList, academicYear]
   );
+
+  const unscheduledCards = useMemo(
+    () => computeUnscheduledLessons(matrixData, schedule, academicYear),
+    [matrixData, schedule, academicYear]
+  );
+
+  const unscheduledByGrade = useMemo(() => {
+    const map = new Map<number, UnscheduledLessonCard[]>();
+    for (let g = 1; g <= 6; g++) map.set(g, []);
+    unscheduledCards.forEach((card) => {
+      const list = map.get(card.grade) || [];
+      list.push(card);
+      map.set(card.grade, list);
+    });
+    return map;
+  }, [unscheduledCards]);
+
+  // Precompute real-time drag collision & <=8.0 workload radar map whenever dragging starts
+  const radarMap = useMemo(() => {
+    const map = new Map<string, SlotRadarStatus>();
+    if (!activeDragLesson) return map;
+    const gradesToCheck = activeDragLesson.fromSlot ? [1, 2, 3, 4, 5, 6] : [activeDragLesson.grade];
+    for (const g of gradesToCheck) {
+      for (const d of DAYS_OF_WEEK) {
+        const slots = getGradeDaySlots(g, d, academicYear);
+        for (const s of slots) {
+          if (s.isRecess) continue;
+          const status = evaluateSlotDropRadar(
+            schedule,
+            activeDragLesson,
+            g,
+            d,
+            s.slotId,
+            academicYear,
+            teacherCodesList
+          );
+          map.set(`${g}_${d}_${s.slotId}`, status);
+        }
+      }
+    }
+    return map;
+  }, [activeDragLesson, schedule, academicYear, teacherCodesList]);
+
+  const clearAllDragStates = () => {
+    setDragSource(null);
+    setActiveDragLesson(null);
+    setDragOverCellKey(null);
+    setDragOverDock(false);
+  };
 
   const checkDailyHardCapViolation = (
     candidateGrid: ScheduleGrid,
     affectedTeachers: string[],
     affectedDays: DayOfWeek[]
   ): string | null => {
-    const report = auditScheduleWorkload(candidateGrid, teacherCodesList);
+    const report = auditScheduleWorkload(candidateGrid, teacherCodesList, academicYear);
     const uniqueTeachers = Array.from(new Set(affectedTeachers.flatMap((tc) => tc.split('/').map((c) => c.trim())).filter(Boolean)));
     const daysToCheck = affectedDays.length > 0 ? affectedDays : DAYS_OF_WEEK;
 
@@ -140,7 +201,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     newGrid[grade][day][slotId] = newCell;
 
     // Dynamically update/re-pair PKAR with pre-recess teacher
-    autoPairPKARInGrid(newGrid);
+    autoPairPKARInGrid(newGrid, academicYear);
 
     const violationMsg = checkDailyHardCapViolation(newGrid, [editTeacherCode], [day]);
     if (violationMsg) {
@@ -161,11 +222,47 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
       newGrid[grade][day][slotId] = null;
     }
     // Dynamically update/re-pair PKAR with pre-recess teacher
-    autoPairPKARInGrid(newGrid);
+    autoPairPKARInGrid(newGrid, academicYear);
 
     setWorkloadAlert(null);
     onUpdateSchedule(newGrid);
     setEditingCell(null);
+  };
+
+  const handleParkCellToDock = (grade: number, day: DayOfWeek, slotId: string) => {
+    if (slotId === 'REHAT' || slotId === 'PKAR' || (day === 'SELASA' && slotId === 'W1')) return;
+    const newGrid: ScheduleGrid = JSON.parse(JSON.stringify(schedule));
+    if (!newGrid[grade]?.[day]?.[slotId]) return;
+    if (slotId === 'MEMBACA' || slotId === 'TASMIK') {
+      newGrid[grade][day][slotId] = {
+        ...newGrid[grade][day][slotId]!,
+        teacherCode: '',
+        teacherName: slotId === 'MEMBACA' ? 'Klik untuk pilih guru' : 'Klik untuk pilih Ustaz/Ustazah',
+      };
+    } else {
+      newGrid[grade][day][slotId] = null;
+    }
+    autoPairPKARInGrid(newGrid, academicYear);
+    setWorkloadAlert(null);
+    onUpdateSchedule(newGrid);
+  };
+
+  const handleDockDrop = (event: React.DragEvent) => {
+    event.preventDefault();
+    setDragOverDock(false);
+
+    const cellDataRaw = event.dataTransfer.getData('application/timetable-cell');
+    let source = dragSource;
+    if (!source && cellDataRaw) {
+      try {
+        source = JSON.parse(cellDataRaw);
+      } catch {
+        source = null;
+      }
+    }
+    clearAllDragStates();
+    if (!source) return;
+    handleParkCellToDock(source.grade, source.day, source.slotId);
   };
 
   const handleCellDrop = (
@@ -177,9 +274,63 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     event.preventDefault();
     setDragOverCellKey(null);
 
-    // If teacher code was dragged from right-hand panel into cell
+    // 1. Holding Dock Card -> Grid Cell (empty OR swap with occupied cell)
+    const dockCardRaw = event.dataTransfer.getData('application/unscheduled-card');
+    if (dockCardRaw) {
+      let card: UnscheduledLessonCard | null = null;
+      try {
+        card = JSON.parse(dockCardRaw);
+      } catch {
+        card = null;
+      }
+      clearAllDragStates();
+      if (!card) return;
+
+      if (
+        targetSlotId === 'REHAT' ||
+        targetSlotId === 'PKAR' ||
+        (targetDay === 'SELASA' && targetSlotId === 'W1')
+      ) {
+        return;
+      }
+
+      if (card.grade !== targetGrade) {
+        setWorkloadAlert(`Kad subjek ini diperuntukkan bagi Tahun ${card.grade}. Sila lepaskan pada baris Tahun ${card.grade}.`);
+        return;
+      }
+
+      const newGrid: ScheduleGrid = JSON.parse(JSON.stringify(schedule));
+      if (!newGrid[targetGrade]) newGrid[targetGrade] = {} as any;
+      if (!newGrid[targetGrade][targetDay]) newGrid[targetGrade][targetDay] = {};
+
+      newGrid[targetGrade][targetDay][targetSlotId] = {
+        subjectId: card.subjectId,
+        subjectCode: card.subjectCode,
+        subjectName: card.subjectName,
+        teacherCode: card.teacherCode,
+        ...(card.secondaryTeacherCode ? { secondaryTeacherCode: card.secondaryTeacherCode } : {}),
+        ...(card.isCoTeaching ? { isCoTeaching: true } : {}),
+        periodLength: targetSlotId === 'MEMBACA' ? 0.5 : 1,
+        isManualSlot: targetSlotId === 'TASMIK' || targetSlotId === 'MEMBACA',
+      };
+
+      autoPairPKARInGrid(newGrid, academicYear);
+
+      const violationMsg = checkDailyHardCapViolation(newGrid, [card.teacherCode], [targetDay]);
+      if (violationMsg) {
+        setWorkloadAlert(violationMsg);
+        return;
+      }
+
+      setWorkloadAlert(null);
+      onUpdateSchedule(newGrid);
+      return;
+    }
+
+    // 2. Teacher code dragged from right-hand panel into cell
     const droppedTeacherCode = event.dataTransfer.getData('application/teacher-code');
     if (droppedTeacherCode && (!dragSource || !event.dataTransfer.types.includes('application/timetable-cell'))) {
+      clearAllDragStates();
       const currentCell = schedule[targetGrade]?.[targetDay]?.[targetSlotId];
       if (currentCell) {
         const newGrid: ScheduleGrid = JSON.parse(JSON.stringify(schedule));
@@ -187,7 +338,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
           ...currentCell,
           teacherCode: droppedTeacherCode.trim(),
         };
-        autoPairPKARInGrid(newGrid);
+        autoPairPKARInGrid(newGrid, academicYear);
 
         const violationMsg = checkDailyHardCapViolation(newGrid, [droppedTeacherCode.trim()], [targetDay]);
         if (violationMsg) {
@@ -201,7 +352,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
       return;
     }
 
-    // Cell swap via Drag-and-Drop
+    // 3. Cell swap via Drag-and-Drop (Grid <-> Grid)
     const cellDataRaw = event.dataTransfer.getData('application/timetable-cell');
     let source = dragSource;
     if (!source && cellDataRaw) {
@@ -212,6 +363,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
       }
     }
 
+    clearAllDragStates();
     if (!source) return;
     const { grade: srcGrade, day: srcDay, slotId: srcSlotId } = source;
 
@@ -219,8 +371,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
       return;
     }
 
-    // Guard against swapping REHAT or locked Tuesday W1 Perhimpunan
+    // Guard against swapping REHAT, PKAR or locked Tuesday W1 Perhimpunan
     if (targetSlotId === 'REHAT' || srcSlotId === 'REHAT') return;
+    if (targetSlotId === 'PKAR' || srcSlotId === 'PKAR') return;
     if (srcDay === 'SELASA' && srcSlotId === 'W1') return;
     if (targetDay === 'SELASA' && targetSlotId === 'W1') return;
 
@@ -237,19 +390,17 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     newGrid[targetGrade][targetDay][targetSlotId] = cellA;
 
     // Dynamically re-bind PKAR teacher & +0.5 workload if pre-recess slot (W4) changed
-    autoPairPKARInGrid(newGrid);
+    autoPairPKARInGrid(newGrid, academicYear);
 
     const affectedTeachers = [cellA?.teacherCode || '', cellB?.teacherCode || ''].filter(Boolean);
     const violationMsg = checkDailyHardCapViolation(newGrid, affectedTeachers, [srcDay, targetDay]);
     if (violationMsg) {
       setWorkloadAlert(violationMsg);
-      setDragSource(null);
       return;
     }
 
     setWorkloadAlert(null);
     onUpdateSchedule(newGrid);
-    setDragSource(null);
   };
 
   const handleTriggerAutoSchedule = () => {
@@ -564,6 +715,134 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
       </div>
 
       {/* ========================================================================= */}
+      {/* STICKY HOLDING DOCK: KOTAK SUBJEK BELUM DIJADUALKAN                       */}
+      {/* ========================================================================= */}
+      <div
+        onDragOver={(e) => {
+          if (dragSource || e.dataTransfer.types.includes('application/timetable-cell')) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (!dragOverDock) setDragOverDock(true);
+          }
+        }}
+        onDragLeave={() => setDragOverDock(false)}
+        onDrop={handleDockDrop}
+        className={`sticky top-2 z-30 rounded-2xl border px-4 py-3 backdrop-blur-md transition shadow-xl ${
+          dragOverDock
+            ? 'bg-amber-950/90 border-amber-400 ring-2 ring-amber-400/70'
+            : unscheduledCards.length === 0
+            ? 'bg-slate-900/95 border-emerald-700/50'
+            : 'bg-slate-900/95 border-amber-600/60'
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Inbox className={`w-4 h-4 ${unscheduledCards.length === 0 ? 'text-emerald-400' : 'text-amber-400'}`} />
+            <span className="text-xs font-black uppercase tracking-wider text-white">
+              Kotak Subjek Belum Dijadualkan (Holding Dock)
+            </span>
+            {unscheduledCards.length === 0 ? (
+              <span className="px-2.5 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-700/60 text-emerald-300 text-[11px] font-bold">
+                Semua Waktu Berjaya Dijadualkan (100% Lengkap)
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-black font-mono">
+                {unscheduledCards.length} waktu tertinggal
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {dragSource ? (
+              <span className="text-[11px] font-bold text-amber-300 animate-pulse">
+                Lepaskan petak di sini untuk parkir semula ke Holding Dock
+              </span>
+            ) : (
+              <span className="text-[11px] text-slate-400">
+                Seret kad ke petak jadual (Hijau = Bebas, Merah = Bertembung) · Seret petak ke sini untuk tukar ganti
+              </span>
+            )}
+
+            {unscheduledCards.length > 0 && (
+              <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+                <button
+                  onClick={() => setDockGradeFilter('ALL')}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition ${
+                    dockGradeFilter === 'ALL' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Semua
+                </button>
+                {[1, 2, 3, 4, 5, 6].map((g) => {
+                  const cnt = unscheduledByGrade.get(g)?.length || 0;
+                  if (cnt === 0) return null;
+                  return (
+                    <button
+                      key={g}
+                      onClick={() => setDockGradeFilter(g)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition ${
+                        dockGradeFilter === g ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      T.{g} ({cnt})
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {unscheduledCards.length > 0 && (
+          <div className="mt-3 max-h-40 overflow-y-auto pr-1 space-y-2">
+            {[1, 2, 3, 4, 5, 6].map((g) => {
+              if (dockGradeFilter !== 'ALL' && dockGradeFilter !== g) return null;
+              const list = unscheduledByGrade.get(g) || [];
+              if (list.length === 0) return null;
+              return (
+                <div key={g} className="flex flex-wrap items-center gap-1.5">
+                  <span className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-700 text-[10px] font-black text-slate-300 w-16 text-center shrink-0">
+                    Tahun {g}
+                  </span>
+                  {list.map((card) => (
+                    <div
+                      key={card.id}
+                      draggable
+                      onDragStart={(e) => {
+                        setDragSource(null);
+                        setActiveDragLesson({
+                          grade: card.grade,
+                          subjectId: card.subjectId,
+                          subjectCode: card.subjectCode,
+                          subjectName: card.subjectName,
+                          teacherCode: card.teacherCode,
+                          secondaryTeacherCode: card.secondaryTeacherCode,
+                          isCoTeaching: card.isCoTeaching,
+                          dockCardId: card.id,
+                        });
+                        e.dataTransfer.setData('application/unscheduled-card', JSON.stringify(card));
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragEnd={clearAllDragStates}
+                      title={`${card.subjectName} (Tahun ${card.grade}) · Guru: ${getTeacherLabel(card.teacherCode)} — Seret ke petak Tahun ${card.grade}`}
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 border border-amber-500/50 hover:border-amber-400 cursor-grab active:cursor-grabbing select-none transition shadow-sm"
+                    >
+                      <span className="font-sans font-black text-[11px] text-white">
+                        {card.subjectCode}
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-blue-300">
+                        {getTeacherLabel(card.teacherCode)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ========================================================================= */}
       {/* 1. MASTER 1-TO-6 TIMETABLE VIEW (Jadual Induk T1–T6)                     */}
       {/* ========================================================================= */}
       {selectedGrade === 'ALL' ? (
@@ -693,8 +972,12 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                             }
 
                             const cell = schedule[grade]?.[day]?.[targetSlotId];
-                            const isCellDraggable = Boolean(cell) && targetSlotId !== 'REHAT' && !(day === 'SELASA' && targetSlotId === 'W1');
+                            const isLockedSlot = targetSlotId === 'REHAT' || targetSlotId === 'PKAR' || (day === 'SELASA' && targetSlotId === 'W1');
+                            const isCellDraggable = Boolean(cell) && !isLockedSlot;
                             const cellKey = `m_${grade}_${day}_${targetSlotId}`;
+                            const radar = activeDragLesson ? radarMap.get(`${grade}_${day}_${targetSlotId}`) : undefined;
+                            const isRadarHighlight = Boolean(radar && !radar.locked && !radar.differentGrade);
+                            const isDropAllowed = !isLockedSlot && (!radar || (!radar.differentGrade && !radar.locked));
 
                             // Check collision
                             const hasClash = clashes.some(
@@ -709,14 +992,26 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                               <td
                                 key={slotKey}
                                 draggable={isCellDraggable}
+                                title={isRadarHighlight && !radar?.valid ? radar?.clashLabel || radar?.reason : undefined}
                                 onDragStart={(e) => {
-                                  if (!isCellDraggable) return;
+                                  if (!isCellDraggable || !cell) return;
                                   setDragSource({ grade, day, slotId: targetSlotId });
+                                  setActiveDragLesson({
+                                    grade,
+                                    subjectId: cell.subjectId,
+                                    subjectCode: cell.subjectCode,
+                                    subjectName: cell.subjectName,
+                                    teacherCode: cell.teacherCode,
+                                    secondaryTeacherCode: cell.secondaryTeacherCode,
+                                    isCoTeaching: cell.isCoTeaching,
+                                    fromSlot: { grade, day, slotId: targetSlotId },
+                                  });
                                   e.dataTransfer.setData('application/timetable-cell', JSON.stringify({ grade, day, slotId: targetSlotId }));
                                   e.dataTransfer.effectAllowed = 'move';
                                 }}
+                                onDragEnd={clearAllDragStates}
                                 onDragOver={(e) => {
-                                  if (slotKey !== 'REHAT' && !(day === 'SELASA' && targetSlotId === 'W1')) {
+                                  if (isDropAllowed) {
                                     e.preventDefault();
                                     e.dataTransfer.dropEffect = 'move';
                                     if (dragOverCellKey !== cellKey) setDragOverCellKey(cellKey);
@@ -733,7 +1028,13 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                   isCellDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
                                 } ${
                                   dragOverCellKey === cellKey
-                                    ? 'ring-2 ring-blue-400 bg-blue-900/40 z-10'
+                                    ? isRadarHighlight && !radar?.valid
+                                      ? 'ring-2 ring-rose-400 bg-rose-900/60 z-10'
+                                      : 'ring-2 ring-emerald-400 bg-emerald-900/50 z-10'
+                                    : isRadarHighlight
+                                    ? radar?.valid
+                                      ? 'ring-1 ring-emerald-500/80 bg-emerald-950/35 hover:bg-emerald-900/50'
+                                      : 'bg-rose-950/75 ring-1 ring-rose-500/90'
                                     : hasClash
                                     ? 'bg-rose-950/70 ring-2 ring-rose-500'
                                     : cell
@@ -770,6 +1071,26 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                   </div>
                                 ) : (
                                   <span className="text-slate-600 text-xs">-</span>
+                                )}
+
+                                {isRadarHighlight && !radar?.valid && (
+                                  <div className="mt-0.5 text-[8px] font-sans font-bold text-rose-300 leading-tight truncate px-0.5">
+                                    {radar?.workloadExceeded ? 'Had 8w' : 'Bertembung'}
+                                  </div>
+                                )}
+
+                                {isCellDraggable && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleParkCellToDock(grade, day, targetSlotId);
+                                    }}
+                                    title="Keluarkan ke Kotak Belum Dijadualkan"
+                                    className="opacity-0 group-hover:opacity-100 absolute top-1 left-1 text-amber-400 hover:text-amber-300 cursor-pointer"
+                                  >
+                                    <ArrowDownToLine className="w-2.5 h-2.5" />
+                                  </button>
                                 )}
 
                                 <div className="opacity-0 group-hover:opacity-100 absolute top-1 right-1 text-slate-400">
@@ -857,6 +1178,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                       const isLocked = slot.isSpecialLocked || (day === 'SELASA' && slot.slotId === 'W1');
                       const isCellDraggable = Boolean(cell) && !slot.isRecess && !isLocked;
                       const cellKey = `s_${selectedGrade}_${day}_${slot.slotId}`;
+                      const radar = activeDragLesson ? radarMap.get(`${selectedGrade}_${day}_${slot.slotId}`) : undefined;
+                      const isRadarHighlight = Boolean(radar && !radar.locked && !radar.differentGrade);
+                      const isDropAllowed = !slot.isRecess && !isLocked && (!radar || (!radar.differentGrade && !radar.locked));
                       
                       // Check if this slot has a clash
                       const hasClash = clashes.some(
@@ -871,14 +1195,26 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                         <td
                           key={slot.slotId}
                           draggable={isCellDraggable}
+                          title={isRadarHighlight && !radar?.valid ? radar?.clashLabel || radar?.reason : undefined}
                           onDragStart={(e) => {
-                            if (!isCellDraggable) return;
+                            if (!isCellDraggable || !cell) return;
                             setDragSource({ grade: selectedGrade, day, slotId: slot.slotId });
+                            setActiveDragLesson({
+                              grade: selectedGrade,
+                              subjectId: cell.subjectId,
+                              subjectCode: cell.subjectCode,
+                              subjectName: cell.subjectName,
+                              teacherCode: cell.teacherCode,
+                              secondaryTeacherCode: cell.secondaryTeacherCode,
+                              isCoTeaching: cell.isCoTeaching,
+                              fromSlot: { grade: selectedGrade, day, slotId: slot.slotId },
+                            });
                             e.dataTransfer.setData('application/timetable-cell', JSON.stringify({ grade: selectedGrade, day, slotId: slot.slotId }));
                             e.dataTransfer.effectAllowed = 'move';
                           }}
+                          onDragEnd={clearAllDragStates}
                           onDragOver={(e) => {
-                            if (!slot.isRecess && !isLocked) {
+                            if (isDropAllowed) {
                               e.preventDefault();
                               e.dataTransfer.dropEffect = 'move';
                               if (dragOverCellKey !== cellKey) setDragOverCellKey(cellKey);
@@ -895,7 +1231,13 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                             isCellDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
                           } ${
                             dragOverCellKey === cellKey
-                              ? 'ring-2 ring-blue-400 bg-blue-900/40 z-10'
+                              ? isRadarHighlight && !radar?.valid
+                                ? 'ring-2 ring-rose-400 bg-rose-900/60 z-10'
+                                : 'ring-2 ring-emerald-400 bg-emerald-900/50 z-10'
+                              : isRadarHighlight
+                              ? radar?.valid
+                                ? 'ring-1 ring-emerald-500/80 bg-emerald-950/35 hover:bg-emerald-900/50'
+                                : 'bg-rose-950/75 ring-1 ring-rose-500/90'
                               : hasClash
                               ? 'bg-rose-950/70 ring-2 ring-rose-500'
                               : cell
@@ -928,6 +1270,26 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                             </div>
                           ) : (
                             <span className="text-slate-600 text-xs">-</span>
+                          )}
+
+                          {isRadarHighlight && !radar?.valid && (
+                            <div className="mt-0.5 text-[8px] font-sans font-bold text-rose-300 leading-tight truncate px-0.5">
+                              {radar?.workloadExceeded ? 'Had 8w' : 'Bertembung'}
+                            </div>
+                          )}
+
+                          {isCellDraggable && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleParkCellToDock(selectedGrade, day, slot.slotId);
+                              }}
+                              title="Keluarkan ke Kotak Belum Dijadualkan"
+                              className="opacity-0 group-hover:opacity-100 absolute top-1 left-1 text-amber-400 hover:text-amber-300 cursor-pointer"
+                            >
+                              <ArrowDownToLine className="w-2.5 h-2.5" />
+                            </button>
                           )}
 
                           <div className="opacity-0 group-hover:opacity-100 absolute top-1 right-1 text-slate-400">

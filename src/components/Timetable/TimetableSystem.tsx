@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { db, auth } from '../../lib/firebase';
+import { db, auth, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
 import { PersonnelProfile } from '../../types';
@@ -302,11 +302,36 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     return { list };
   }, [personnelList, isLegacySchool]);
 
-  // Update schedule handler
+  // Update schedule handler (with automatic Firestore persistence)
   const handleUpdateSchedule = (newSchedule: ScheduleGrid) => {
     setSchedule(newSchedule);
-    const foundClashes = detectScheduleClashes(newSchedule);
+    const foundClashes = detectScheduleClashes(newSchedule, selectedYear);
     setClashes(foundClashes);
+
+    const docId = scopedDocId(activeSchoolCode, `schedule_${selectedYear}`);
+    const path = `school_timetables/${docId}`;
+    const scheduleDocRef = doc(db, 'school_timetables', docId);
+    const payload = JSON.parse(
+      JSON.stringify({
+        schoolCode: activeSchoolCode,
+        academicYear: selectedYear,
+        schedule: newSchedule,
+        classTeachers,
+        updatedAt: new Date().toISOString(),
+      })
+    );
+    setDoc(scheduleDocRef, payload, { merge: true })
+      .then(() => {
+        setSaveStatus('Perubahan jadual waktu disimpan secara automatik.');
+        setTimeout(() => setSaveStatus(null), 2500);
+      })
+      .catch((err) => {
+        try {
+          handleFirestoreError(err, OperationType.WRITE, path);
+        } catch (wrappedErr: any) {
+          console.warn('Auto-save schedule notice:', wrappedErr?.message || err);
+        }
+      });
   };
 
   // Auto Schedule Generation (Self-healing with official curriculum fallback for legacy school)
