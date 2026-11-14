@@ -7,6 +7,9 @@ import {
   decomposeSubjectCompactly,
   canAddSubjectToClassDay,
   canClassAcceptSubjectOnDay,
+  hasThreeConsecutiveSameSubject,
+  canSafelyAssignBlockToDay,
+  repairEmptyClassSlots,
 } from '../src/utils/timetableEngine';
 
 console.log('================================================================');
@@ -49,13 +52,25 @@ assert.deepEqual(decomposeSubjectCompactly('RBT', 2, 5), [2]);
 assert.deepEqual(decomposeSubjectCompactly('SEJ', 2, 6), [2]);
 console.log('  ✓ PASSED: Compact decomposition & caps match specification!');
 
-// 2. Test canAddSubjectToClassDay & canClassAcceptSubjectOnDay
-console.log('[TEST 2] Verifying canAddSubjectToClassDay anti-fragmentation...');
-// Major language: 2 consecutive + 1 allowed = 3
+// 2. Test canAddSubjectToClassDay, hasThreeConsecutiveSameSubject, canSafelyAssignBlockToDay & repairEmptyClassSlots
+console.log('[TEST 2] Verifying canAddSubjectToClassDay anti-fragmentation & 2+1 separated...');
+
+// Major language: 3 CONSECUTIVE periods (W1-W2-W3) MUST BE REJECTED!
 assert.equal(
   canAddSubjectToClassDay([{ subjectCode: 'BM' }, { subjectCode: 'BM' }], 'BM', 1, 1, {
     existingPeriodPositions: [0, 1],
     candidatePeriodPositions: [2],
+  }),
+  false
+);
+assert.equal(hasThreeConsecutiveSameSubject([1, 2], [3]), true);
+assert.equal(hasThreeConsecutiveSameSubject([1, 2], [5]), false);
+
+// Major language: 2 consecutive + 1 separated (e.g. [0,1] + [3] across gap/recess) ALLOWED = 3
+assert.equal(
+  canAddSubjectToClassDay([{ subjectCode: 'BM' }, { subjectCode: 'BM' }], 'BM', 1, 1, {
+    existingPeriodPositions: [0, 1],
+    candidatePeriodPositions: [3],
   }),
   true
 );
@@ -145,7 +160,68 @@ assert.equal(
   ),
   false
 );
-console.log('  ✓ PASSED: Anti-fragmentation & distinct daily subject gates enforced!');
+
+// Fix A: Day-Capacity Feasibility check blocks opening a 3rd isolated 1-period subject in Tahap 1 when remaining 4 slots cannot be filled
+assert.equal(
+  canSafelyAssignBlockToDay({
+    dayMaxPeriods: 10,
+    currentDayLessons: [
+      { subjectCode: 'PJ' },
+      { subjectCode: 'PK' },
+      { subjectCode: 'PM' },
+      { subjectCode: 'PM' },
+      { subjectCode: 'BC' },
+      { subjectCode: 'BC' },
+    ],
+    candidateSubjectCode: 'MZ',
+    blockLength: 1,
+    classLevel: 3,
+    remainingSubjectPeriodsInWeek: new Map([['BC', 1], ['MZ', 1]]),
+  }),
+  false
+);
+
+// Synthetic Kempe Swap Repair test
+{
+  const classes = [{ classId: 'T6', className: 'Tahun 6', grade: 6 }];
+  const lessons: any[] = [
+    { id: 'l1', day: 'ISNIN', periodNumber: 1, classId: 'T6', className: 'Tahun 6', subjectCode: 'MT', subjectName: 'MT', teacherId: 'TA', teacherName: 'TA', countsAsClassPeriod: true, countsAsTeacherPeriod: true },
+  ];
+  const assignments: any[] = [
+    { assignmentId: 'a_mt', classId: 'T6', className: 'Tahun 6', canonicalSubjectCode: 'MT', subjectName: 'MT', teacherId: 'TA', effectiveWeeklyPeriods: 1 },
+    { assignmentId: 'a_sn', classId: 'T6', className: 'Tahun 6', canonicalSubjectCode: 'SN', subjectName: 'SN', teacherId: 'TB', effectiveWeeklyPeriods: 1 },
+  ];
+  const scheduledPerAssignment = new Map<string, number>([['a_mt', 1], ['a_sn', 0]]);
+  const classSlotOccupied = new Set<string>(['T6_ISNIN_1']);
+  const teacherSlotOccupied = new Set<string>(['TB_ISNIN_2', 'TB_ISNIN_3', 'TB_ISNIN_4', 'TB_ISNIN_5', 'TB_ISNIN_6', 'TB_ISNIN_7', 'TB_ISNIN_8', 'TB_ISNIN_9', 'TB_ISNIN_10', 'TB_ISNIN_11']);
+  // Block TB everywhere except ISNIN_1 (where MT sits!) and on all other days so swap ISNIN_1 -> ISNIN_2 (TA) and SN -> ISNIN_1 (TB) is forced!
+  for (const d of ['SELASA', 'RABU', 'KHAMIS', 'JUMAAT']) {
+    for (let p = 1; p <= 11; p++) teacherSlotOccupied.add(`TB_${d}_${p}`);
+  }
+  const tCount = new Map<string, number>([['TA_ISNIN', 1]]);
+  const tPeriods = new Map<string, number[]>([['TA_ISNIN', [1]]]);
+  const sPeriods = new Map<string, number[]>([['T6_MT_ISNIN', [1]]]);
+  const repaired = repairEmptyClassSlots({
+    classes,
+    assignments,
+    lessons,
+    scheduledPerAssignment,
+    teacherMap: new Map([['TA', { teacherId: 'TA', fullName: 'TA' }], ['TB', { teacherId: 'TB', fullName: 'TB' }]]),
+    classSlotOccupied,
+    teacherSlotOccupied,
+    incTeacherDayCount: (t, d, delta = 1) => tCount.set(`${t}_${d}`, (tCount.get(`${t}_${d}`) || 0) + delta),
+    addTeacherPeriodOnDay: (t, d, p) => { const a = tPeriods.get(`${t}_${d}`) || []; a.push(p); tPeriods.set(`${t}_${d}`, a); },
+    removeTeacherPeriodOnDay: (t, d, p) => tPeriods.set(`${t}_${d}`, (tPeriods.get(`${t}_${d}`) || []).filter(x => x !== p)),
+    getTeacherDayLoad: (t, d) => tCount.get(`${t}_${d}`) || 0,
+    recordSubjectPeriod: (c, s, d, p) => { const a = sPeriods.get(`${c}_${s.toUpperCase()}_${d}`) || []; a.push(p); sPeriods.set(`${c}_${s.toUpperCase()}_${d}`, a); },
+    unrecordSubjectPeriod: (c, s, d, p) => { const k = `${c}_${s.toUpperCase()}_${d}`; sPeriods.set(k, (sPeriods.get(k) || []).filter(x => x !== p)); },
+    getSubjectPeriodsOnDay: (c, s, d) => sPeriods.get(`${c}_${s.toUpperCase()}_${d}`) || [],
+    canTeacherTakeBlockOnDay: () => true,
+  });
+  assert.equal(repaired, 1, 'Kempe swap must place SN into ISNIN P1 by moving MT to ISNIN P2');
+  assert.equal(scheduledPerAssignment.get('a_sn'), 1);
+}
+console.log('  ✓ PASSED: Anti-fragmentation, 2+1 separated, feasibility check & Kempe swap enforced!');
 
 // 3. Full schedule test with real school teachers (2027 & 2026)
 for (const year of ['2027', '2026'] as const) {
@@ -166,20 +242,34 @@ for (const year of ['2027', '2026'] as const) {
     `  ${year} Audit: T2_violations=${audit.tahap2SubjectCapViolations} | T1_over5=${audit.tahap1Over5Days} | T1_daysOver4=${audit.tahap1SubjectExcessDays} | periodCapViol=${audit.subjectDailyPeriodCapViolations} | fragmentedViol=${audit.fragmentedSubjectViolations} | gaps=${audit.middleGaps} | totalSubjectDays=${audit.totalDistinctSubjectDays}`
   );
 
+  // Explicit verification of zero 3-consecutive same-subject periods across every class/day
+  let threeConsecCount = 0;
   for (let g = 1; g <= 6; g++) {
     const dayCounts = ['ISNIN', 'SELASA', 'RABU', 'KHAMIS', 'JUMAAT'].map((d) => {
       const subs = new Set<string>();
-      Object.values((result.grid as any)[g][d]).forEach((c: any) => {
+      const subPositions = new Map<string, number[]>();
+      const entries = Object.entries((result.grid as any)[g][d]).filter(([sid]) =>
+        sid.startsWith('W')
+      );
+      entries.forEach(([sid, c]: [string, any]) => {
         if (!c || !c.subjectCode) return;
         const sc = c.subjectCode.toUpperCase();
         if (sc !== 'PN' && sc !== 'TASMIK' && sc !== 'MEMBACA' && !sc.startsWith('PKAR')) {
           subs.add(sc);
+          const pNum = parseInt(sid.slice(1), 10);
+          const arr = subPositions.get(sc) || [];
+          arr.push(pNum);
+          subPositions.set(sc, arr);
         }
+      });
+      subPositions.forEach((ps) => {
+        if (hasThreeConsecutiveSameSubject(ps, [])) threeConsecCount++;
       });
       return `${d.slice(0, 3)}:${subs.size}`;
     });
     console.log(`    Tahun ${g} distinct subjects/day: [${dayCounts.join(', ')}]`);
   }
+  assert.equal(threeConsecCount, 0, `${year}: Found ${threeConsecCount} occurrences of 3 consecutive same-subject periods!`);
 
   assert.equal(audit.teachersOver8, 0, `${year}: Teachers over 8.0: ${audit.violations.join('; ')}`);
   assert.equal(audit.teachersExceedingOver7Limit, 0, `${year}: Teachers exceeding >7 limit: ${audit.violations.join('; ')}`);
@@ -191,7 +281,7 @@ for (const year of ['2027', '2026'] as const) {
   assert.equal(audit.pjConsecutiveViolations, 0, `${year}: PJ consecutive violations`);
   assert.equal(audit.pjSlotViolations, 0, `${year}: PJ slot violations`);
   assert.equal(audit.middleGaps, 0, `${year}: Middle gaps found`);
-  console.log(`  ✓ PASSED ${year}: 0 clashes, 0 unplaced, 0 gaps, 0 fragmentation, compact subjects!`);
+  console.log(`  ✓ PASSED ${year}: 0 clashes, 0 unplaced, 0 gaps, 0 fragmentation, 0 three-consecutive!`);
 }
 
 console.log('\n================================================================');

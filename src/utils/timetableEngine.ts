@@ -118,8 +118,9 @@ export function isPKARSubject(code?: string, name?: string): boolean {
 // 1A. 每日正课节数配置与特色项目配置 (KP2027 & KSSR)
 // --------------------------------------------------------------------------
 // 1. 根据星期与年级 (level: 1~6) 动态返回正课节数与放学后 Tasmik 专属格位置
-export function getDayPeriodConfig(day: string, classLevel: number = 2) {
-  const isT1 = classLevel === 1;
+export function getDayPeriodConfig(day: string, classLevel: number = 2, academicYear: string = '2027') {
+  const isKP2027Year1 = !academicYear || parseInt(academicYear, 10) >= 2027;
+  const isT1 = classLevel === 1 && isKP2027Year1;
   const isUpperPrimary = classLevel >= 4; // 四年级至六年级 (Tahun 4 - 6)
 
   switch (day.toUpperCase()) {
@@ -154,33 +155,13 @@ export function getDayPeriodConfig(day: string, classLevel: number = 2) {
 }
 
 // 每日正课全额开放排课，放学后额外附加 1 个 Tasmik 手动点击格
-export function getDayScheduleBounds(day: string, classLevel: number) {
-  const isTahap2 = classLevel >= 4; // 四至六年级
-
-  switch (day.toUpperCase()) {
-    case 'ISNIN':
-    case 'SELASA':
-      return {
-        maxAutoPeriod: 11,      // 第 1 至 11 节全部排正课
-        preRecessPeriod: 5,     // 第 5 节为下课前最后一节 (自动绑定 PKAR)
-        manualTasmikSlot: 12,   // 放学后附加格，仅供手动点击排 Tasmik
-      };
-    case 'RABU':
-    case 'KHAMIS':
-      return {
-        maxAutoPeriod: 10,      // 第 1 至 10 节全部排正课
-        preRecessPeriod: 5,
-        manualTasmikSlot: 11,   // 放学后附加格，仅供手动点击排 Tasmik
-      };
-    case 'JUMAAT':
-      return {
-        maxAutoPeriod: isTahap2 ? 8 : 7, // 一至三年级 1~7 节，四至六年级 1~8 节全部排正课
-        preRecessPeriod: 5,
-        manualTasmikSlot: isTahap2 ? 9 : 8, // 放学后附加格，仅供手动点击排 Tasmik
-      };
-    default:
-      return { maxAutoPeriod: 10, preRecessPeriod: 5, manualTasmikSlot: 11 };
-  }
+export function getDayScheduleBounds(day: string, classLevel: number, academicYear: string = '2027') {
+  const cfg = getDayPeriodConfig(day, classLevel, academicYear);
+  return {
+    maxAutoPeriod: cfg.teachingPeriods,
+    preRecessPeriod: cfg.preRecessPeriod,
+    manualTasmikSlot: cfg.tasmikManualPeriod,
+  };
 }
 
 // 自动排课队列彻底过滤掉 TASMIK 与 Program Membaca（留作纯手动编排）
@@ -299,7 +280,120 @@ export function decomposeSubjectBlocks(
   return decomposeSubjectCompactly(subjectCode, weeklyPeriods, classLevel);
 }
 
-// 4. 排课前防碎片化与每日科目数检验函数
+// --------------------------------------------------------------------------
+// 3A. 禁止同科 3 连堂 (BC/BM/BI 必须 2+1 分离) 与单日容量可行性死锁预防
+// --------------------------------------------------------------------------
+export function hasThreeConsecutiveSameSubject(
+  existingPeriodPositions: number[],
+  candidatePeriodPositions: number[] = []
+): boolean {
+  const combined = Array.from(new Set([...existingPeriodPositions, ...candidatePeriodPositions])).sort((a, b) => a - b);
+  if (combined.length < 3) return false;
+  for (let i = 0; i <= combined.length - 3; i++) {
+    if (combined[i + 1] === combined[i] + 1 && combined[i + 2] === combined[i + 1] + 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export interface SafeDayAssignParams {
+  dayMaxPeriods: number;
+  currentDayLessons: Array<{ subjectCode?: string; isPemulihan?: boolean; countsAsClassPeriod?: boolean }>;
+  candidateSubjectCode: string;
+  blockLength: number;
+  classLevel: number;
+  maxSubjectsOverride?: number;
+  remainingSubjectPeriodsInWeek?: Map<string, number> | Record<string, number>;
+}
+
+/**
+ * Fix A (Day-Capacity Feasibility Check):
+ * Never place more than two 1-period single lessons on the same day in Tahap 1
+ * unless the remaining periods of that day can be 100% filled by already-present subjects on that day.
+ * Also prevents subject-cap deadlocks where maxSubjects is reached before day capacity can be filled.
+ */
+export function canSafelyAssignBlockToDay(params: SafeDayAssignParams): boolean {
+  const {
+    dayMaxPeriods,
+    currentDayLessons,
+    candidateSubjectCode,
+    blockLength,
+    classLevel,
+    maxSubjectsOverride,
+    remainingSubjectPeriodsInWeek,
+  } = params;
+
+  const code = candidateSubjectCode.trim().toUpperCase();
+  if (EXCLUDED_DAILY_SUBJECT_CODES.has(code) || code.startsWith('PKAR')) {
+    return true;
+  }
+
+  const counts = new Map<string, number>();
+  let occupiedPeriods = 0;
+
+  currentDayLessons.forEach((l) => {
+    if (!l || l.isPemulihan || !l.subjectCode) return;
+    if (l.countsAsClassPeriod === false) return;
+    const c = String(l.subjectCode).trim().toUpperCase();
+    if (!c) return;
+    occupiedPeriods++;
+    if (!EXCLUDED_DAILY_SUBJECT_CODES.has(c) && !c.startsWith('PKAR')) {
+      counts.set(c, (counts.get(c) || 0) + 1);
+    }
+  });
+
+  const prevCount = counts.get(code) || 0;
+  counts.set(code, prevCount + blockLength);
+  const occupiedAfter = occupiedPeriods + blockLength;
+  const remainingEmpty = Math.max(0, dayMaxPeriods - occupiedAfter);
+  if (remainingEmpty === 0) return true;
+
+  const maxSubjects = maxSubjectsOverride ?? getMaxSubjectsPerDay(classLevel);
+  const distinctAfter = counts.size;
+
+  const getRemQuota = (sCode: string): number => {
+    if (!remainingSubjectPeriodsInWeek) return 99;
+    if (remainingSubjectPeriodsInWeek instanceof Map) {
+      return remainingSubjectPeriodsInWeek.get(sCode) ?? 0;
+    }
+    return remainingSubjectPeriodsInWeek[sCode] ?? 0;
+  };
+
+  let fillableByExisting = 0;
+  let singlePeriodSubjectCount = 0;
+  counts.forEach((cnt, sCode) => {
+    if (cnt === 1) singlePeriodSubjectCount++;
+    const dailyCap = getMaxDailyPeriodsForSubject(sCode);
+    const roomInDay = Math.max(0, dailyCap - cnt);
+    const roomInWeek = remainingSubjectPeriodsInWeek
+      ? Math.max(0, getRemQuota(sCode) - (sCode === code ? blockLength : 0))
+      : roomInDay;
+    fillableByExisting += Math.min(roomInDay, roomInWeek);
+  });
+
+  // Tahap 1 guard: avoid > 2 isolated single-period lessons unless existing subjects on day can fill remaining slots
+  if (classLevel <= 3 && blockLength === 1 && prevCount === 0 && singlePeriodSubjectCount > 2) {
+    if (fillableByExisting < remainingEmpty) {
+      return false;
+    }
+  }
+
+  // If maxSubjects cap is already filled, existing subjects MUST be able to fill remaining empty slots
+  if (distinctAfter >= maxSubjects && fillableByExisting < remainingEmpty) {
+    return false;
+  }
+
+  // General bound: each unadded subject up to maxSubjects can add at most 3 periods (BC/BM/BI max)
+  const remainingSubjectSlots = Math.max(0, maxSubjects - distinctAfter);
+  if (fillableByExisting + remainingSubjectSlots * 3 < remainingEmpty) {
+    return false;
+  }
+
+  return true;
+}
+
+// 4. 排课前防碎片化与每日科目数检验函数 (严禁同科 3 连堂，3 节语文课必须 2+1 分离)
 export function canAddSubjectToClassDay(
   currentClassDayLessons: any[],
   subjectCode: string,
@@ -314,6 +408,11 @@ export function canAddSubjectToClassDay(
   const code = subjectCode.trim().toUpperCase();
   if (EXCLUDED_DAILY_SUBJECT_CODES.has(code) || code.startsWith('PKAR')) {
     return true;
+  }
+
+  // 绝不允许一次性排入连续 3 节同科目（3 节必须为 2 连堂 + 1 分离）
+  if (periodsToAdd >= 3) {
+    return false;
   }
 
   // 统计当天的纯学术科目种类数 (排除 PN, MEMBACA, PKAR, TASMIK)
@@ -340,7 +439,7 @@ export function canAddSubjectToClassDay(
     return false;
   }
 
-  // 规则 3: 防止碎片化 (严禁 1+1+1 分散在一天；已有 1 节且非连堂不拆散；已有 2 节必须为连堂才允许加第 3 节)
+  // 规则 3: 防碎片化 + 严禁 3 连堂 (BC/BM/BI 3节必须 2+1 分离)
   if (existingCountForThisSub > 0) {
     if (existingCountForThisSub === 1 && periodsToAdd === 1) {
       if (options?.existingPeriodPositions && options?.candidatePeriodPositions) {
@@ -354,7 +453,27 @@ export function canAddSubjectToClassDay(
       }
     }
 
-    if (existingCountForThisSub === 2 && periodsToAdd === 1) {
+    if (
+      options?.existingPeriodPositions &&
+      options?.candidatePeriodPositions &&
+      options.existingPeriodPositions.length > 0 &&
+      options.candidatePeriodPositions.length > 0
+    ) {
+      if (hasThreeConsecutiveSameSubject(options.existingPeriodPositions, options.candidatePeriodPositions)) {
+        return false;
+      }
+      if (existingCountForThisSub + periodsToAdd === 3) {
+        const combined = Array.from(
+          new Set([...options.existingPeriodPositions, ...options.candidatePeriodPositions])
+        ).sort((a, b) => a - b);
+        const hasAdjacentPair =
+          combined.length === 3 &&
+          (combined[1] - combined[0] === 1 || combined[2] - combined[1] === 1);
+        if (!hasAdjacentPair) {
+          return false; // 绝不允许 1+1+1 完全打散
+        }
+      }
+    } else if (existingCountForThisSub === 2 && periodsToAdd === 1) {
       if (options?.existingPeriodPositions && options.existingPeriodPositions.length === 2) {
         const sorted = [...options.existingPeriodPositions].sort((a, b) => a - b);
         if (sorted[1] - sorted[0] !== 1) {
@@ -619,13 +738,18 @@ export function seedManualTasmikSlots(classes: any[], days: string[], lessons: a
 export function autoPairPKARWithPreRecessTeacher(
   lessons: any[],
   days: string[],
-  incTeacherWorkload: (teacherId: string, day: string, delta: number) => void
+  incTeacherWorkload: (teacherId: string, day: string, delta: number) => void,
+  academicYear: string = '2027'
 ) {
   // 先清除旧的自动 PKAR 记录，确保拖拽调课后也能实时重新绑定
   const filteredLessons = lessons.filter((l) => !l.isAutoPKAR);
+  const isKP2027Year1 = !academicYear || parseInt(academicYear, 10) >= 2027;
+  if (!isKP2027Year1) {
+    return filteredLessons;
+  }
 
   days.forEach((day) => {
-    const { preRecessPeriod } = getDayPeriodConfig(day, 1);
+    const { preRecessPeriod } = getDayPeriodConfig(day, 1, academicYear);
 
     // 找出所有一年级班级在当天下课前那一节的正课 (PKAR 只有一年级。二到六年级没有。)
     // 一年级下课前最后一节正课是第 4 节 (09:00 - 09:30)，紧接 09:30 - 09:45 PKAR，09:45 下课
@@ -772,8 +896,22 @@ export const getMorningPJCandidates = (day: string): number[] => {
   return [1, 2]; // 严格优先第 1 节，仅在第 1 节冲突时退居第 2 节
 };
 
-export const getDailyMaxPeriods = (day: string, classLevel: number = 1): number => {
-  return getDayPeriodConfig(day, classLevel).teachingPeriods;
+export const MAX_ATTEMPTS = 80;
+
+export function getDayIndex(day: string): number {
+  return DAYS_OF_WEEK.indexOf(day as DayOfWeek);
+}
+
+export function canClassPlacePJOnDay(
+  scheduledPjDays: string[],
+  candidateDay: string,
+  grade: number
+): boolean {
+  return !isPJConsecutiveDayViolated(grade, scheduledPjDays, candidateDay);
+}
+
+export const getDailyMaxPeriods = (day: string, classLevel: number = 1, academicYear: string = '2027'): number => {
+  return getDayPeriodConfig(day, classLevel, academicYear).teachingPeriods;
 };
 
 export const isAdjacentPeriod = (p1: number, p2: number): boolean => {
@@ -795,6 +933,30 @@ export function getTeacherMinDailyTarget(weeklyTotal: number): number {
   return Math.max(4, Math.floor(weeklyTotal / 5) - 1);
 }
 
+export function canTeacherTakeLoadOnDay(params: {
+  day: string;
+  addedLoad: number;
+  getLoadOnDay: (day: string) => number;
+  maxAllowedDailyLoad?: number;
+  maxDaysOver7?: number;
+}): boolean {
+  const {
+    day,
+    addedLoad,
+    getLoadOnDay,
+    maxAllowedDailyLoad = MAX_TEACHER_DAILY_PERIODS,
+    maxDaysOver7 = 1,
+  } = params;
+  const effectiveCap = Math.min(MAX_TEACHER_DAILY_PERIODS, maxAllowedDailyLoad);
+  const projected = getLoadOnDay(day) + addedLoad;
+  if (projected > effectiveCap + 1e-6) return false;
+  if (projected > 7.0 + 1e-6) {
+    const otherDaysOver7 = DAYS_OF_WEEK.filter((d) => d !== day && getLoadOnDay(d) > 7.0 + 1e-6).length;
+    if (otherDaysOver7 >= maxDaysOver7) return false;
+  }
+  return true;
+}
+
 export function canTeacherTakeSlot(
   teacherId: string,
   day: string,
@@ -803,12 +965,19 @@ export function canTeacherTakeSlot(
   currentTeacherWorkloadDay: number = 0, // 包含周二 PN (+1.0) 与 0.5 节 PKAR 的实际工作量
   options?: {
     dailyCap?: number;
+    maxAllowedDailyLoad?: number;
     strictBreaks?: boolean;
     additionalWorkload?: number;
+    addedWorkload?: number;
+    classLevel?: number;
+    academicYear?: string;
+    otherDaysAbove7Count?: number;
+    maxDaysOver7?: number;
   }
 ): boolean {
-  const periodCost = options?.additionalWorkload ?? 1;
-  const effectiveCap = Math.min(MAX_TEACHER_DAILY_PERIODS, options?.dailyCap ?? MAX_TEACHER_DAILY_PERIODS);
+  const periodCost = options?.additionalWorkload ?? options?.addedWorkload ?? 1;
+  const requestedCap = options?.dailyCap ?? options?.maxAllowedDailyLoad ?? MAX_TEACHER_DAILY_PERIODS;
+  const effectiveCap = Math.min(MAX_TEACHER_DAILY_PERIODS, requestedCap);
 
   // 规则 2A: 绝对硬上限 — 任何情况下单日绝不允许超过 8.0 节 (含 PN 与 0.5 PKAR)
   if (
@@ -823,11 +992,23 @@ export function canTeacherTakeSlot(
     return false;
   }
 
+  if (
+    options?.otherDaysAbove7Count !== undefined &&
+    currentTeacherWorkloadDay + periodCost > 7.0 + 1e-6 &&
+    options.otherDaysAbove7Count >= (options.maxDaysOver7 ?? 1)
+  ) {
+    return false;
+  }
+
   if (options?.strictBreaks === false) {
     return true;
   }
 
-  const { preRecessPeriod, teachingPeriods } = getDayPeriodConfig(day);
+  const { preRecessPeriod, teachingPeriods } = getDayPeriodConfig(
+    day,
+    options?.classLevel ?? 2,
+    options?.academicYear ?? '2027'
+  );
   const simulatedPeriods = [...currentTeacherLessonsOnDay, targetPeriod];
   const morningPeriods = simulatedPeriods.filter((p) => p <= preRecessPeriod);
   const afternoonPeriods = simulatedPeriods.filter((p) => p > preRecessPeriod && p <= teachingPeriods);
@@ -917,6 +1098,475 @@ export const tasmikDayPairs: Array<['RABU' | 'KHAMIS' | 'JUMAAT', 'RABU' | 'KHAM
   ['KHAMIS', 'JUMAAT'], // 拜四 + 拜五
 ];
 
+export interface RepairEmptyClassSlotsParams {
+  classes: ClassProfile[];
+  assignments: SubjectAssignment[];
+  lessons: TimetableLesson[];
+  scheduledPerAssignment: Map<string, number>;
+  teacherMap: Map<string, TeacherProfile>;
+  classSlotOccupied: Set<string>;
+  teacherSlotOccupied: Set<string>;
+  incTeacherDayCount: (teacherId: string, day: string, delta?: number) => void;
+  addTeacherPeriodOnDay: (teacherId: string, day: string, period: number) => void;
+  removeTeacherPeriodOnDay?: (teacherId: string, day: string, period: number) => void;
+  getTeacherDayLoad: (teacherId: string, day: string) => number;
+  recordSubjectPeriod: (classId: string, subjectCode: string, day: string, period: number) => void;
+  unrecordSubjectPeriod?: (classId: string, subjectCode: string, day: string, period: number) => void;
+  getSubjectPeriodsOnDay: (classId: string, subjectCode: string, day: string) => number[];
+  canTeacherTakeBlockOnDay: (
+    teacherId: string,
+    day: string,
+    periodsToBook: number[],
+    classLevel: number,
+    strictBreaks: boolean,
+    dailyCapOverride?: number,
+    allowSingleDayOver7?: boolean
+  ) => boolean;
+  academicYear?: string;
+}
+
+/**
+ * Mandatory Intra-Class Swap Repair Pass (Kempe-Chain Repair)
+ * Eliminates empty trailing/middle slots and unplaced academic periods without breaking
+ * PN, PJ (W1/W2 + 1-day gap), daily workload <= 8.0, or "no 3 consecutive same subject".
+ */
+export function repairEmptyClassSlots(ctx: RepairEmptyClassSlotsParams): number {
+  const {
+    classes,
+    assignments,
+    lessons,
+    scheduledPerAssignment,
+    teacherMap,
+    classSlotOccupied,
+    teacherSlotOccupied,
+    incTeacherDayCount,
+    addTeacherPeriodOnDay,
+    removeTeacherPeriodOnDay,
+    recordSubjectPeriod,
+    unrecordSubjectPeriod,
+    getSubjectPeriodsOnDay,
+    canTeacherTakeBlockOnDay,
+    academicYear = '2027',
+  } = ctx;
+  const isKP2027Year1 = !academicYear || parseInt(academicYear, 10) >= 2027;
+
+  let repairedPeriods = 0;
+
+  const unplaceLesson = (lesson: TimetableLesson) => {
+    const idx = lessons.findIndex((l) => l.id === lesson.id);
+    if (idx !== -1) lessons.splice(idx, 1);
+    classSlotOccupied.delete(`${lesson.classId}_${lesson.day}_${lesson.periodNumber}`);
+    teacherSlotOccupied.delete(`${lesson.teacherId}_${lesson.day}_${lesson.periodNumber}`);
+    incTeacherDayCount(lesson.teacherId, lesson.day, -1);
+    removeTeacherPeriodOnDay?.(lesson.teacherId, lesson.day, lesson.periodNumber);
+    unrecordSubjectPeriod?.(lesson.classId, lesson.subjectCode, lesson.day, lesson.periodNumber);
+  };
+
+  const placeLessonObj = (
+    classId: string,
+    className: string,
+    subjectCode: string,
+    subjectName: string,
+    teacherId: string,
+    teacherName: string,
+    day: string,
+    period: number,
+    customId?: string
+  ): TimetableLesson => {
+    classSlotOccupied.add(`${classId}_${day}_${period}`);
+    teacherSlotOccupied.add(`${teacherId}_${day}_${period}`);
+    incTeacherDayCount(teacherId, day, 1);
+    addTeacherPeriodOnDay(teacherId, day, period);
+    recordSubjectPeriod(classId, subjectCode, day, period);
+    const obj: TimetableLesson = {
+      id: customId || `lesson_${classId}_${subjectCode}_${day}_P${period}`,
+      day,
+      periodNumber: period,
+      classId,
+      className,
+      subjectCode,
+      subjectName,
+      teacherId,
+      teacherName,
+      countsAsClassPeriod: true,
+      countsAsTeacherPeriod: true,
+    };
+    lessons.push(obj);
+    return obj;
+  };
+
+  const getClassDayLessons = (classId: string, day: string) =>
+    lessons.filter((l) => l.classId === classId && l.day === day && !l.isPemulihan && l.countsAsClassPeriod);
+
+  const isPjValidAt = (classId: string, classLevel: number, day: string, period: number): boolean => {
+    if (period !== 1 && period !== 2) return false;
+    if (day === 'SELASA' && period === 1) return false;
+    const pjDays = DAYS_OF_WEEK.filter((d) => getSubjectPeriodsOnDay(classId, 'PJ', d).length > 0);
+    return !isPJConsecutiveDayViolated(classLevel, pjDays, day);
+  };
+
+  const getEmptySlotsForClass = (classId: string, classLevel: number): Array<{ day: string; period: number }> => {
+    const empties: Array<{ day: string; period: number }> = [];
+    for (const d of DAYS_OF_WEEK) {
+      const maxP = getDailyMaxPeriods(d, classLevel, academicYear);
+      for (let p = 1; p <= maxP; p++) {
+        if (!classSlotOccupied.has(`${classId}_${d}_${p}`)) {
+          empties.push({ day: d, period: p });
+        }
+      }
+    }
+    return empties;
+  };
+
+  const canPlaceCandidateAt = (
+    classId: string,
+    classLevel: number,
+    subjectCode: string,
+    teacherId: string,
+    day: string,
+    period: number,
+    maxSubjectsOverride: number,
+    strictY1P4: boolean
+  ): boolean => {
+    if (classSlotOccupied.has(`${classId}_${day}_${period}`)) return false;
+    if (teacherSlotOccupied.has(`${teacherId}_${day}_${period}`)) return false;
+    if (isPJSubject(subjectCode) && !isPjValidAt(classId, classLevel, day, period)) return false;
+
+    const dayLessons = getClassDayLessons(classId, day);
+    const existingSubPeriods = getSubjectPeriodsOnDay(classId, subjectCode, day);
+
+    if (
+      !canAddSubjectToClassDay(dayLessons, subjectCode, 1, classLevel, {
+        maxSubjectsOverride,
+        existingPeriodPositions: existingSubPeriods,
+        candidatePeriodPositions: [period],
+      })
+    ) {
+      return false;
+    }
+
+    if (isKP2027Year1 && classLevel === 1 && period === 4) {
+      const existingY1P4 = lessons
+        .filter((l) => resolveClassLevel(l) === 1 && l.periodNumber === 4 && l.countsAsClassPeriod && !l.isPemulihan)
+        .map((l) => ({ day: l.day, subjectCode: l.subjectCode, teacherId: l.teacherId }));
+      if (!canAssignYear1Period4(1, 4, subjectCode, teacherId, existingY1P4, strictY1P4)) {
+        return false;
+      }
+    }
+
+    return canTeacherTakeBlockOnDay(teacherId, day, [period], classLevel, false, MAX_TEACHER_DAILY_PERIODS, true);
+  };
+
+  // Repair each unplaced assignment period-by-period
+  for (const asg of assignments) {
+    if (
+      isTasmikSubject(asg.canonicalSubjectCode, asg.subjectName) ||
+      isPKARSubject(asg.canonicalSubjectCode, asg.subjectName) ||
+      isPemulihanSubject(asg.canonicalSubjectCode, asg.subjectName) ||
+      asg.isPemulihan ||
+      isAMSubject(asg.canonicalSubjectCode, asg.subjectName) ||
+      isPairedMoralIslam(asg.canonicalSubjectCode)
+    ) {
+      continue;
+    }
+
+    const required = asg.effectiveWeeklyPeriods || 0;
+    let scheduled = scheduledPerAssignment.get(asg.assignmentId) || 0;
+    if (scheduled >= required) continue;
+
+    const clsObj = classes.find((c) => c.classId === asg.classId);
+    const classLevel = resolveClassLevel(clsObj || { className: asg.className });
+    const baseMaxSubjects = getMaxSubjectsPerDay(classLevel);
+    const teacherName = teacherMap.get(asg.teacherId)?.fullName || asg.teacherId;
+
+    while (scheduled < required) {
+      const emptySlots = getEmptySlotsForClass(asg.classId, classLevel);
+      if (emptySlots.length === 0) break;
+
+      let placedOne = false;
+
+      // Pass 1: Direct placement (strict cap -> overflow +1 -> +2 -> relaxed non-adjacent emergency)
+      for (const maxSubCap of [baseMaxSubjects, baseMaxSubjects + 1, baseMaxSubjects + 2, 12]) {
+        if (placedOne) break;
+        for (const e of emptySlots) {
+          if (
+            canPlaceCandidateAt(
+              asg.classId,
+              classLevel,
+              asg.canonicalSubjectCode,
+              asg.teacherId,
+              e.day,
+              e.period,
+              maxSubCap,
+              false
+            )
+          ) {
+            placeLessonObj(
+              asg.classId,
+              asg.className,
+              asg.canonicalSubjectCode,
+              asg.subjectName,
+              asg.teacherId,
+              teacherName,
+              e.day,
+              e.period
+            );
+            scheduled++;
+            repairedPeriods++;
+            placedOne = true;
+            break;
+          }
+        }
+      }
+      if (placedOne) continue;
+
+      // Pass 2: Mandatory Intra-Class 1-Hop Kempe Swap Repair (P -> E, unplaced -> P)
+      const classLessons = lessons.filter(
+        (l) =>
+          l.classId === asg.classId &&
+          l.countsAsClassPeriod &&
+          !l.isPemulihan &&
+          !l.isPN &&
+          !l.isAutoPKAR &&
+          !l.isManualSlot &&
+          l.subjectCode.toUpperCase() !== 'PN' &&
+          l.subjectCode.toUpperCase() !== 'PJ' &&
+          l.subjectCode.toUpperCase() !== 'PM/PAI'
+      );
+
+      // Prefer moving standalone [1] lessons first so intact [2]-blocks stay whole; fallback to outer endpoints
+      classLessons.sort((a, b) => {
+        const cntA = getSubjectPeriodsOnDay(a.classId, a.subjectCode, a.day).length;
+        const cntB = getSubjectPeriodsOnDay(b.classId, b.subjectCode, b.day).length;
+        return cntA - cntB;
+      });
+
+      for (const maxSubCap of [baseMaxSubjects + 1, baseMaxSubjects + 2, 12]) {
+        if (placedOne) break;
+        for (const e of emptySlots) {
+          if (placedOne) break;
+          for (const existingL of classLessons) {
+            if (placedOne) break;
+            if (existingL.subjectCode.toUpperCase() === asg.canonicalSubjectCode.toUpperCase()) continue;
+
+            // Avoid breaking an intact [2]-block into 1+1 across days unless necessary
+            const existingDayPeriods = getSubjectPeriodsOnDay(existingL.classId, existingL.subjectCode, existingL.day);
+            if (existingDayPeriods.length >= 2 && existingL.day !== e.day) {
+              // Moving 1 out of 3 (2+1) is ok ONLY if we remove the isolated period, NOT half of the [2]
+              const isAdj = existingDayPeriods.some((p) => Math.abs(p - existingL.periodNumber) === 1);
+              if (isAdj && maxSubCap < 12) continue;
+            }
+
+            const pDay = existingL.day;
+            const pPeriod = existingL.periodNumber;
+
+            // Unbook existingL from P
+            unplaceLesson(existingL);
+
+            const canMoveExistingToE = canPlaceCandidateAt(
+              asg.classId,
+              classLevel,
+              existingL.subjectCode,
+              existingL.teacherId,
+              e.day,
+              e.period,
+              maxSubCap,
+              false
+            );
+
+            if (canMoveExistingToE) {
+              const movedL = placeLessonObj(
+                existingL.classId,
+                existingL.className,
+                existingL.subjectCode,
+                existingL.subjectName,
+                existingL.teacherId,
+                existingL.teacherName,
+                e.day,
+                e.period,
+                existingL.id
+              );
+
+              const canPlaceAsgAtP = canPlaceCandidateAt(
+                asg.classId,
+                classLevel,
+                asg.canonicalSubjectCode,
+                asg.teacherId,
+                pDay,
+                pPeriod,
+                maxSubCap,
+                false
+              );
+
+              if (canPlaceAsgAtP) {
+                placeLessonObj(
+                  asg.classId,
+                  asg.className,
+                  asg.canonicalSubjectCode,
+                  asg.subjectName,
+                  asg.teacherId,
+                  teacherName,
+                  pDay,
+                  pPeriod
+                );
+                scheduled++;
+                repairedPeriods++;
+                placedOne = true;
+                break;
+              }
+
+              unplaceLesson(movedL);
+            }
+
+            // Rollback existingL to P
+            placeLessonObj(
+              existingL.classId,
+              existingL.className,
+              existingL.subjectCode,
+              existingL.subjectName,
+              existingL.teacherId,
+              existingL.teacherName,
+              pDay,
+              pPeriod,
+              existingL.id
+            );
+          }
+        }
+      }
+      if (placedOne) continue;
+
+      // Pass 3: 2-Hop Intra-Class Kempe Chain (P2 -> E, P1 -> P2, unplaced -> P1)
+      for (const e of emptySlots) {
+        if (placedOne) break;
+        for (const l1 of classLessons) {
+          if (placedOne) break;
+          if (l1.subjectCode.toUpperCase() === asg.canonicalSubjectCode.toUpperCase()) continue;
+          const p1Day = l1.day;
+          const p1Per = l1.periodNumber;
+          if (teacherSlotOccupied.has(`${asg.teacherId}_${p1Day}_${p1Per}`)) continue;
+
+          for (const l2 of classLessons) {
+            if (l2.id === l1.id || l2.subjectCode.toUpperCase() === l1.subjectCode.toUpperCase()) continue;
+            const p2Day = l2.day;
+            const p2Per = l2.periodNumber;
+
+            unplaceLesson(l2);
+            const okL2ToE = canPlaceCandidateAt(asg.classId, classLevel, l2.subjectCode, l2.teacherId, e.day, e.period, 12, false);
+            if (!okL2ToE) {
+              placeLessonObj(l2.classId, l2.className, l2.subjectCode, l2.subjectName, l2.teacherId, l2.teacherName, p2Day, p2Per, l2.id);
+              continue;
+            }
+            const movedL2 = placeLessonObj(l2.classId, l2.className, l2.subjectCode, l2.subjectName, l2.teacherId, l2.teacherName, e.day, e.period, l2.id);
+
+            unplaceLesson(l1);
+            const okL1ToP2 = canPlaceCandidateAt(asg.classId, classLevel, l1.subjectCode, l1.teacherId, p2Day, p2Per, 12, false);
+            if (!okL1ToP2) {
+              placeLessonObj(l1.classId, l1.className, l1.subjectCode, l1.subjectName, l1.teacherId, l1.teacherName, p1Day, p1Per, l1.id);
+              unplaceLesson(movedL2);
+              placeLessonObj(l2.classId, l2.className, l2.subjectCode, l2.subjectName, l2.teacherId, l2.teacherName, p2Day, p2Per, l2.id);
+              continue;
+            }
+            const movedL1 = placeLessonObj(l1.classId, l1.className, l1.subjectCode, l1.subjectName, l1.teacherId, l1.teacherName, p2Day, p2Per, l1.id);
+
+            if (canPlaceCandidateAt(asg.classId, classLevel, asg.canonicalSubjectCode, asg.teacherId, p1Day, p1Per, 12, false)) {
+              placeLessonObj(
+                asg.classId,
+                asg.className,
+                asg.canonicalSubjectCode,
+                asg.subjectName,
+                asg.teacherId,
+                teacherName,
+                p1Day,
+                p1Per
+              );
+              scheduled++;
+              repairedPeriods++;
+              placedOne = true;
+              break;
+            }
+
+            unplaceLesson(movedL1);
+            placeLessonObj(l1.classId, l1.className, l1.subjectCode, l1.subjectName, l1.teacherId, l1.teacherName, p1Day, p1Per, l1.id);
+            unplaceLesson(movedL2);
+            placeLessonObj(l2.classId, l2.className, l2.subjectCode, l2.subjectName, l2.teacherId, l2.teacherName, p2Day, p2Per, l2.id);
+          }
+        }
+      }
+      if (placedOne) continue;
+
+      // Pass 4: Cross-Class Single-Blocker Swap on an empty slot E
+      for (const e of emptySlots) {
+        if (placedOne) break;
+        if (isPJSubject(asg.canonicalSubjectCode) && !isPjValidAt(asg.classId, classLevel, e.day, e.period)) continue;
+        const blocking = lessons.find(
+          (l) =>
+            l.day === e.day &&
+            l.periodNumber === e.period &&
+            l.teacherId === asg.teacherId &&
+            l.countsAsClassPeriod &&
+            !l.isPemulihan &&
+            !l.isPN &&
+            l.subjectCode.toUpperCase() !== 'PJ' &&
+            l.subjectCode.toUpperCase() !== 'PM/PAI'
+        );
+        if (!blocking) continue;
+        const bCls = classes.find((c) => c.classId === blocking.classId);
+        const bLevel = resolveClassLevel(bCls || { className: blocking.className });
+        const partnerLessons = lessons.filter(
+          (l) =>
+            l.classId === blocking.classId &&
+            l.day === e.day &&
+            l.periodNumber !== e.period &&
+            l.countsAsClassPeriod &&
+            !l.isPemulihan &&
+            !l.isPN &&
+            !l.isAutoPKAR &&
+            l.subjectCode.toUpperCase() !== 'PJ' &&
+            l.subjectCode.toUpperCase() !== 'PM/PAI' &&
+            l.subjectCode.toUpperCase() !== blocking.subjectCode.toUpperCase()
+        );
+        for (const partner of partnerLessons) {
+          if (placedOne) break;
+          unplaceLesson(blocking);
+          unplaceLesson(partner);
+          const okB = canPlaceCandidateAt(blocking.classId, bLevel, blocking.subjectCode, blocking.teacherId, e.day, partner.periodNumber, 12, false);
+          const okP = okB && canPlaceCandidateAt(partner.classId, bLevel, partner.subjectCode, partner.teacherId, e.day, e.period, 12, false);
+          if (okB && okP) {
+            const mB = placeLessonObj(blocking.classId, blocking.className, blocking.subjectCode, blocking.subjectName, blocking.teacherId, blocking.teacherName, e.day, partner.periodNumber, blocking.id);
+            const mP = placeLessonObj(partner.classId, partner.className, partner.subjectCode, partner.subjectName, partner.teacherId, partner.teacherName, e.day, e.period, partner.id);
+            if (canPlaceCandidateAt(asg.classId, classLevel, asg.canonicalSubjectCode, asg.teacherId, e.day, e.period, 12, false)) {
+              placeLessonObj(
+                asg.classId,
+                asg.className,
+                asg.canonicalSubjectCode,
+                asg.subjectName,
+                asg.teacherId,
+                teacherName,
+                e.day,
+                e.period
+              );
+              scheduled++;
+              repairedPeriods++;
+              placedOne = true;
+              break;
+            }
+            unplaceLesson(mB);
+            unplaceLesson(mP);
+          }
+          placeLessonObj(blocking.classId, blocking.className, blocking.subjectCode, blocking.subjectName, blocking.teacherId, blocking.teacherName, e.day, e.period, blocking.id);
+          placeLessonObj(partner.classId, partner.className, partner.subjectCode, partner.subjectName, partner.teacherId, partner.teacherName, e.day, partner.periodNumber, partner.id);
+        }
+      }
+
+      if (!placedOne) break;
+    }
+
+    scheduledPerAssignment.set(asg.assignmentId, scheduled);
+  }
+
+  return repairedPeriods;
+}
+
 export interface EngineResult {
   lessons: TimetableLesson[];
   scheduledPerAssignment: Map<string, number>;
@@ -944,7 +1594,7 @@ export function runTimetableEngine(params: {
 
   const incTeacherDayCount = (teacherId: string, day: string, delta: number = 1) => {
     const key = `${teacherId}_${day}`;
-    teacherDayPeriodCounts.set(key, (teacherDayPeriodCounts.get(key) || 0) + delta);
+    teacherDayPeriodCounts.set(key, Math.max(0, (teacherDayPeriodCounts.get(key) || 0) + delta));
   };
 
   const getTeacherPeriodsOnDay = (teacherId: string, day: string): number[] => {
@@ -961,6 +1611,16 @@ export function runTimetableEngine(params: {
     }
   };
 
+  const removeTeacherPeriodOnDay = (teacherId: string, day: string, period: number) => {
+    const key = `${teacherId}_${day}`;
+    const list = teacherDayPeriodsMap.get(key);
+    if (!list) return;
+    teacherDayPeriodsMap.set(
+      key,
+      list.filter((p) => p !== period)
+    );
+  };
+
   const subjectPeriodsMap = new Map<string, number[]>(); // `${classId}_${subjectCode}_${day}` -> periods[]
 
   const recordSubjectPeriod = (classId: string, subjectCode: string, day: string, period: number) => {
@@ -968,6 +1628,14 @@ export function runTimetableEngine(params: {
     const list = subjectPeriodsMap.get(key) || [];
     list.push(period);
     subjectPeriodsMap.set(key, list);
+  };
+
+  const unrecordSubjectPeriod = (classId: string, subjectCode: string, day: string, period: number) => {
+    const key = `${classId}_${subjectCode.toUpperCase()}_${day}`;
+    const list = subjectPeriodsMap.get(key);
+    if (!list) return;
+    const idx = list.indexOf(period);
+    if (idx !== -1) list.splice(idx, 1);
   };
 
   const getSubjectPeriodsOnDay = (classId: string, subjectCode: string, day: string): number[] => {
@@ -1057,7 +1725,10 @@ export function runTimetableEngine(params: {
   // --------------------------------------------------------------------------
   // STEP 0B: 一年级 07:15 - 07:30 PROGRAM MEMBACA 固定留空（供后续手动指派老师）
   // --------------------------------------------------------------------------
-  seedYear1ProgramMembaca(nonPrasekolahClasses, DAYS_OF_WEEK as any, lessons);
+  const isKP2027Year1 = !academicYear || parseInt(academicYear, 10) >= 2027;
+  if (isKP2027Year1) {
+    seedYear1ProgramMembaca(nonPrasekolahClasses, DAYS_OF_WEEK as any, lessons);
+  }
 
   // --------------------------------------------------------------------------
   // STEP 0C: 放学后 SLOT KHAS TASMIK 固定留空（100% 手动指派，严禁系统自动预占）
@@ -1085,7 +1756,20 @@ export function runTimetableEngine(params: {
   });
 
   const getTeacherDayLoad = (teacherId: string, day: string): number => {
-    return teacherDayPeriodCounts.get(`${teacherId}_${day}`) || 0;
+    let base = teacherDayPeriodCounts.get(`${teacherId}_${day}`) || 0;
+    if (isKP2027Year1) {
+      const hasY1P4 = lessons.some(
+        (l) =>
+          !l.isPemulihan &&
+          l.countsAsClassPeriod &&
+          resolveClassLevel(l) === 1 &&
+          l.day === day &&
+          l.periodNumber === 4 &&
+          l.teacherId === teacherId
+      );
+      if (hasY1P4) base += 0.5;
+    }
+    return base;
   };
 
   const countOtherDaysOver7 = (teacherId: string, excludeDay: string): number => {
@@ -1104,7 +1788,7 @@ export function runTimetableEngine(params: {
   ): boolean => {
     if (!teacherId) return true;
     const curWorkload = getTeacherDayLoad(teacherId, day);
-    const pkarBonus = classLevel === 1 && periodsToBook.includes(4) ? 0.5 : 0;
+    const pkarBonus = isKP2027Year1 && classLevel === 1 && periodsToBook.includes(4) ? 0.5 : 0;
     const totalBlockCost = periodsToBook.length + pkarBonus;
     const projectedLoad = curWorkload + totalBlockCost;
 
@@ -1140,6 +1824,8 @@ export function runTimetableEngine(params: {
           dailyCap: Math.max(dailyCapOverride, projectedLoad),
           strictBreaks,
           additionalWorkload: stepCost,
+          classLevel,
+          academicYear,
         }
       );
       if (!ok) return false;
@@ -1316,7 +2002,7 @@ export function runTimetableEngine(params: {
     if (pmAsg && paiAsg) {
       const required = Math.max(pmAsg.effectiveWeeklyPeriods, paiAsg.effectiveWeeklyPeriods);
       const targetBlocks = decomposeSubjectCompactly('PM', required, classLevel);
-      const recessAfter = classLevel === 1 ? 4 : 5;
+      const recessAfter = isKP2027Year1 && classLevel === 1 ? 4 : 5;
       let scheduled = 0;
 
       for (const blockLen of targetBlocks) {
@@ -1331,7 +2017,7 @@ export function runTimetableEngine(params: {
             // 严格保证每天最多只排 1 组 PM/PAI 课块（例如 [2,2,1] 必须落在 3 个不同上课日）
             if (getSubjectPeriodsOnDay(cls.classId, 'PM', day).length > 0) continue;
 
-            const maxP = getDailyMaxPeriods(day, classLevel);
+            const maxP = getDailyMaxPeriods(day, classLevel, academicYear);
             const candidateStarts: number[] = [];
             for (let p = 1; p <= maxP - blockLen + 1; p++) {
               if (blockLen === 2 && !isAdjacentPeriod(p, p + 1)) continue;
@@ -1453,7 +2139,7 @@ export function runTimetableEngine(params: {
 
       const teacherIds = teacherId2 ? [teacherId1, teacherId2] : [teacherId1];
       const amBlocks = decomposeSubjectCompactly('AM', required - scheduled, classLevel).sort((a, b) => b - a);
-      const recessAfter = classLevel === 1 ? 4 : 5;
+      const recessAfter = isKP2027Year1 && classLevel === 1 ? 4 : 5;
 
       for (const blockLen of amBlocks) {
         let blockPlaced = false;
@@ -1465,7 +2151,7 @@ export function runTimetableEngine(params: {
             if (blockPlaced) break;
             if (getSubjectPeriodsOnDay(cls.classId, 'AM', day).length > 0) continue;
 
-            const maxP = getDailyMaxPeriods(day, classLevel);
+            const maxP = getDailyMaxPeriods(day, classLevel, academicYear);
             const candidateStarts: number[] = [];
             for (let p = 1; p <= maxP - blockLen + 1; p++) {
               candidateStarts.push(p);
@@ -1561,6 +2247,9 @@ export function runTimetableEngine(params: {
 
   // --------------------------------------------------------------------------
   // STEP 3: SCHEDULE REMAINING CORE ACADEMIC SUBJECTS (BC, BM, BI, MT, SN, etc.)
+  // Global Priority: All [2] blocks (Heaviest Teacher First) BEFORE [1] blocks
+  // Enforces Day-Capacity Feasibility Check, 2+1 Separated Languages (NO 3 consecutive),
+  // Soft Daily Subject Cap fallback, and Intra-Class Swap Repair (Zero Blank Guarantee).
   // --------------------------------------------------------------------------
   const remainingAssignments = academicAndPjAssignments.filter((a) => {
     const isPj = isPJSubject(a.canonicalSubjectCode, a.subjectName);
@@ -1568,192 +2257,418 @@ export function runTimetableEngine(params: {
     return !isPj && !isPmOrPai;
   });
 
-  // Sort globally by Heaviest-Workload Teacher First, then by assignment periods
-  remainingAssignments.sort((a, b) => {
-    const tLoadA = teacherWeeklyTotals.get(a.teacherId) || 0;
-    const tLoadB = teacherWeeklyTotals.get(b.teacherId) || 0;
-    if (tLoadB !== tLoadA) {
-      return tLoadB - tLoadA;
-    }
-    return b.effectiveWeeklyPeriods - a.effectiveWeeklyPeriods;
+  // Track unscheduled weekly periods per (classId, subjectCode) for canSafelyAssignBlockToDay
+  const remainingByClassMap = new Map<string, Map<string, number>>();
+  remainingAssignments.forEach((asg) => {
+    const rem = Math.max(0, (asg.effectiveWeeklyPeriods || 0) - (scheduledPerAssignment.get(asg.assignmentId) || 0));
+    if (rem <= 0) return;
+    const cMap = remainingByClassMap.get(asg.classId) || new Map<string, number>();
+    const codeU = asg.canonicalSubjectCode.toUpperCase();
+    cMap.set(codeU, (cMap.get(codeU) || 0) + rem);
+    remainingByClassMap.set(asg.classId, cMap);
   });
 
+  interface EngineBlockItem {
+    asg: SubjectAssignment;
+    blockLen: number;
+    classLevel: number;
+    teacherWeeklyLoad: number;
+    priorityTier: number; // 1 = [2] core, 2 = [2] elective, 3 = [1] core/merge, 4 = [1] PK/MZ
+  }
+
+  const engineBlockQueue: EngineBlockItem[] = [];
   remainingAssignments.forEach((asg) => {
     const required = asg.effectiveWeeklyPeriods;
-    let scheduled = scheduledPerAssignment.get(asg.assignmentId) || 0;
-    const teacherObj = teacherMap.get(asg.teacherId);
+    const scheduled = scheduledPerAssignment.get(asg.assignmentId) || 0;
     const clsObj = nonPrasekolahClasses.find((c) => c.classId === asg.classId);
     const classLevel = resolveClassLevel(clsObj || { className: asg.className });
+    const tWeekly = teacherWeeklyTotals.get(asg.teacherId) || 0;
+    const codeU = asg.canonicalSubjectCode.toUpperCase();
+    const isElectiveDouble = ['PSV', 'RBT', 'SEJ'].includes(codeU);
+    const isMinorSingle = ['PK', 'MZ'].includes(codeU);
 
-    const personalCap = getTeacherPersonalDailyCap(teacherWeeklyTotals.get(asg.teacherId) || 0);
-    // 先排连堂 [2]，再排单节 [1]，让单节可以智能并入同科 [2] 所在日 (3=2+1) 绝不分散
     const blocks = decomposeSubjectCompactly(asg.canonicalSubjectCode, required - scheduled, classLevel).sort((a, b) => b - a);
+    blocks.forEach((blockLen) => {
+      const priorityTier =
+        blockLen >= 2 ? (isElectiveDouble ? 2 : 1) : isMinorSingle ? 4 : 3;
+      engineBlockQueue.push({
+        asg,
+        blockLen,
+        classLevel,
+        teacherWeeklyLoad: tWeekly,
+        priorityTier,
+      });
+    });
+  });
+
+  engineBlockQueue.sort((a, b) => {
+    if (a.priorityTier !== b.priorityTier) return a.priorityTier - b.priorityTier;
+    if (b.blockLen !== a.blockLen) return b.blockLen - a.blockLen;
+    if (b.teacherWeeklyLoad !== a.teacherWeeklyLoad) return b.teacherWeeklyLoad - a.teacherWeeklyLoad;
+    return b.asg.effectiveWeeklyPeriods - a.asg.effectiveWeeklyPeriods;
+  });
+
+  const bookEngineBlock = (asg: SubjectAssignment, day: string, periodsToBook: number[]) => {
+    const teacherObj = teacherMap.get(asg.teacherId);
+    const codeU = asg.canonicalSubjectCode.toUpperCase();
+    periodsToBook.forEach((per) => {
+      classSlotOccupied.add(`${asg.classId}_${day}_${per}`);
+      teacherSlotOccupied.add(`${asg.teacherId}_${day}_${per}`);
+      incTeacherDayCount(asg.teacherId, day);
+      addTeacherPeriodOnDay(asg.teacherId, day, per);
+      recordSubjectPeriod(asg.classId, asg.canonicalSubjectCode, day, per);
+
+      lessons.push({
+        id: `lesson_${asg.classId}_${asg.canonicalSubjectCode}_${day}_P${per}`,
+        day,
+        periodNumber: per,
+        classId: asg.classId,
+        className: asg.className,
+        subjectCode: asg.canonicalSubjectCode,
+        subjectName: asg.subjectName,
+        teacherId: asg.teacherId,
+        teacherName: teacherObj?.fullName || asg.teacherId,
+        countsAsClassPeriod: true,
+        countsAsTeacherPeriod: true,
+      });
+    });
+
+    scheduledPerAssignment.set(asg.assignmentId, (scheduledPerAssignment.get(asg.assignmentId) || 0) + periodsToBook.length);
+    const cMap = remainingByClassMap.get(asg.classId);
+    if (cMap) {
+      cMap.set(codeU, Math.max(0, (cMap.get(codeU) || 0) - periodsToBook.length));
+    }
+  };
+
+  engineBlockQueue.forEach((item) => {
+    const { asg, blockLen, classLevel } = item;
+    const personalCap = getTeacherPersonalDailyCap(teacherWeeklyTotals.get(asg.teacherId) || 0);
     const baseMaxSubjects = getMaxSubjectsPerDay(classLevel);
     const isMajorLang = isMajorLanguageSubject(asg.canonicalSubjectCode);
-    const recessAfter = classLevel === 1 ? 4 : 5;
+    const recessAfter = isKP2027Year1 && classLevel === 1 ? 4 : 5;
+    const classRemMap = remainingByClassMap.get(asg.classId);
 
-    // 优先维持在每日科目上限 (T1-3 <= 4, T4-6 <= 6) 与教师个人日上限内；低年级数学上界迫不得已时允许最多+1科保底全排
-    const capTiers: Array<{ cap: number; strictBreaks: boolean; allowOver7: boolean; maxSubjects: number }> = [
-      { cap: Math.min(7, personalCap), strictBreaks: true, allowOver7: false, maxSubjects: baseMaxSubjects },
-      { cap: 7, strictBreaks: true, allowOver7: false, maxSubjects: baseMaxSubjects },
-      { cap: 7, strictBreaks: false, allowOver7: false, maxSubjects: baseMaxSubjects },
-      { cap: MAX_TEACHER_DAILY_PERIODS, strictBreaks: false, allowOver7: true, maxSubjects: baseMaxSubjects },
-      { cap: 7, strictBreaks: true, allowOver7: false, maxSubjects: baseMaxSubjects + 1 },
-      { cap: MAX_TEACHER_DAILY_PERIODS, strictBreaks: false, allowOver7: true, maxSubjects: baseMaxSubjects + 1 },
-      { cap: MAX_TEACHER_DAILY_PERIODS, strictBreaks: false, allowOver7: true, maxSubjects: baseMaxSubjects + 2 },
+    // Fix B: Strict 4/6-subject preference in tiers 1-4 (with Day-Capacity Feasibility check),
+    // automatically relaxing to +1/+2 subjects in tiers 5-7 so zero slots are left blank!
+    const capTiers: Array<{ cap: number; strictBreaks: boolean; allowOver7: boolean; maxSubjects: number; checkFeasible: boolean }> = [
+      { cap: Math.min(7, personalCap), strictBreaks: true, allowOver7: false, maxSubjects: baseMaxSubjects, checkFeasible: true },
+      { cap: 7, strictBreaks: true, allowOver7: false, maxSubjects: baseMaxSubjects, checkFeasible: true },
+      { cap: 7, strictBreaks: false, allowOver7: false, maxSubjects: baseMaxSubjects, checkFeasible: true },
+      { cap: MAX_TEACHER_DAILY_PERIODS, strictBreaks: false, allowOver7: true, maxSubjects: baseMaxSubjects, checkFeasible: false },
+      { cap: 7, strictBreaks: true, allowOver7: false, maxSubjects: baseMaxSubjects + 1, checkFeasible: false },
+      { cap: MAX_TEACHER_DAILY_PERIODS, strictBreaks: false, allowOver7: true, maxSubjects: baseMaxSubjects + 1, checkFeasible: false },
+      { cap: MAX_TEACHER_DAILY_PERIODS, strictBreaks: false, allowOver7: true, maxSubjects: baseMaxSubjects + 2, checkFeasible: false },
     ];
 
-    blocks.forEach((blockLen) => {
-      let placed = false;
+    let placed = false;
 
-      // 关键：若这是三大语文科 (BC/BM/BI) 的单节 [1]，优先并入该科目已存在连续 [2] 节的日子（构成 3=2+1），绝不消耗新科目名额！
-      const existingDoubleDays = isMajorLang && blockLen === 1
-        ? sortDaysLeastLoadedFirst(
-            DAYS_OF_WEEK.filter((d) => getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, d).length === 2),
-            [asg.teacherId]
-          )
-        : [];
-      const unusedDays = sortDaysLeastLoadedFirst(
-        DAYS_OF_WEEK.filter((d) => getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, d).length === 0),
-        [asg.teacherId]
-      );
-      const otherUsedDays = sortDaysLeastLoadedFirst(
-        DAYS_OF_WEEK.filter((d) => {
-          const cnt = getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, d).length;
-          return cnt > 0 && !(isMajorLang && blockLen === 1 && cnt === 2);
-        }),
-        [asg.teacherId]
-      );
-      const dayCandidates = [...existingDoubleDays, ...unusedDays, ...otherUsedDays];
+    const existingDoubleDays = isMajorLang && blockLen === 1
+      ? sortDaysLeastLoadedFirst(
+          DAYS_OF_WEEK.filter((d) => getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, d).length === 2),
+          [asg.teacherId]
+        )
+      : [];
+    const unusedDays = sortDaysLeastLoadedFirst(
+      DAYS_OF_WEEK.filter((d) => getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, d).length === 0),
+      [asg.teacherId]
+    );
+    const otherUsedDays = sortDaysLeastLoadedFirst(
+      DAYS_OF_WEEK.filter((d) => {
+        const cnt = getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, d).length;
+        return cnt > 0 && !(isMajorLang && blockLen === 1 && cnt === 2);
+      }),
+      [asg.teacherId]
+    );
+    const dayCandidates = [...existingDoubleDays, ...unusedDays, ...otherUsedDays];
 
-      for (const tierCfg of capTiers) {
+    for (const tierCfg of capTiers) {
+      if (placed) break;
+
+      for (const day of dayCandidates) {
         if (placed) break;
 
-        for (const day of dayCandidates) {
-          if (placed) break;
+        const currentClassDayLessons = lessons.filter(
+          (l) => l.classId === asg.classId && l.day === day && !l.isPemulihan && l.countsAsClassPeriod
+        );
+        const existingSubPeriods = getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, day);
 
-          const currentClassDayLessons = lessons.filter(
-            (l) => l.classId === asg.classId && l.day === day && !l.isPemulihan && l.countsAsClassPeriod
-          );
-          const existingSubPeriods = getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, day);
+        if (
+          !canAddSubjectToClassDay(currentClassDayLessons, asg.canonicalSubjectCode, blockLen, classLevel, {
+            maxSubjectsOverride: tierCfg.maxSubjects,
+            existingPeriodPositions: existingSubPeriods,
+          })
+        ) {
+          continue;
+        }
+
+        const maxP = getDailyMaxPeriods(day, classLevel, academicYear);
+
+        if (
+          tierCfg.checkFeasible &&
+          !canSafelyAssignBlockToDay({
+            dayMaxPeriods: maxP,
+            currentDayLessons: currentClassDayLessons,
+            candidateSubjectCode: asg.canonicalSubjectCode,
+            blockLength: blockLen,
+            classLevel,
+            maxSubjectsOverride: tierCfg.maxSubjects,
+            remainingSubjectPeriodsInWeek: classRemMap,
+          })
+        ) {
+          continue;
+        }
+
+        const candidateStarts = Array.from({ length: Math.max(0, maxP - blockLen + 1) }, (_, idx) => idx + 1);
+
+        // Slot ordering:
+        // - [2]: prefer same side of recess AND avoid stranding 1-slot orphan holes
+        // - [1] on a day with existing [2]: place on OPPOSITE side of recess (2+1 separated), NEVER 3 consecutive!
+        if (blockLen === 2) {
+          candidateStarts.sort((pA, pB) => {
+            const sA = scoreDoubleSlotCandidate(pA, pA + 1, recessAfter);
+            const sB = scoreDoubleSlotCandidate(pB, pB + 1, recessAfter);
+            if (sA !== sB) return sB - sA;
+
+            const orphanPen = (p: number) => {
+              const isM = p <= recessAfter;
+              const lo = isM ? 1 : recessAfter + 1;
+              const hi = isM ? recessAfter : maxP;
+              let leftE = 0;
+              for (let k = p - 1; k >= lo; k--) {
+                if (classSlotOccupied.has(`${asg.classId}_${day}_${k}`)) break;
+                leftE++;
+              }
+              let rightE = 0;
+              for (let k = p + 2; k <= hi; k++) {
+                if (classSlotOccupied.has(`${asg.classId}_${day}_${k}`)) break;
+                rightE++;
+              }
+              let pen = 0;
+              if ((leftE + rightE) % 2 === 1) pen += 3;
+              if (leftE === 1 && rightE > 0) pen += 3;
+              if (rightE === 1 && leftE > 0) pen += 3;
+              if (leftE === 0 || rightE === 0) pen -= 1;
+              return pen;
+            };
+            const opA = orphanPen(pA);
+            const opB = orphanPen(pB);
+            if (opA !== opB) return opA - opB;
+            return pA - pB;
+          });
+        } else if (blockLen === 1 && existingSubPeriods.length === 2) {
+          const exIsMorning = existingSubPeriods[0] <= recessAfter;
+          candidateStarts.sort((pA, pB) => {
+            const sideA = (pA <= recessAfter) !== exIsMorning ? 0 : 1;
+            const sideB = (pB <= recessAfter) !== exIsMorning ? 0 : 1;
+            if (sideA !== sideB) return sideA - sideB;
+            return pA - pB;
+          });
+        } else if (blockLen === 1 && existingSubPeriods.length === 1) {
+          candidateStarts.sort((pA, pB) => {
+            const adjA = Math.abs(existingSubPeriods[0] - pA) === 1 ? 1 : 0;
+            const adjB = Math.abs(existingSubPeriods[0] - pB) === 1 ? 1 : 0;
+            return adjB - adjA || pA - pB;
+          });
+        }
+
+        for (const p of candidateStarts) {
+          const periodsToBook = Array.from({ length: blockLen }, (_, i) => p + i);
 
           if (
             !canAddSubjectToClassDay(currentClassDayLessons, asg.canonicalSubjectCode, blockLen, classLevel, {
               maxSubjectsOverride: tierCfg.maxSubjects,
               existingPeriodPositions: existingSubPeriods,
+              candidatePeriodPositions: periodsToBook,
             })
           ) {
             continue;
           }
 
-          const maxP = getDailyMaxPeriods(day, classLevel);
-          const candidateStarts = Array.from({ length: Math.max(0, maxP - blockLen + 1) }, (_, idx) => idx + 1);
-
-          // 排序起始节：连堂优先不跨下课；单节并入 [2] 时优先紧邻连堂构成 3 连节
-          if (blockLen === 2) {
-            candidateStarts.sort((pA, pB) => {
-              const sA = scoreDoubleSlotCandidate(pA, pA + 1, recessAfter);
-              const sB = scoreDoubleSlotCandidate(pB, pB + 1, recessAfter);
-              return sB - sA || pA - pB;
-            });
-          } else if (blockLen === 1 && existingSubPeriods.length > 0) {
-            candidateStarts.sort((pA, pB) => {
-              const adjA = existingSubPeriods.some((ep) => Math.abs(ep - pA) === 1) ? 1 : 0;
-              const adjB = existingSubPeriods.some((ep) => Math.abs(ep - pB) === 1) ? 1 : 0;
-              return adjB - adjA || pA - pB;
-            });
-          }
-
-          for (const p of candidateStarts) {
-            const periodsToBook = Array.from({ length: blockLen }, (_, i) => p + i);
+          // 一年级第 4 节 (紧邻 PKAR 0.5节) 防重复科任老师校验
+          if (isKP2027Year1 && classLevel === 1 && periodsToBook.includes(4)) {
+            const existingYear1P4Lessons = lessons
+              .filter(
+                (l) =>
+                  resolveClassLevel(l) === 1 &&
+                  l.periodNumber === 4 &&
+                  l.countsAsClassPeriod &&
+                  !l.isPemulihan
+              )
+              .map((l) => ({ day: l.day, subjectCode: l.subjectCode, teacherId: l.teacherId }));
 
             if (
-              !canAddSubjectToClassDay(currentClassDayLessons, asg.canonicalSubjectCode, blockLen, classLevel, {
-                maxSubjectsOverride: tierCfg.maxSubjects,
-                existingPeriodPositions: existingSubPeriods,
-                candidatePeriodPositions: periodsToBook,
-              })
+              !canAssignYear1Period4(
+                classLevel,
+                4,
+                asg.canonicalSubjectCode,
+                asg.teacherId,
+                existingYear1P4Lessons,
+                tierCfg.strictBreaks
+              )
             ) {
               continue;
             }
+          }
 
-            // 一年级第 4 节 (紧邻 PKAR 0.5节) 防重复科任老师校验
-            if (classLevel === 1 && periodsToBook.includes(4)) {
-              const existingYear1P4Lessons = lessons
-                .filter(
-                  (l) =>
-                    resolveClassLevel(l) === 1 &&
-                    l.periodNumber === 4 &&
-                    l.countsAsClassPeriod &&
-                    !l.isPemulihan
-                )
-                .map((l) => ({ day: l.day, subjectCode: l.subjectCode, teacherId: l.teacherId }));
+          const slotsFree = periodsToBook.every((per) => {
+            const cKey = `${asg.classId}_${day}_${per}`;
+            const tKey = `${asg.teacherId}_${day}_${per}`;
+            return !classSlotOccupied.has(cKey) && !teacherSlotOccupied.has(tKey);
+          });
+          if (!slotsFree) continue;
 
-              if (
-                !canAssignYear1Period4(
-                  classLevel,
-                  4,
-                  asg.canonicalSubjectCode,
-                  asg.teacherId,
-                  existingYear1P4Lessons,
-                  tierCfg.strictBreaks
-                )
-              ) {
-                continue;
-              }
-            }
+          // 严格执行教师单日 <= 8.0 节绝对硬上限（含连堂 +2、周二 PN +1、PKAR +0.5）与个人每日上限
+          const teacherCanTake = canTeacherTakeBlockOnDay(
+            asg.teacherId,
+            day,
+            periodsToBook,
+            classLevel,
+            tierCfg.strictBreaks,
+            tierCfg.cap,
+            tierCfg.allowOver7
+          );
 
-            const slotsFree = periodsToBook.every((per) => {
-              const cKey = `${asg.classId}_${day}_${per}`;
-              const tKey = `${asg.teacherId}_${day}_${per}`;
-              return !classSlotOccupied.has(cKey) && !teacherSlotOccupied.has(tKey);
-            });
-            if (!slotsFree) continue;
-
-            // 严格执行教师单日 <= 8.0 节绝对硬上限（含连堂 +2、周二 PN +1、PKAR +0.5）与个人每日上限
-            const teacherCanTake = canTeacherTakeBlockOnDay(
-              asg.teacherId,
-              day,
-              periodsToBook,
-              classLevel,
-              tierCfg.strictBreaks,
-              tierCfg.cap,
-              tierCfg.allowOver7
-            );
-
-            if (teacherCanTake) {
-              periodsToBook.forEach((per) => {
-                classSlotOccupied.add(`${asg.classId}_${day}_${per}`);
-                teacherSlotOccupied.add(`${asg.teacherId}_${day}_${per}`);
-                incTeacherDayCount(asg.teacherId, day);
-                addTeacherPeriodOnDay(asg.teacherId, day, per);
-                recordSubjectPeriod(asg.classId, asg.canonicalSubjectCode, day, per);
-
-                lessons.push({
-                  id: `lesson_${asg.classId}_${asg.canonicalSubjectCode}_${day}_P${per}`,
-                  day,
-                  periodNumber: per,
-                  classId: asg.classId,
-                  className: asg.className,
-                  subjectCode: asg.canonicalSubjectCode,
-                  subjectName: asg.subjectName,
-                  teacherId: asg.teacherId,
-                  teacherName: teacherObj?.fullName || asg.teacherId,
-                  countsAsClassPeriod: true,
-                  countsAsTeacherPeriod: true,
-                });
-              });
-
-              scheduled += blockLen;
-              placed = true;
-              break;
-            }
+          if (teacherCanTake) {
+            bookEngineBlock(asg, day, periodsToBook);
+            placed = true;
+            break;
           }
         }
       }
-    });
+    }
 
-    scheduledPerAssignment.set(asg.assignmentId, scheduled);
+    // Same-Class [2]-Block Evict-and-Slide fallback if a double block couldn't find 2 adjacent slots directly
+    if (!placed && blockLen === 2) {
+      for (const day of dayCandidates) {
+        if (placed) break;
+        const maxP = getDailyMaxPeriods(day, classLevel, academicYear);
+        const currentDayLessons = lessons.filter(
+          (l) => l.classId === asg.classId && l.day === day && !l.isPemulihan && l.countsAsClassPeriod
+        );
+        const exSub = getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, day);
+        if (
+          !canAddSubjectToClassDay(currentDayLessons, asg.canonicalSubjectCode, 2, classLevel, {
+            maxSubjectsOverride: baseMaxSubjects + 2,
+            existingPeriodPositions: exSub,
+          })
+        ) {
+          continue;
+        }
+
+        // Look for (p, p+1) where one slot is empty and the other has an unlocked single lesson movable to another slot
+        for (let p = 1; p < maxP && !placed; p++) {
+          if (p === recessAfter) continue; // keep double within same session
+          const k1 = `${asg.classId}_${day}_${p}`;
+          const k2 = `${asg.classId}_${day}_${p + 1}`;
+          const occ1 = classSlotOccupied.has(k1);
+          const occ2 = classSlotOccupied.has(k2);
+          if (occ1 === occ2) continue; // need exactly 1 occupied and 1 empty
+
+          const occP = occ1 ? p : p + 1;
+          const occL = lessons.find(
+            (l) =>
+              l.classId === asg.classId &&
+              l.day === day &&
+              l.periodNumber === occP &&
+              l.countsAsClassPeriod &&
+              !l.isPemulihan &&
+              !l.isPN &&
+              l.subjectCode.toUpperCase() !== 'PJ' &&
+              l.subjectCode.toUpperCase() !== 'PM/PAI'
+          );
+          if (!occL) continue;
+          const occSubPeriods = getSubjectPeriodsOnDay(asg.classId, occL.subjectCode, day);
+          if (occSubPeriods.length >= 2) continue;
+
+          // Unbook occL temporarily, move to an empty slot on another day or same day
+          const occIdx = lessons.findIndex((l) => l.id === occL.id);
+          if (occIdx !== -1) lessons.splice(occIdx, 1);
+          classSlotOccupied.delete(`${occL.classId}_${day}_${occP}`);
+          teacherSlotOccupied.delete(`${occL.teacherId}_${day}_${occP}`);
+          incTeacherDayCount(occL.teacherId, day, -1);
+          removeTeacherPeriodOnDay(occL.teacherId, day, occP);
+          unrecordSubjectPeriod(occL.classId, occL.subjectCode, day, occP);
+
+          const periodsToBook = [p, p + 1];
+          const dayLessonsAfter = lessons.filter(
+            (l) => l.classId === asg.classId && l.day === day && !l.isPemulihan && l.countsAsClassPeriod
+          );
+          const canPlaceDoubleHere =
+            canAddSubjectToClassDay(dayLessonsAfter, asg.canonicalSubjectCode, 2, classLevel, {
+              maxSubjectsOverride: baseMaxSubjects + 2,
+              existingPeriodPositions: getSubjectPeriodsOnDay(asg.classId, asg.canonicalSubjectCode, day),
+              candidatePeriodPositions: periodsToBook,
+            }) &&
+            periodsToBook.every((per) => !teacherSlotOccupied.has(`${asg.teacherId}_${day}_${per}`)) &&
+            canTeacherTakeBlockOnDay(asg.teacherId, day, periodsToBook, classLevel, false, MAX_TEACHER_DAILY_PERIODS, true);
+
+          let movedOcc = false;
+          if (canPlaceDoubleHere) {
+              for (const altDay of DAYS_OF_WEEK) {
+              if (movedOcc) break;
+              const altMax = getDailyMaxPeriods(altDay, classLevel, academicYear);
+              for (let altP = 1; altP <= altMax && !movedOcc; altP++) {
+                if (altDay === day && (altP === p || altP === p + 1)) continue;
+                if (classSlotOccupied.has(`${asg.classId}_${altDay}_${altP}`)) continue;
+                if (teacherSlotOccupied.has(`${occL.teacherId}_${altDay}_${altP}`)) continue;
+                const altDayLessons = lessons.filter(
+                  (l) => l.classId === asg.classId && l.day === altDay && !l.isPemulihan && l.countsAsClassPeriod
+                );
+                if (
+                  canAddSubjectToClassDay(altDayLessons, occL.subjectCode, 1, classLevel, {
+                    maxSubjectsOverride: baseMaxSubjects + 2,
+                    existingPeriodPositions: getSubjectPeriodsOnDay(asg.classId, occL.subjectCode, altDay),
+                    candidatePeriodPositions: [altP],
+                  }) &&
+                  canTeacherTakeBlockOnDay(occL.teacherId, altDay, [altP], classLevel, false, MAX_TEACHER_DAILY_PERIODS, true)
+                ) {
+                  classSlotOccupied.add(`${occL.classId}_${altDay}_${altP}`);
+                  teacherSlotOccupied.add(`${occL.teacherId}_${altDay}_${altP}`);
+                  incTeacherDayCount(occL.teacherId, altDay, 1);
+                  addTeacherPeriodOnDay(occL.teacherId, altDay, altP);
+                  recordSubjectPeriod(occL.classId, occL.subjectCode, altDay, altP);
+                  lessons.push({ ...occL, day: altDay, periodNumber: altP });
+                  bookEngineBlock(asg, day, periodsToBook);
+                  movedOcc = true;
+                  placed = true;
+                }
+              }
+            }
+          }
+
+          if (!movedOcc) {
+            classSlotOccupied.add(`${occL.classId}_${day}_${occP}`);
+            teacherSlotOccupied.add(`${occL.teacherId}_${day}_${occP}`);
+            incTeacherDayCount(occL.teacherId, day, 1);
+            addTeacherPeriodOnDay(occL.teacherId, day, occP);
+            recordSubjectPeriod(occL.classId, occL.subjectCode, day, occP);
+            lessons.push(occL);
+          }
+        }
+      }
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // STEP 3B: MANDATORY INTRA-CLASS SWAP REPAIR PASS (ZERO BLANK GUARANTEE)
+  // --------------------------------------------------------------------------
+  repairEmptyClassSlots({
+    classes: nonPrasekolahClasses,
+    assignments: normalizedAssignments,
+    lessons,
+    scheduledPerAssignment,
+    teacherMap,
+    classSlotOccupied,
+    teacherSlotOccupied,
+    incTeacherDayCount,
+    addTeacherPeriodOnDay,
+    removeTeacherPeriodOnDay,
+    getTeacherDayLoad,
+    recordSubjectPeriod,
+    unrecordSubjectPeriod,
+    getSubjectPeriodsOnDay,
+    canTeacherTakeBlockOnDay,
+    academicYear,
   });
 
   // --------------------------------------------------------------------------
@@ -1877,7 +2792,8 @@ export function runTimetableEngine(params: {
   const finalLessons = autoPairPKARWithPreRecessTeacher(
     lessons,
     DAYS_OF_WEEK as any,
-    (teacherId, day, delta) => incTeacherDayCount(teacherId, day, delta)
+    (teacherId, day, delta) => incTeacherDayCount(teacherId, day, delta),
+    academicYear
   );
 
   let unplacedCount = 0;
