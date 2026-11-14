@@ -6,6 +6,7 @@ import {
   getGradeDaySlots 
 } from './types';
 import { Printer, User, Award, CheckCircle2, AlertTriangle, Clock } from 'lucide-react';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 
 interface TeacherTimetableViewProps {
   schedule: ScheduleGrid;
@@ -22,10 +23,13 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
   academicYear,
   teacherMapping,
   displayMode,
-  schoolName = 'SJK (C) CHUNG HUA BALINGIAN',
-  schoolCode = 'YCC3404',
+  schoolName: propSchoolName,
+  schoolCode: propSchoolCode,
   defaultTeacherCode,
 }) => {
+  const tenant = useSchoolTenant();
+  const schoolName = propSchoolName || tenant.schoolName;
+  const schoolCode = propSchoolCode || tenant.schoolCode;
   const [selectedTeacherCode, setSelectedTeacherCode] = useState<string>(
     defaultTeacherCode || teacherMapping.list[0]?.code || ''
   );
@@ -34,9 +38,23 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
     return teacherMapping.list.find((t) => t.code === selectedTeacherCode) || teacherMapping.list[0];
   }, [teacherMapping, selectedTeacherCode]);
 
-  // Build the personal timetable matrix for this teacher: [day][slot] => { grade, subjectCode, subjectName, time }
+  // Build the personal timetable matrix for this teacher: [day][slot] => { grade, gradeLabel, subjectCode, subjectName, time, periodLength, hasPKAR }
   const personalSchedule = useMemo(() => {
-    const data: Record<DayOfWeek, Record<string, { grade: number; subjectCode: string; subjectName: string; time: string } | null>> = {
+    const data: Record<
+      DayOfWeek,
+      Record<
+        string,
+        {
+          grade: number;
+          gradeLabel?: string;
+          subjectCode: string;
+          subjectName: string;
+          time: string;
+          periodLength: number;
+          hasPKAR?: boolean;
+        } | null
+      >
+    > = {
       ISNIN: {},
       SELASA: {},
       RABU: {},
@@ -48,27 +66,46 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
     const tCode = selectedTeacher.code;
 
     DAYS_OF_WEEK.forEach((day) => {
-      // Use standard reference slots (W1 to W11)
       const slots = getGradeDaySlots(2, day).filter((s) => !s.isRecess);
       slots.forEach((s) => {
         data[day][s.slotId] = null;
       });
 
+      // Compulsory PN assembly for all teachers on SELASA W1 (+1.0 period)
+      if (day === 'SELASA') {
+        const w1Slot = slots.find((s) => s.slotId === 'W1');
+        data['SELASA']['W1'] = {
+          grade: 0,
+          gradeLabel: 'SEMUA',
+          subjectCode: 'PN',
+          subjectName: 'PERHIMPUNAN RASMI',
+          time: w1Slot ? `${w1Slot.startTime}–${w1Slot.endTime}` : '07:15–07:45',
+          periodLength: 1,
+        };
+      }
+
+      const pkarDaysForTeacher = new Set<DayOfWeek>();
+      const y1PkarCell = schedule[1]?.[day]?.['PKAR'];
+      if (y1PkarCell && y1PkarCell.teacherCode) {
+        const pkarTeachers = y1PkarCell.teacherCode.split('/').map((c) => c.trim());
+        if (pkarTeachers.includes(tCode)) {
+          pkarDaysForTeacher.add(day);
+        }
+      }
+
       // Find where this teacher is assigned across grades 1 to 6
       [1, 2, 3, 4, 5, 6].forEach((grade) => {
         const gradeSlots = getGradeDaySlots(grade, day);
         gradeSlots.forEach((gs) => {
-          if (gs.isRecess) return;
+          if (gs.isRecess || gs.slotId === 'PKAR') return;
           const cell = schedule[grade]?.[day]?.[gs.slotId];
+          if (!cell || cell.subjectCode === 'PN') return;
           const isAssigned =
-            cell &&
-            (cell.teacherCode === tCode ||
-              (cell.teacherCode && cell.teacherCode.split('/').map((c) => c.trim()).includes(tCode)));
+            cell.teacherCode === tCode ||
+            (cell.teacherCode && cell.teacherCode.split('/').map((c) => c.trim()).includes(tCode));
 
-          if (cell && isAssigned) {
-            // Find slot key
+          if (isAssigned) {
             let slotKey = gs.slotId;
-            // Map T1 W5 (which is 10:15-10:45) to reference W6, up to W10 -> W11
             if (grade === 1) {
               if (gs.slotId === 'W5') slotKey = 'W6';
               else if (gs.slotId === 'W6') slotKey = 'W7';
@@ -85,11 +122,16 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
               subjName = 'PENDIDIKAN ISLAM';
             }
 
+            const hasPKAR = grade === 1 && gs.slotId === 'W4' && pkarDaysForTeacher.has(day);
+            const len = cell.periodLength ?? (gs.slotId === 'MEMBACA' ? 0.5 : 1);
+
             data[day][slotKey] = {
               grade,
               subjectCode: subjCode,
               subjectName: subjName,
               time: `${gs.startTime}–${gs.endTime}`,
+              periodLength: len,
+              hasPKAR,
             };
           }
         });
@@ -99,7 +141,7 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
     return data;
   }, [schedule, selectedTeacher]);
 
-  // Calculate daily workload and total workload
+  // Calculate daily workload and total workload (including PN +1 on SELASA and PKAR +0.5 on Year 1 W4)
   const workloads = useMemo(() => {
     const daily: Record<DayOfWeek, number> = { ISNIN: 0, SELASA: 0, RABU: 0, KHAMIS: 0, JUMAAT: 0 };
     let total = 0;
@@ -108,18 +150,26 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
     DAYS_OF_WEEK.forEach((day) => {
       Object.values(personalSchedule[day]).forEach((item) => {
         if (item) {
-          daily[day] += 1;
-          total += 1;
-          subjectCounts[item.subjectCode] = (subjectCounts[item.subjectCode] || 0) + 1;
+          daily[day] += item.periodLength;
+          total += item.periodLength;
+          subjectCounts[item.subjectCode] = (subjectCounts[item.subjectCode] || 0) + item.periodLength;
+          if (item.hasPKAR) {
+            daily[day] += 0.5;
+            total += 0.5;
+            subjectCounts['PKAR'] = (subjectCounts['PKAR'] || 0) + 0.5;
+          }
         }
       });
     });
 
-    return { daily, total, subjectCounts };
+    const daysOver8 = DAYS_OF_WEEK.filter((d) => daily[d] > 8).length;
+    const daysOver7 = DAYS_OF_WEEK.filter((d) => daily[d] > 7).length;
+
+    return { daily, total, subjectCounts, daysOver8, daysOver7 };
   }, [personalSchedule]);
 
-  const isOptimal = workloads.total >= 22 && workloads.total <= 30;
-  const isOverload = workloads.total > 30;
+  const isOptimal = workloads.total >= 22 && workloads.total <= 33;
+  const isOverload = workloads.total > 35;
 
   return (
     <div className="space-y-6">
@@ -139,9 +189,33 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
             Jumlah Waktu Seminggu: <strong className="text-white">{workloads.total} waktu</strong> ·{' '}
             Status Beban:{' '}
             <strong className={isOverload ? 'text-rose-400' : isOptimal ? 'text-emerald-400' : 'text-slate-300'}>
-              {isOverload ? 'Lebih Beban (>30w)' : isOptimal ? 'Optimum (22–30w)' : 'Kurang (<22w)'}
+              {isOverload ? 'Lebih Beban (>35w)' : isOptimal ? 'Seimbang (22–33w)' : 'Kurang (<22w)'}
+            </strong>{' '}
+            · Hari &gt;7w:{' '}
+            <strong className={workloads.daysOver7 > 1 ? 'text-rose-400' : workloads.daysOver7 === 1 ? 'text-amber-300' : 'text-emerald-400'}>
+              {workloads.daysOver7}/1
             </strong>
           </p>
+          {/* Daily workload distribution strip */}
+          <div className="flex flex-wrap items-center gap-2 mt-2 text-[11px] font-mono">
+            {DAYS_OF_WEEK.map((d) => {
+              const cnt = workloads.daily[d];
+              return (
+                <span
+                  key={d}
+                  className={`px-2 py-0.5 rounded-lg border font-bold ${
+                    cnt > 8
+                      ? 'bg-rose-950/80 border-rose-600 text-rose-300'
+                      : cnt > 7
+                      ? 'bg-amber-950/70 border-amber-600 text-amber-300'
+                      : 'bg-slate-950 border-slate-700 text-slate-300'
+                  }`}
+                >
+                  {d.slice(0, 3)}: {cnt}/8
+                </span>
+              );
+            })}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -206,13 +280,14 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
                     <div className="font-bold text-xs">{slot}</div>
                   </th>
                 ))}
-                <th className="p-3 border border-slate-400 w-20 text-center bg-slate-200">Jumlah</th>
+                <th className="p-3 border border-slate-400 w-24 text-center bg-slate-200">Jumlah / 8</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-300 font-mono text-center">
               {DAYS_OF_WEEK.map((day) => {
                 const dayWorkload = workloads.daily[day];
-                const isOverDailyLimit = dayWorkload > 7;
+                const isOverHardCap = dayWorkload > 8;
+                const isAt8Tier = dayWorkload > 7 && dayWorkload <= 8;
 
                 return (
                   <tr key={day} className="hover:bg-slate-50 transition">
@@ -256,7 +331,7 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
                         <td
                           key={slotKey}
                           className={`p-2 border border-slate-400 ${
-                            item ? 'bg-blue-50/70 font-bold' : ''
+                            item ? (item.subjectCode === 'PN' ? 'bg-amber-50/70 font-bold' : 'bg-blue-50/70 font-bold') : ''
                           }`}
                         >
                           {item ? (
@@ -265,8 +340,11 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
                                 {item.subjectCode}
                               </div>
                               <div className="text-[10px] text-blue-700 font-bold">
-                                T.{item.grade}
+                                {item.gradeLabel || `T.${item.grade}`}
                               </div>
+                              {item.hasPKAR && (
+                                <div className="text-[9px] text-emerald-700 font-bold">+PKAR (0.5w)</div>
+                              )}
                             </div>
                           ) : (
                             <span className="text-slate-300 font-light">-</span>
@@ -275,9 +353,17 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
                       );
                     })}
 
-                    <td className="p-2 border border-slate-400 font-bold text-xs bg-slate-50">
-                      <span className={isOverDailyLimit ? 'text-rose-600 font-black' : 'text-slate-800'}>
-                        {dayWorkload} waktu
+                    <td className={`p-2 border border-slate-400 font-bold text-xs ${isOverHardCap ? 'bg-rose-50' : 'bg-slate-50'}`}>
+                      <span
+                        className={
+                          isOverHardCap
+                            ? 'text-rose-600 font-black'
+                            : isAt8Tier
+                            ? 'text-amber-700 font-black'
+                            : 'text-slate-800'
+                        }
+                      >
+                        {dayWorkload} / 8w
                       </span>
                     </td>
                   </tr>

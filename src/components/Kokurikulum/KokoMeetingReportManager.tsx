@@ -16,6 +16,8 @@ import {
   KokoAttendanceSession,
   KPM_12_MEETING_TEMPLATES 
 } from '../../types/kokurikulum';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 
 interface Props {
   profile: UserProfile;
@@ -42,6 +44,7 @@ export default function KokoMeetingReportManager({
   prefill,
   onClearPrefill 
 }: Props) {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName } = useSchoolTenant();
   const [selectedCategory, setSelectedCategory] = useState<'uniform' | 'club' | 'sport'>('uniform');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
   const [selectedMeetingNumber, setSelectedMeetingNumber] = useState<number>(1);
@@ -96,21 +99,33 @@ export default function KokoMeetingReportManager({
     // Groups
     unsubs.push(
       onSnapshot(collection(db, 'koko_groups'), (snap) => {
-        setGroups(snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoGroup)));
+        setGroups(
+          snap.docs
+            .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+            .map(d => ({ id: d.id, ...d.data() } as KokoGroup))
+        );
       })
     );
 
     // Reports
     unsubs.push(
       onSnapshot(collection(db, 'koko_meeting_reports'), (snap) => {
-        setReports(snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoMeetingReport)));
+        setReports(
+          snap.docs
+            .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+            .map(d => ({ id: d.id, ...d.data() } as KokoMeetingReport))
+        );
       })
     );
 
     // Attendance
     unsubs.push(
       onSnapshot(collection(db, 'koko_attendance'), (snap) => {
-        setAttendanceSessions(snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoAttendanceSession)));
+        setAttendanceSessions(
+          snap.docs
+            .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+            .map(d => ({ id: d.id, ...d.data() } as KokoAttendanceSession))
+        );
         setLoading(false);
       })
     );
@@ -119,11 +134,17 @@ export default function KokoMeetingReportManager({
     async function loadTeachers() {
       try {
         const snap = await getDocs(collection(db, 'personnel'));
-        if (!snap.empty) {
-          setTeachers(snap.docs.map(d => (d.data().name || d.data().nama || '').toUpperCase()).filter(Boolean));
+        const scopedPersonnel = snap.docs.filter(d => belongsToSchool(d.data(), activeSchoolCode));
+        if (scopedPersonnel.length > 0) {
+          setTeachers(scopedPersonnel.map(d => (d.data().name || d.data().nama || '').toUpperCase()).filter(Boolean));
         } else {
           const tSnap = await getDocs(collection(db, 'teachers'));
-          setTeachers(tSnap.docs.map(d => (d.data().name || '').toUpperCase()).filter(Boolean));
+          setTeachers(
+            tSnap.docs
+              .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+              .map(d => (d.data().name || '').toUpperCase())
+              .filter(Boolean)
+          );
         }
       } catch (err) {
         console.warn('Teacher load error:', err);
@@ -132,7 +153,7 @@ export default function KokoMeetingReportManager({
     loadTeachers();
 
     return () => unsubs.forEach(u => u());
-  }, []);
+  }, [activeSchoolCode]);
 
   // Filter groups by category
   const categoryGroups = useMemo(() => {
@@ -239,9 +260,10 @@ export default function KokoMeetingReportManager({
     if (!currentGroup) return;
     setSaving(true);
     const targetGroupId = currentGroup.id || currentGroup.name;
-    const reportDocId = `${targetGroupId}_p${selectedMeetingNumber}`;
+    const reportDocId = scopedDocId(activeSchoolCode, `${targetGroupId}_p${selectedMeetingNumber}`);
 
-    const reportData: KokoMeetingReport = {
+    const reportData: KokoMeetingReport & { schoolCode?: string } = {
+      schoolCode: activeSchoolCode,
       meetingNumber: selectedMeetingNumber,
       meetingTitle: tajukAktiviti,
       category: currentGroup.category,
@@ -471,7 +493,7 @@ export default function KokoMeetingReportManager({
             {/* School Header Banner for Print */}
             <div className="border-b-2 border-slate-300 pb-4 text-center">
               <h1 className="text-base font-black uppercase tracking-wide text-slate-900 dark:text-white">
-                {schoolSettings?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN'} ({schoolSettings?.schoolCode || 'YCC3404'})
+                {schoolSettings?.schoolName || tenantSchoolName} ({schoolSettings?.schoolCode || activeSchoolCode})
               </h1>
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mt-0.5">
                 BUKU REKOD PENGURUSAN DAN LAPORAN AKTIVITI KOKURIKULUM SESI 2026

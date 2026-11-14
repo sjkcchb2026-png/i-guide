@@ -27,6 +27,8 @@ import { EarlyCheckoutModal } from './EarlyCheckoutModal';
 import { checkGuruEarlyLeave, checkAkpEarlyLeave, validateLeaveSubmission } from '../utils/checkoutRules';
 import { ABSENCE_REASON_MAP } from '../utils/monthlyAnalysis';
 import { deepSanitizeFirestore } from '../utils/sanitizeFirestore';
+import { useSchoolTenant } from '../contexts/SchoolTenantContext';
+import { normalizeActiveSchoolCode } from '../utils/schoolTenant';
 import { 
   LogIn, 
   LogOut, 
@@ -73,6 +75,8 @@ function getDatesInRange(startDateStr: string, endDateStr: string): string[] {
 }
 
 export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
+  const tenant = useSchoolTenant();
+  const activeSchoolCode = normalizeActiveSchoolCode(currentUser?.schoolCode || tenant.schoolCode);
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDateDisplay, setCurrentDateDisplay] = useState<string>('');
   const [todayRecords, setTodayRecords] = useState<AttendanceRecord[]>([]);
@@ -320,6 +324,7 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
 
       const attendanceRecordData = {
         id: recordId,
+        schoolCode: activeSchoolCode,
         userId: currentUser.uid,
         userName: currentUser.name || '',
         userEmail: currentUser.email || '',
@@ -334,6 +339,7 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
 
       const geoRecordData = {
         recordId,
+        schoolCode: activeSchoolCode,
         userId: currentUser.uid,
         date: todayStr,
         slot: newSlot,
@@ -345,6 +351,7 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
 
       const userStateData = {
         userId: currentUser.uid,
+        schoolCode: activeSchoolCode,
         activeSessionId: recordId,
         activeSessionDate: todayStr,
         activeSessionSlot: newSlot,
@@ -443,6 +450,7 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
 
       const attendanceUpdatePayload: Record<string, any> = {
         userId: currentUser.uid,
+        schoolCode: activeSchoolCode,
         status: 'COMPLETED',
         checkOutTime: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -454,6 +462,7 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
 
       const geoUpdatePayload: Record<string, any> = {
         userId: currentUser.uid,
+        schoolCode: activeSchoolCode,
         checkOutLat: location.latitude,
         checkOutLng: location.longitude,
         checkOutAccuracy: Math.round(location.accuracy),
@@ -462,6 +471,7 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
 
       const userStateUpdatePayload: Record<string, any> = {
         userId: currentUser.uid,
+        schoolCode: activeSchoolCode,
         activeSessionId: null,
         activeSessionDate: null,
         currentStatus: 'OUT',
@@ -569,6 +579,7 @@ export const StaffPunchIn: React.FC<StaffPunchInProps> = ({ currentUser }) => {
         const recordId = `${currentUser.uid}_${d}`;
         await setDoc(doc(db, 'absence_records', recordId), deepSanitizeFirestore({
           id: recordId,
+          schoolCode: activeSchoolCode,
           userId: currentUser.uid,
           userName: currentUser.name,
           userEmail: currentUser.email,

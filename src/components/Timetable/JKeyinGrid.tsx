@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   DayOfWeek, 
   DAYS_OF_WEEK, 
@@ -9,7 +9,7 @@ import {
   getGradeDaySlots 
 } from './types';
 import { SubjectAllocationRow } from './SchoolTimetableMatrix';
-import { autoPairPKARInGrid } from './autoScheduler';
+import { autoPairPKARInGrid, auditScheduleWorkload } from './autoScheduler';
 import { 
   Sparkles, 
   AlertTriangle, 
@@ -18,7 +18,9 @@ import {
   Edit3, 
   Layers,
   Calendar,
-  Table as TableIcon
+  Table as TableIcon,
+  ShieldCheck,
+  X
 } from 'lucide-react';
 
 interface JKeyinGridProps {
@@ -63,6 +65,39 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
 
   const [dragSource, setDragSource] = useState<{ grade: number; day: DayOfWeek; slotId: string } | null>(null);
   const [dragOverCellKey, setDragOverCellKey] = useState<string | null>(null);
+  const [workloadAlert, setWorkloadAlert] = useState<string | null>(null);
+
+  const teacherCodesList = useMemo(
+    () => teacherMapping.list.map((t) => t.code).filter(Boolean),
+    [teacherMapping.list]
+  );
+
+  const workloadAudit = useMemo(
+    () => auditScheduleWorkload(schedule, teacherCodesList),
+    [schedule, teacherCodesList]
+  );
+
+  const checkDailyHardCapViolation = (
+    candidateGrid: ScheduleGrid,
+    affectedTeachers: string[],
+    affectedDays: DayOfWeek[]
+  ): string | null => {
+    const report = auditScheduleWorkload(candidateGrid, teacherCodesList);
+    const uniqueTeachers = Array.from(new Set(affectedTeachers.flatMap((tc) => tc.split('/').map((c) => c.trim())).filter(Boolean)));
+    const daysToCheck = affectedDays.length > 0 ? affectedDays : DAYS_OF_WEEK;
+
+    for (const tCode of uniqueTeachers) {
+      const summary = report.teachers[tCode];
+      if (!summary) continue;
+      for (const d of daysToCheck) {
+        const dayLoad = summary.daily[d] || 0;
+        if (dayLoad > 8.0 + 1e-6) {
+          return `Had Mutlak 8 Waktu/Hari Dilanggar! Guru [${tCode}] akan mencapai ${dayLoad} waktu pada hari ${d} (maksimum dibenarkan: 8.0 waktu/hari). Perubahan disekat.`;
+        }
+      }
+    }
+    return null;
+  };
 
   const isKP = (g: number) => {
     const yr = parseInt(academicYear, 10) || 2027;
@@ -72,6 +107,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
 
   const handleOpenEdit = (grade: number, day: DayOfWeek, slotId: string) => {
     if (slotId === 'REHAT') return;
+    setWorkloadAlert(null);
     const current = schedule[grade]?.[day]?.[slotId];
     setEditingCell({ grade, day, slotId, current });
     setEditSubjectCode(current?.subjectCode || (slotId === 'TASMIK' ? 'TASMIK' : slotId === 'MEMBACA' ? 'MEMBACA' : ''));
@@ -106,6 +142,13 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     // Dynamically update/re-pair PKAR with pre-recess teacher
     autoPairPKARInGrid(newGrid);
 
+    const violationMsg = checkDailyHardCapViolation(newGrid, [editTeacherCode], [day]);
+    if (violationMsg) {
+      setWorkloadAlert(violationMsg);
+      return;
+    }
+
+    setWorkloadAlert(null);
     onUpdateSchedule(newGrid);
     setEditingCell(null);
   };
@@ -120,6 +163,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     // Dynamically update/re-pair PKAR with pre-recess teacher
     autoPairPKARInGrid(newGrid);
 
+    setWorkloadAlert(null);
     onUpdateSchedule(newGrid);
     setEditingCell(null);
   };
@@ -144,6 +188,14 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
           teacherCode: droppedTeacherCode.trim(),
         };
         autoPairPKARInGrid(newGrid);
+
+        const violationMsg = checkDailyHardCapViolation(newGrid, [droppedTeacherCode.trim()], [targetDay]);
+        if (violationMsg) {
+          setWorkloadAlert(violationMsg);
+          return;
+        }
+
+        setWorkloadAlert(null);
         onUpdateSchedule(newGrid);
       }
       return;
@@ -184,9 +236,18 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     newGrid[srcGrade][srcDay][srcSlotId] = cellB;
     newGrid[targetGrade][targetDay][targetSlotId] = cellA;
 
-    // Dynamically re-bind PKAR teacher & +0.5 workload if pre-recess slot (W5) changed
+    // Dynamically re-bind PKAR teacher & +0.5 workload if pre-recess slot (W4) changed
     autoPairPKARInGrid(newGrid);
 
+    const affectedTeachers = [cellA?.teacherCode || '', cellB?.teacherCode || ''].filter(Boolean);
+    const violationMsg = checkDailyHardCapViolation(newGrid, affectedTeachers, [srcDay, targetDay]);
+    if (violationMsg) {
+      setWorkloadAlert(violationMsg);
+      setDragSource(null);
+      return;
+    }
+
+    setWorkloadAlert(null);
     onUpdateSchedule(newGrid);
     setDragSource(null);
   };
@@ -414,6 +475,93 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
           </ul>
         </div>
       )}
+
+      {/* Workload Hard-Cap Block Notice (Drag & Drop / Manual Save Guard) */}
+      {workloadAlert && !editingCell && (
+        <div className="bg-rose-950/90 border border-rose-600 rounded-2xl p-4 text-xs flex items-start justify-between gap-3 shadow-lg">
+          <div className="flex items-start gap-2.5 text-rose-200">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-black text-rose-300 uppercase tracking-wider text-[11px]">
+                Sekatan Had Maksimum 8 Waktu/Hari
+              </div>
+              <p className="mt-0.5 font-mono text-[11px]">{workloadAlert}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setWorkloadAlert(null)}
+            className="text-rose-300 hover:text-white p-1 rounded-lg cursor-pointer"
+            title="Tutup amaran"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Audit Beban Harian & PJ Summary Strip */}
+      <div
+        className={`rounded-2xl px-4 py-3 border text-xs flex flex-col gap-2 ${
+          workloadAudit.isValidWorkload
+            ? 'bg-emerald-950/30 border-emerald-700/50 text-emerald-200'
+            : 'bg-amber-950/40 border-amber-700/60 text-amber-200'
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 font-black uppercase tracking-wider text-[11px]">
+            {workloadAudit.isValidWorkload ? (
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+            )}
+            <span>
+              Audit Beban Harian &amp; PJ:{' '}
+              {workloadAudit.isValidWorkload
+                ? 'Semua guru ≤ 8w/hari · Selesa & Seimbang'
+                : `${workloadAudit.violations.length} Amaran Beban / Selang PJ Dikesan`}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono">
+            <span className={`px-2 py-0.5 rounded-lg border ${
+              workloadAudit.teachersOver8 === 0
+                ? 'bg-emerald-950/60 border-emerald-700/50 text-emerald-300'
+                : 'bg-rose-950/70 border-rose-700 text-rose-300'
+            }`}>
+              &gt;8w/hari: {workloadAudit.teachersOver8}
+            </span>
+            <span className={`px-2 py-0.5 rounded-lg border ${
+              workloadAudit.teachersExceedingOver7Limit === 0
+                ? 'bg-emerald-950/60 border-emerald-700/50 text-emerald-300'
+                : 'bg-amber-950/70 border-amber-700 text-amber-300'
+            }`}>
+              &gt;1 Hari &gt;7w: {workloadAudit.teachersExceedingOver7Limit}
+            </span>
+            <span className={`px-2 py-0.5 rounded-lg border ${
+              workloadAudit.pjConsecutiveViolations === 0 && workloadAudit.pjSlotViolations === 0
+                ? 'bg-emerald-950/60 border-emerald-700/50 text-emerald-300'
+                : 'bg-amber-950/70 border-amber-700 text-amber-300'
+            }`}>
+              PJ Selang/W1–W2: {workloadAudit.pjConsecutiveViolations + workloadAudit.pjSlotViolations === 0 ? 'Patuh' : `${workloadAudit.pjConsecutiveViolations + workloadAudit.pjSlotViolations} kes`}
+            </span>
+            <span className={`px-2 py-0.5 rounded-lg border ${
+              workloadAudit.pmPaiBlockViolations === 0
+                ? 'bg-emerald-950/60 border-emerald-700/50 text-emerald-300'
+                : 'bg-amber-950/70 border-amber-700 text-amber-300'
+            }`}>
+              PM/PAI Kembar 2+2: {workloadAudit.pmPaiBlockViolations === 0 ? 'Patuh' : `${workloadAudit.pmPaiBlockViolations} kes`}
+            </span>
+          </div>
+        </div>
+        {workloadAudit.violations.length > 0 && (
+          <ul className="list-disc list-inside space-y-0.5 text-[11px] font-mono text-amber-200/90">
+            {workloadAudit.violations.slice(0, 6).map((v, i) => (
+              <li key={i}>{v}</li>
+            ))}
+            {workloadAudit.violations.length > 6 && (
+              <li>...dan {workloadAudit.violations.length - 6} lagi.</li>
+            )}
+          </ul>
+        )}
+      </div>
 
       {/* ========================================================================= */}
       {/* 1. MASTER 1-TO-6 TIMETABLE VIEW (Jadual Induk T1–T6)                     */}
@@ -658,7 +806,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
             <thead>
               <tr className="bg-slate-950 text-slate-300 font-black text-[11px] uppercase border-b border-slate-800 text-center">
                 <th className="py-3 px-3 text-left w-24">Hari</th>
-                {getGradeDaySlots(selectedGrade, 'ISNIN').map((s) => (
+                {getGradeDaySlots(selectedGrade, 'ISNIN', academicYear).map((s) => (
                   <th
                     key={s.slotId}
                     className={`py-2 px-1 border-l border-slate-800 ${
@@ -675,8 +823,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-800 font-mono">
               {DAYS_OF_WEEK.map((day) => {
-                const headerSlots = getGradeDaySlots(selectedGrade, 'ISNIN');
-                const daySlots = getGradeDaySlots(selectedGrade, day);
+                const headerSlots = getGradeDaySlots(selectedGrade, 'ISNIN', academicYear);
+                const daySlots = getGradeDaySlots(selectedGrade, day, academicYear);
                 return (
                   <tr key={day} className="hover:bg-slate-800/30 transition">
                     <td className="py-3 px-3 font-sans font-black text-white bg-slate-950/70 border-r border-slate-800">
@@ -900,6 +1048,13 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
               )}
             </div>
 
+            {workloadAlert && (
+              <div className="p-3 rounded-2xl bg-rose-950/90 border border-rose-600 text-rose-200 text-xs flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div className="font-mono text-[11px]">{workloadAlert}</div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between pt-3 border-t border-slate-800 gap-2">
               <button
                 onClick={handleClearCell}
@@ -910,7 +1065,10 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setEditingCell(null)}
+                  onClick={() => {
+                    setWorkloadAlert(null);
+                    setEditingCell(null);
+                  }}
                   className="px-3 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white cursor-pointer"
                 >
                   Batal

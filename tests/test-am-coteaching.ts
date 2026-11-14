@@ -101,8 +101,8 @@ console.log('  ✓ PASSED: isTimetableConflict exempts co-teaching slot pairs');
 
 // TEST 3: autoScheduler Dual-Teacher placement
 console.log('\n[TEST 3] Verifying autoScheduler with default matrix AM Co-Teaching...');
-const matrix = buildDefaultCurriculumMatrix('2027');
-const classTeachers = getDefaultClassTeachers();
+const matrix = buildDefaultCurriculumMatrix('2027', { includeLegacyTeachers: true });
+const classTeachers = getDefaultClassTeachers(true);
 
 const amRow = matrix.find((r) => r.subjectCode === 'AM');
 if (!amRow) {

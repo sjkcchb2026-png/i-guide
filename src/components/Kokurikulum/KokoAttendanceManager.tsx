@@ -10,6 +10,8 @@ import {
 } from 'firebase/firestore';
 import { Student, UserProfile } from '../../types';
 import { KokoGroup, KokoMembership, KokoAttendanceSession } from '../../types/kokurikulum';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool } from '../../utils/schoolTenant';
 
 interface Props {
   profile: UserProfile;
@@ -28,6 +30,7 @@ interface Props {
 }
 
 export default function KokoAttendanceManager({ profile, role, onNavigateToReport }: Props) {
+  const { schoolCode: activeSchoolCode } = useSchoolTenant();
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<'uniform' | 'club' | 'sport'>('uniform');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
@@ -54,35 +57,43 @@ export default function KokoAttendanceManager({ profile, role, onNavigateToRepor
 
     unsubs.push(
       onSnapshot(collection(db, 'koko_groups'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoGroup));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as KokoGroup));
         setGroups(list);
       })
     );
 
     unsubs.push(
       onSnapshot(collection(db, 'koko_memberships'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoMembership));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as KokoMembership));
         setMemberships(list);
       })
     );
 
     unsubs.push(
       onSnapshot(collection(db, 'students'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as Student));
         setStudents(list);
       })
     );
 
     unsubs.push(
       onSnapshot(collection(db, 'koko_attendance'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoAttendanceSession));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as KokoAttendanceSession));
         setSessions(list);
         setLoading(false);
       })
     );
 
     return () => unsubs.forEach(u => u());
-  }, []);
+  }, [activeSchoolCode]);
 
   const categoryGroups = useMemo(() => {
     return groups.filter(g => g.category === selectedCategory);
@@ -173,6 +184,7 @@ export default function KokoAttendanceManager({ profile, role, onNavigateToRepor
         meetingNumber: Number(newMeetingNumber),
         academicYear: '2026',
         attendance: defaultAttendance,
+        schoolCode: activeSchoolCode,
         createdBy: profile.name,
         createdAt: new Date().toISOString()
       });

@@ -1,5 +1,31 @@
 {
   "entities": {
+    "School": {
+      "title": "School",
+      "description": "Multi-tenant school profile, branding, and authorized administrators registry.",
+      "type": "object",
+      "properties": {
+        "schoolCode": { "type": "string", "minLength": 2, "maxLength": 30 },
+        "schoolName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "logoUrl": { "type": "string" },
+        "slogan": { "type": "string", "maxLength": 200 },
+        "adminEmails": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "principalEmail": { "type": "string", "maxLength": 100 },
+        "principalUid": { "type": "string", "maxLength": 128 },
+        "schoolType": { "type": "string", "maxLength": 20 },
+        "schoolCategory": { "type": "string", "maxLength": 20 },
+        "hasPreschool": { "type": "boolean" },
+        "hasPPKI": { "type": "boolean" },
+        "academicSession": { "type": "string", "maxLength": 20 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolCode", "schoolName"]
+    },
     "SchoolSettings": {
       "title": "SchoolSettings",
       "description": "General settings of the school configured during principal setup.",
@@ -15,6 +41,15 @@
           "type": "string",
           "maxLength": 30,
           "description": "Official school code."
+        },
+        "logoUrl": {
+          "type": "string",
+          "description": "URL or data URI for school logo."
+        },
+        "slogan": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "School subtitle or slogan."
         },
         "principalEmail": {
           "type": "string",
@@ -81,6 +116,7 @@
       "type": "object",
       "properties": {
         "uid": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "name": { "type": "string", "minLength": 1, "maxLength": 100 },
         "email": { "type": "string", "minLength": 3, "maxLength": 100 },
         "category": { "type": "string", "enum": ["GURU", "AKP", "PRINCIPAL"] },
@@ -98,6 +134,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "name": { "type": "string", "maxLength": 100 },
         "gender": { "type": "string", "maxLength": 10 },
         "ic": { "type": "string", "maxLength": 20 },
@@ -120,6 +157,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "name": { "type": "string", "maxLength": 100 },
         "email": { "type": "string", "maxLength": 100 },
         "role": { "type": "string", "maxLength": 50 }
@@ -131,6 +169,7 @@
       "description": "Academic year session definition.",
       "type": "object",
       "properties": {
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "year": { "type": "string", "maxLength": 20 },
         "status": { "type": "string", "maxLength": 20 },
         "startDate": { "type": "string", "maxLength": 20 },
@@ -144,6 +183,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "name": { "type": "string", "maxLength": 100 },
         "level": { "type": "number" },
         "academicYear": { "type": "string", "maxLength": 20 },
@@ -157,6 +197,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "academicYear": { "type": "string", "maxLength": 20 },
         "classId": { "type": "string", "maxLength": 128 },
         "subjectId": { "type": "string", "maxLength": 50 },
@@ -170,6 +211,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "academicYear": { "type": "string", "maxLength": 20 },
         "personnelId": { "type": "string", "maxLength": 128 },
         "portfolio": { "type": "string", "maxLength": 100 }
@@ -182,6 +224,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "studentId": { "type": "string", "maxLength": 50 },
         "name": { "type": "string", "maxLength": 100 },
         "ic": { "type": "string", "maxLength": 20 },
@@ -195,6 +238,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "student_id": { "type": "string", "maxLength": 50 },
         "name": { "type": "string", "maxLength": 100 },
         "class_id": { "type": "string", "maxLength": 100 },
@@ -210,6 +254,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "timestamp": { "type": "string" },
         "importType": { "type": "string", "maxLength": 50 },
         "status": { "type": "string", "maxLength": 30 },
@@ -222,6 +267,7 @@
       "description": "Previous state snapshots for reversible batch commits.",
       "type": "object",
       "properties": {
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "sessionId": { "type": "string", "maxLength": 128 },
         "collection": { "type": "string", "maxLength": 50 },
         "docId": { "type": "string", "maxLength": 128 },
@@ -234,6 +280,7 @@
       "description": "Immutable log of administrative operations.",
       "type": "object",
       "properties": {
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "timestamp": { "type": "string" },
         "actor_id": { "type": "string", "maxLength": 128 },
         "actor_name": { "type": "string", "maxLength": 100 },
@@ -251,6 +298,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "student_id": { "type": "string", "maxLength": 128 },
         "subject_id": { "type": "string", "maxLength": 50 },
         "term": { "type": "string", "maxLength": 20 },
@@ -265,6 +313,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "student_id": { "type": "string", "maxLength": 128 },
         "subject_id": { "type": "string", "maxLength": 50 },
         "grade": { "type": "string", "maxLength": 5 },
@@ -277,6 +326,7 @@
       "description": "Kokurikulum student memberships.",
       "type": "object",
       "properties": {
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "student_id": { "type": "string", "maxLength": 128 },
         "uniform_id": { "type": "string", "maxLength": 128 },
         "club_id": { "type": "string", "maxLength": 128 },
@@ -290,6 +340,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "name": { "type": "string", "maxLength": 100 },
         "category": { "type": "string", "maxLength": 50 }
       },
@@ -301,6 +352,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "userId": { "type": "string", "maxLength": 128 },
         "userName": { "type": "string", "maxLength": 100 },
         "userEmail": { "type": "string", "maxLength": 100 },
@@ -319,6 +371,7 @@
       "type": "object",
       "properties": {
         "recordId": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "userId": { "type": "string", "maxLength": 128 },
         "date": { "type": "string", "maxLength": 10 },
         "checkInLat": { "type": "number" },
@@ -332,6 +385,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "academicYear": { "type": "string", "maxLength": 20 },
         "updatedAt": { "type": "string", "format": "date-time" }
       }
@@ -342,6 +396,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "reportType": { "type": "string", "maxLength": 20 },
         "programName": { "type": "string", "maxLength": 200 },
         "tarikh": { "type": "string", "maxLength": 20 },
@@ -354,6 +409,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "title": { "type": "string", "maxLength": 200 },
         "category": { "type": "string", "maxLength": 30 },
         "dueDate": { "type": "string", "maxLength": 20 },
@@ -366,6 +422,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "tarikhSurat": { "type": "string", "maxLength": 20 },
         "tarikhTerima": { "type": "string", "maxLength": 20 },
         "bulanTahunLabel": { "type": "string", "maxLength": 20 },
@@ -383,6 +440,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "teacherId": { "type": "string", "maxLength": 128 },
         "startDate": { "type": "string", "maxLength": 20 },
         "endDate": { "type": "string", "maxLength": 20 },
@@ -397,6 +455,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "suratId": { "type": "string", "maxLength": 128 },
         "perkara": { "type": "string", "maxLength": 500 },
         "startDate": { "type": "string", "maxLength": 20 },
@@ -410,6 +469,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
         "alertId": { "type": "string", "maxLength": 128 },
         "date": { "type": "string", "maxLength": 20 },
         "perkara": { "type": "string", "maxLength": 500 },
@@ -418,6 +478,10 @@
     }
   },
   "firestore": {
+    "/schools/{schoolCode}": {
+      "schema": { "$ref": "#/entities/School" },
+      "description": "Multi-tenant school profiles, branding, and authorized administrators."
+    },
     "/makluman_tasks/{taskId}": {
       "schema": { "$ref": "#/entities/MaklumanTask" },
       "description": "School tasks, notices, and WhatsApp compliance evidence."

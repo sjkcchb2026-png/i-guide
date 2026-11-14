@@ -14,6 +14,7 @@ export interface UserProfile {
 
 export interface Student {
   id: string;
+  schoolCode?: string;
   student_id: string;
   apdmId?: string;
   name: string;
@@ -102,6 +103,7 @@ export interface Intervention {
 
 export interface SchoolConfig {
   id: string;
+  schoolCode?: string;
   schoolName: string;
   schoolType: 'SK' | 'SJKC' | 'SJKT';
   schoolCategory: 'SKM' | 'Non-SKM';
@@ -110,16 +112,20 @@ export interface SchoolConfig {
   academicSession: string;
   defaultLanguages: string[];
   schoolLogo?: string;
+  slogan?: string;
+  adminEmails?: string[];
 }
 
 export interface AcademicYearConfig {
   id: string;
+  schoolCode?: string;
   year: string;
   status: 'active' | 'historical';
 }
 
 export interface PersonnelProfile {
   id: string; // Internal stable personnel ID
+  schoolCode?: string;
   name: string;
   ic?: string;
   gender: 'L' | 'P';
@@ -199,6 +205,7 @@ export interface GuruImportPreviewResponse {
 
 export interface ClassConfig {
   id: string;
+  schoolCode?: string;
   name: string;
   academicYear: string;
   yearGroup: number;
@@ -208,6 +215,7 @@ export interface ClassConfig {
 
 export interface SubjectAllocation {
   id: string;
+  schoolCode?: string;
   academicYear: string;
   teacherId: string;
   teacherName: string;
@@ -255,6 +263,7 @@ export interface WelfareInfo {
 
 export interface StudentMaster {
   student_id: string; // Document ID (apdmId or icNumber)
+  schoolCode?: string;
   apdmId?: string;
   name: string;
   icNumber?: string;
@@ -349,6 +358,7 @@ export interface ApdmStudentImportPreviewResponse {
 
 export interface GovernanceAssignment {
   id: string;
+  schoolCode?: string;
   personnelId: string;
   personnelName: string;
   academicYear: string;
@@ -363,6 +373,7 @@ export interface GovernanceAssignment {
 
 export interface AuditTrailEntry {
   id?: string;
+  schoolCode?: string;
   timestamp: string;
   actor_id: string;
   actor_name: string;
@@ -375,6 +386,7 @@ export interface AuditTrailEntry {
 
 export interface ImportSession {
   id: string;
+  schoolCode?: string;
   timestamp: string;
   importType: 'student' | 'personnel';
   summary: {
@@ -389,6 +401,7 @@ export interface ImportSession {
 
 export interface RollbackRecord {
   id: string;
+  schoolCode?: string;
   sessionId: string;
   collection: 'personnel' | 'student_master' | 'teachers';
   docId: string;

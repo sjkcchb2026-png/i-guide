@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { 
   signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword,
+  updateProfile,
   sendPasswordResetEmail,
   setPersistence,
   inMemoryPersistence
@@ -34,7 +36,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
   schoolSettings,
   onLoginSuccess,
 }) => {
-  const [isSetupMode, setIsSetupMode] = useState(!schoolSettings);
+  const [isSetupMode, setIsSetupMode] = useState(false);
+  const [isRegisterAccountMode, setIsRegisterAccountMode] = useState(false);
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -44,15 +48,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [sendingReset, setSendingReset] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
 
-  // Automatically switch to standard login if school settings are loaded
+  // Switch off legacy one-time setup form if school settings exist
   React.useEffect(() => {
-    if (schoolSettings) {
+    if (schoolSettings && isSetupMode) {
       setIsSetupMode(false);
-      if (schoolSettings.principalEmail && !email) {
-        setEmail(schoolSettings.principalEmail);
-      }
     }
-  }, [schoolSettings]);
+  }, [schoolSettings, isSetupMode]);
 
   // Initial Principal Setup state (strictly blank by default, never prefilled)
   const [setupToken, setSetupToken] = useState('');
@@ -95,7 +96,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
-  // Handle Standard Login
+  // Handle Standard Login OR New Account Sign-Up (proceeds to School Onboarding if unregistered)
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -113,6 +114,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     try {
       setLoading(true);
+      if (isRegisterAccountMode) {
+        const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        if (fullName.trim()) {
+          await updateProfile(cred.user, { displayName: fullName.trim() }).catch(() => {});
+        }
+        onLoginSuccess();
+        return;
+      }
       await signInWithEmailAndPassword(auth, cleanEmail, password);
       onLoginSuccess();
     } catch (err: any) {
@@ -129,7 +138,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
         try {
           console.warn('Recovering from storage error using inMemoryPersistence...');
           await setPersistence(auth, inMemoryPersistence);
-          await signInWithEmailAndPassword(auth, cleanEmail, password);
+          if (isRegisterAccountMode) {
+            const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+            if (fullName.trim()) {
+              await updateProfile(cred.user, { displayName: fullName.trim() }).catch(() => {});
+            }
+          } else {
+            await signInWithEmailAndPassword(auth, cleanEmail, password);
+          }
           onLoginSuccess();
           return;
         } catch (retryErr: any) {
@@ -138,11 +154,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
         }
       }
 
-      let msg = '登录失败，请检查账号与密码。';
-      if (err.code === 'auth/operation-not-allowed') {
-        msg = '⚠️ Firebase 控制台尚未启用【电子邮件/密码】登录方式！\n\n请前往 Firebase 控制台：\nAuthentication ➜ Sign-in method ➜ 点击「Email/Password」➜ 切换为「启用 (Enable)」并保存。\n保存后即可直接在此输入邮箱与密码登录。';
+      let msg = isRegisterAccountMode ? 'Pendaftaran akaun gagal.' : '登录失败，请检查账号与密码。';
+      if (err.code === 'auth/email-already-in-use') {
+        msg = 'E-mel ini telah didaftarkan. Sila gunakan tab "Log Masuk" untuk memasuki sistem.';
+      } else if (err.code === 'auth/operation-not-allowed') {
+        msg = '⚠️ Firebase 控制台尚未启用【电子邮件/密码】登录方式！\n\n请前往 Firebase 控制台：\nAuthentication ➜ Sign-in method ➜ 点击「Email/Password」➜ 切换为「启用 (Enable)」并保存。';
       } else if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-        msg = '⚠️ E-mel atau kata laluan tidak sah (auth/invalid-credential).\n\n💡 Petunjuk Sistem:\n1. Semua akaun guru & staf sekolah disediakan dengan kata laluan asal piawai: 12345678.\n2. Sila klik butang "Isi Kata Laluan Asal (12345678)" di bawah untuk mencuba semula.\n3. Jika anda telah menukar kata laluan dan terlupa, klik "Hantar Pautan Reset Kata Laluan ke E-mel".';
+        msg = '⚠️ E-mel atau kata laluan tidak sah (auth/invalid-credential).\n\n💡 Petunjuk Sistem:\n1. Bagi kakitangan sedia ada, kata laluan asal piawai ialah: 12345678.\n2. Bagi sekolah baharu atau pengguna kali pertama, sila klik tab "Daftar Akaun / Sekolah Baharu" di atas.';
       } else if (err.code === 'auth/wrong-password') {
         msg = '密码错误，请输入本系统独立密码（Kata laluan asal piawai: 12345678）。\n(Kata laluan salah. Sila masukkan kata laluan sistem ini.)';
       } else if (err.code === 'auth/too-many-requests') {
@@ -245,45 +263,57 @@ export const LoginView: React.FC<LoginViewProps> = ({
         
         {/* Top Branding Card */}
         <div className="text-center mb-6">
-          <SchoolLogo className="w-16 h-16 mx-auto mb-3" src={schoolSettings?.schoolLogo} />
+          <SchoolLogo
+            className="w-16 h-16 mx-auto mb-3"
+            src={schoolSettings?.schoolLogo || schoolSettings?.logoUrl}
+            schoolCode={schoolSettings?.schoolCode}
+          />
           <h2 className="text-2xl font-bold text-white tracking-tight">
-            {schoolSettings?.schoolName || 'Sistem Kehadiran Sekolah'}
+            {schoolSettings?.schoolName || 'iSEPADU AI Portal Sekolah'}
           </h2>
           <p className="text-sm text-slate-400 mt-1">
-            学校出勤网页系统 <span className="text-slate-600">|</span> Pengesahan Lokasi GPS & Masa Sebenar
+            {schoolSettings?.slogan || 'Sistem Pengurusan Sekolah Bersepadu'} <span className="text-slate-600">|</span> Berbilang Sekolah
           </p>
         </div>
 
         {/* Main Form Container */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-md">
           
-          {/* Status badge when school settings already configured */}
-          {schoolSettings ? (
-            <div className="mb-6 p-3 bg-emerald-950/40 border border-emerald-800/40 rounded-xl text-center text-xs text-emerald-300 flex items-center justify-center space-x-2 shadow-inner">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>学校档案已就绪：<strong className="text-white font-semibold">{schoolSettings.schoolName}</strong> ({schoolSettings.schoolCode})</span>
-            </div>
-          ) : (
-            <div className="flex bg-slate-950 p-1 rounded-xl mb-6 border border-slate-800 text-xs font-medium">
-              <button
-                type="button"
-                onClick={() => { setIsSetupMode(false); setErrorMsg(null); }}
-                className={`flex-1 py-2 rounded-lg transition ${
-                  !isSetupMode ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                教职员登录 (Log Masuk)
-              </button>
-              <button
-                type="button"
-                onClick={() => { setIsSetupMode(true); setErrorMsg(null); }}
-                className={`flex-1 py-2 rounded-lg transition flex items-center justify-center space-x-1 ${
-                  isSetupMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>校长初始配置 (Persediaan)</span>
-              </button>
+          {/* Status badge / Multi-School Auth Tabs */}
+          <div className="flex bg-slate-950 p-1 rounded-xl mb-5 border border-slate-800 text-xs font-medium">
+            <button
+              type="button"
+              onClick={() => {
+                setIsSetupMode(false);
+                setIsRegisterAccountMode(false);
+                setErrorMsg(null);
+              }}
+              className={`flex-1 py-2 rounded-lg transition ${
+                !isSetupMode && !isRegisterAccountMode ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Log Masuk
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsSetupMode(false);
+                setIsRegisterAccountMode(true);
+                setErrorMsg(null);
+              }}
+              className={`flex-1 py-2 rounded-lg transition flex items-center justify-center space-x-1 ${
+                !isSetupMode && isRegisterAccountMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Daftar Sekolah / Akaun</span>
+            </button>
+          </div>
+
+          {schoolSettings && !isRegisterAccountMode && (
+            <div className="mb-5 p-2.5 bg-emerald-950/30 border border-emerald-800/30 rounded-xl text-center text-[11px] text-emerald-300 flex items-center justify-center space-x-2">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>Portal Aktif: <strong className="text-white font-semibold">{schoolSettings.schoolName}</strong> ({schoolSettings.schoolCode})</span>
             </div>
           )}
 
@@ -296,11 +326,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
           )}
 
           {!isSetupMode ? (
-            /* --- Standard Login Form --- */
+            /* --- Standard Login / Sign-Up Form --- */
             <form onSubmit={handleLogin} className="space-y-4">
+              {isRegisterAccountMode && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Nama Penuh Anda (Pentadbir / Guru)
+                  </label>
+                  <input
+                    type="text"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="cth: Cikgu Ahmad / Guru Besar"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  DELIMa 邮箱 / 登录账号 (Emel DELIMa)
+                  DELIMa 邮箱 / 登录账号 (Emel)
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
@@ -407,11 +452,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 {loading ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                    <span>正在验证中...</span>
+                    <span>{isRegisterAccountMode ? 'Mendaftar Akaun...' : '正在验证中...'}</span>
                   </>
                 ) : (
                   <>
-                    <span>登录出勤系统 / Log Masuk</span>
+                    <span>{isRegisterAccountMode ? 'Daftar Akaun & Teruskan Persediaan Sekolah' : '登录出勤系统 / Log Masuk'}</span>
                   </>
                 )}
               </button>

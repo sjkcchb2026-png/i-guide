@@ -13,7 +13,10 @@ export function isGradeKP2027(yearStr: string, grade: number): boolean {
   return grade <= maxKP2027Grade;
 }
 
-export function getDefaultClassTeachers(): Record<number, string> {
+export function getDefaultClassTeachers(includeLegacyTeachers: boolean = false): Record<number, string> {
+  if (!includeLegacyTeachers) {
+    return { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '' };
+  }
   return {
     1: 'SW',   // Stephanie Wong Eng Hee
     2: 'JW',   // Jenny Wong
@@ -24,7 +27,13 @@ export function getDefaultClassTeachers(): Record<number, string> {
   };
 }
 
-export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocationRow[] {
+export function buildDefaultCurriculumMatrix(
+  yearStr: string,
+  options: { includeLegacyTeachers?: boolean } = {}
+): SubjectAllocationRow[] {
+  const includeLegacy = Boolean(options.includeLegacyTeachers);
+  const t = (map: Record<number, string>): Record<number, string> =>
+    includeLegacy ? map : { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '' };
   const kp = (g: number) => isGradeKP2027(yearStr, g);
 
   return [
@@ -51,7 +60,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
         5: kp(5) ? 7 : 10,
         6: kp(6) ? 7 : 10,
       },
-      teachers: { 1: 'SW', 2: 'LSC', 3: 'LSC', 4: 'LCI', 5: 'LCI', 6: 'LCI' },
+      teachers: t({ 1: 'SW', 2: 'LSC', 3: 'LSC', 4: 'TYM', 5: 'LCI', 6: 'LCI' }),
     },
     // 3. Bahasa Melayu (BM)
     {
@@ -67,7 +76,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
         5: kp(5) ? 7 : 8,
         6: kp(6) ? 7 : 8,
       },
-      teachers: { 1: 'JW', 2: 'LMI', 3: 'LMI', 4: 'LRR', 5: 'LRR', 6: 'KL' },
+      teachers: t({ 1: 'JW', 2: 'LMI', 3: 'LMI', 4: 'LRR', 5: 'LRR', 6: 'KL' }),
     },
     // 4. Bahasa Inggeris (BI)
     {
@@ -83,7 +92,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
         5: kp(5) ? 3 : 6,
         6: kp(6) ? 3 : 6,
       },
-      teachers: { 1: 'DT', 2: 'DT', 3: 'DT', 4: 'DT', 5: 'DT', 6: 'DT' },
+      teachers: t({ 1: 'DT', 2: 'DT', 3: 'DT', 4: 'DT', 5: 'DT', 6: 'DT' }),
     },
     // 5. Matematik (MT)
     {
@@ -99,7 +108,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
         5: 6,
         6: 6,
       },
-      teachers: { 1: 'VY', 2: 'VY', 3: 'VY', 4: 'HHH', 5: 'HHH', 6: 'HHH' },
+      teachers: t({ 1: 'VY', 2: 'VY', 3: 'VY', 4: 'HHH', 5: 'HHH', 6: 'HHH' }),
     },
     // 6. Pendidikan Moral (PM)
     {
@@ -115,7 +124,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
         5: kp(5) ? 4 : 5,
         6: kp(6) ? 4 : 5,
       },
-      teachers: { 1: 'SW', 2: 'JW', 3: 'JW', 4: 'LCI', 5: 'LCI', 6: 'LSC' },
+      teachers: t({ 1: 'SW', 2: 'JW', 3: 'JW', 4: 'KL', 5: 'LCI', 6: 'LSC' }),
     },
     // 7. Pendidikan Islam (PAI) - Ustaz Muhammad Fahim Amar (MFA)
     {
@@ -131,7 +140,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
         5: kp(5) ? 4 : 5,
         6: kp(6) ? 4 : 5,
       },
-      teachers: { 1: 'MFA', 2: 'MFA', 3: 'MFA', 4: 'MFA', 5: 'MFA', 6: 'MFA' },
+      teachers: t({ 1: 'MFA', 2: 'MFA', 3: 'MFA', 4: 'MFA', 5: 'MFA', 6: 'MFA' }),
     },
     // 8. Program Tasmik - Ustaz Muhammad Fahim Amar (MFA)
     {
@@ -140,7 +149,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'PROGRAM TASMIK (SELEPAS SEKOLAH)',
       subjectCode: 'TASMIK',
       periods: { 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2 },
-      teachers: { 1: 'MFA', 2: 'MFA', 3: 'MFA', 4: 'MFA', 5: 'MFA', 6: 'MFA' },
+      teachers: t({ 1: 'MFA', 2: 'MFA', 3: 'MFA', 4: 'MFA', 5: 'MFA', 6: 'MFA' }),
     },
     // 9. Pendidikan Jasmani (PJ)
     {
@@ -156,7 +165,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
         5: 2,
         6: 2,
       },
-      teachers: { 1: 'TKI', 2: 'TKI', 3: 'TKI', 4: 'JW', 5: 'JW', 6: 'JW' },
+      teachers: t({ 1: 'TKI', 2: 'TKI', 3: 'TKI', 4: 'JW', 5: 'JW', 6: 'JW' }),
     },
     // 10. Pendidikan Kesihatan (PK)
     {
@@ -165,7 +174,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'PENDIDIKAN KESIHATAN',
       subjectCode: 'PK',
       periods: { 1: kp(1) ? 0 : 1, 2: kp(2) ? 0 : 1, 3: 1, 4: 1, 5: 1, 6: 1 },
-      teachers: { 1: 'TKI', 2: 'TKI', 3: 'TKI', 4: 'JW', 5: 'JW', 6: 'JW' },
+      teachers: t({ 1: 'TKI', 2: 'TKI', 3: 'TKI', 4: 'JW', 5: 'JW', 6: 'JW' }),
     },
     // 11. Muzik (MZ)
     {
@@ -174,7 +183,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'PENDIDIKAN MUZIK',
       subjectCode: 'MZ',
       periods: { 1: kp(1) ? 0 : 1, 2: kp(2) ? 0 : 1, 3: 1, 4: 1, 5: 1, 6: 1 },
-      teachers: { 1: 'LMI', 2: 'LMI', 3: 'LMI', 4: 'LRR', 5: 'LRR', 6: 'LRR' },
+      teachers: t({ 1: 'LMI', 2: 'LMI', 3: 'LMI', 4: 'LRR', 5: 'LRR', 6: 'LRR' }),
     },
     // 12. Seni Visual (PSV)
     {
@@ -183,7 +192,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'PENDIDIKAN SENI VISUAL',
       subjectCode: 'PSV',
       periods: { 1: kp(1) ? 0 : 2, 2: kp(2) ? 0 : 2, 3: 2, 4: 2, 5: 2, 6: 2 },
-      teachers: { 1: 'NCY', 2: 'NCY', 3: 'NCY', 4: 'KL', 5: 'KL', 6: 'KL' },
+      teachers: t({ 1: 'NCY', 2: 'NCY', 3: 'NCY', 4: 'KL', 5: 'KL', 6: 'KL' }),
     },
     // 13. Alam dan Manusia (AM) - KP2027 Tahap I Co-Teaching (Guru 1 & Guru 2)
     {
@@ -192,8 +201,8 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'ALAM DAN MANUSIA: PEMBELAJARAN BERSEPADU',
       subjectCode: 'AM',
       periods: { 1: kp(1) ? 3 : 0, 2: kp(2) ? 3 : 0, 3: 0, 4: 0, 5: 0, 6: 0 },
-      teachers: { 1: 'NCY', 2: 'NCY', 3: '', 4: '', 5: '', 6: '' },
-      secondaryTeachers: { 1: 'VY', 2: 'VY', 3: '', 4: '', 5: '', 6: '' },
+      teachers: t({ 1: 'NCY', 2: 'NCY', 3: '', 4: '', 5: '', 6: '' }),
+      secondaryTeachers: t({ 1: 'VY', 2: 'VY', 3: '', 4: '', 5: '', 6: '' }),
     },
     // 14. Sains (SN)
     {
@@ -202,7 +211,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'SAINS',
       subjectCode: 'SN',
       periods: { 1: kp(1) ? 0 : 3, 2: kp(2) ? 0 : 3, 3: 3, 4: 4, 5: 4, 6: 4 },
-      teachers: { 1: 'NCY', 2: 'NCY', 3: 'NCY', 4: 'NCY', 5: 'NCY', 6: 'NCY' },
+      teachers: t({ 1: 'NCY', 2: 'NCY', 3: 'NCY', 4: 'NCY', 5: 'NCY', 6: 'NCY' }),
     },
     // 14. Sejarah (SEJ)
     {
@@ -211,7 +220,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'SEJARAH',
       subjectCode: 'SEJ',
       periods: { 1: 0, 2: 0, 3: 0, 4: 2, 5: 2, 6: 2 },
-      teachers: { 1: '', 2: '', 3: '', 4: 'LCI', 5: 'LCI', 6: 'LCI' },
+      teachers: t({ 1: '', 2: '', 3: '', 4: 'LCI', 5: 'LCI', 6: 'LCI' }),
     },
     // 15. Reka Bentuk & Teknologi (RBT)
     {
@@ -220,7 +229,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'REKA BENTUK & TEKNOLOGI',
       subjectCode: 'RBT',
       periods: { 1: 0, 2: 0, 3: 0, 4: 2, 5: 2, 6: 2 },
-      teachers: { 1: '', 2: '', 3: '', 4: 'VY', 5: 'VY', 6: 'VY' },
+      teachers: t({ 1: '', 2: '', 3: '', 4: 'VY', 5: 'VY', 6: 'VY' }),
     },
     // 16. Program Pembentukan Karakter (PKAR Isnin - Jumaat, Tahun 1 Sahaja)
     {
@@ -229,7 +238,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (ISNIN)',
       subjectCode: 'PKAR_1',
       periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
-      teachers: { 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' },
+      teachers: t({ 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' }),
     },
     {
       id: 'pkar_2',
@@ -237,7 +246,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (SELASA)',
       subjectCode: 'PKAR_2',
       periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
-      teachers: { 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' },
+      teachers: t({ 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' }),
     },
     {
       id: 'pkar_3',
@@ -245,7 +254,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (RABU)',
       subjectCode: 'PKAR_3',
       periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
-      teachers: { 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' },
+      teachers: t({ 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' }),
     },
     {
       id: 'pkar_4',
@@ -253,7 +262,7 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (KHAMIS)',
       subjectCode: 'PKAR_4',
       periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
-      teachers: { 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' },
+      teachers: t({ 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' }),
     },
     {
       id: 'pkar_5',
@@ -261,7 +270,62 @@ export function buildDefaultCurriculumMatrix(yearStr: string): SubjectAllocation
       subjectName: 'PROGRAM PEMBENTUKAN KARAKTER (JUMAAT)',
       subjectCode: 'PKAR_5',
       periods: { 1: kp(1) ? 0.5 : 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
-      teachers: { 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' },
+      teachers: t({ 1: 'SW', 2: '', 3: '', 4: '', 5: '', 6: '' }),
     },
   ];
 }
+
+export function hasAnyTeacherAssigned(rows: SubjectAllocationRow[]): boolean {
+  return rows.some((r) => {
+    const code = (r.subjectCode || '').toUpperCase();
+    if (code === 'PN' || code.startsWith('PKAR') || code === 'MEMBACA') return false;
+    return [1, 2, 3, 4, 5, 6].some((g) => Boolean(r.teachers?.[g]?.trim()));
+  });
+}
+
+export function hydrateMatrixTeachers(
+  rows: SubjectAllocationRow[],
+  yearStr: string,
+  includeLegacyTeachers: boolean = false
+): SubjectAllocationRow[] {
+  if (!includeLegacyTeachers) return rows;
+  const defaults = buildDefaultCurriculumMatrix(yearStr, { includeLegacyTeachers: true });
+  const defaultMap = new Map(defaults.map((r) => [r.subjectCode.toUpperCase(), r]));
+  const klinikFallbacks: Record<string, Record<number, string>> = {
+    KLIBM: { 1: 'JW', 2: 'LMI', 3: 'LMI', 4: 'LRR', 5: 'LRR', 6: 'KL' },
+    KLIBI: { 1: 'DT', 2: 'DT', 3: 'DT', 4: 'DT', 5: 'DT', 6: 'DT' },
+    KLIBC: { 1: 'SW', 2: 'LSC', 3: 'LSC', 4: 'TYM', 5: 'LCI', 6: 'LCI' },
+    KLIMT: { 1: 'VY', 2: 'VY', 3: 'TKI', 4: 'HHH', 5: 'HHH', 6: 'HHH' },
+  };
+
+  return rows.map((row) => {
+    const code = (row.subjectCode || '').toUpperCase();
+    const defRow = defaultMap.get(code);
+    const kFallback = klinikFallbacks[code];
+    const nextTeachers: Record<number, string> = { ...(row.teachers || {}) };
+    const nextSecondary: Record<number, string> = { ...(row.secondaryTeachers || {}) };
+
+    [1, 2, 3, 4, 5, 6].forEach((g) => {
+      const hasPeriod = Number(row.periods?.[g] || 0) > 0;
+      if (hasPeriod && (!nextTeachers[g] || !nextTeachers[g].trim())) {
+        if (defRow?.teachers?.[g]) {
+          nextTeachers[g] = defRow.teachers[g];
+        } else if (kFallback?.[g]) {
+          nextTeachers[g] = kFallback[g];
+        }
+      }
+      if (code === 'AM' && hasPeriod && (!nextSecondary[g] || !nextSecondary[g].trim())) {
+        if (defRow?.secondaryTeachers?.[g]) {
+          nextSecondary[g] = defRow.secondaryTeachers[g];
+        }
+      }
+    });
+
+    return {
+      ...row,
+      teachers: nextTeachers,
+      ...(code === 'AM' ? { secondaryTeachers: nextSecondary } : {}),
+    };
+  });
+}
+

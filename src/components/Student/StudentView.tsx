@@ -3,7 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, doc, getDoc, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { UserProfile, Student, UasaResult, PbdResult } from '../../types';
-import { SCHOOL_NAME_MS } from '../../constants';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool } from '../../utils/schoolTenant';
 import { PbdBadge, UasaBadge } from '../Academic/AcademicBadges';
 import {
   getPbdStatus,
@@ -30,6 +31,7 @@ interface Props {
 }
 
 export default function StudentView({ profile }: Props) {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName, isLegacySchool } = useSchoolTenant();
   // Primary navigation tab
   const [activeTab, setActiveTab] = useState<'kurikulum' | 'makluman' | 'hem' | 'kokurikulum'>('makluman');
   
@@ -56,23 +58,35 @@ export default function StudentView({ profile }: Props) {
 
   // Load all students for the "Demo/Simulation Selector" in case the logged-in email doesn't have a direct student record match
   useEffect(() => {
+    let active = true;
+    setStudent(null);
+    setAllStudents([]);
+    setUasa([]);
+    setPbd([]);
+    setKokoMembership(null);
+    setKokoAttendance([]);
+    setKokoActivities([]);
     const loadAllStudents = async () => {
       try {
         const snap = await getDocs(collection(db, 'students'));
-        const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Student));
+        if (!active) return;
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(doc => ({ id: doc.id, ...doc.data() } as Student));
         setAllStudents(list);
       } catch (err) {
         console.error("Error retrieving student database:", err);
       }
     };
     loadAllStudents();
-  }, []);
+    return () => { active = false; };
+  }, [activeSchoolCode]);
 
-  // Fetch student data on mount or change of student/term
+  // Fetch student data on mount or change of student/term/school
   useEffect(() => {
     fetchStudentData();
     fetchBulletinsAndTakwim();
-  }, [profile, term, student?.student_id]);
+  }, [profile, term, student?.student_id, activeSchoolCode]);
 
   // If student is not bound, try to auto-match profile email or profile name with students
   useEffect(() => {
@@ -101,24 +115,29 @@ export default function StudentView({ profile }: Props) {
 
   // Subscribe to bulletins in real-time from Firestore
   useEffect(() => {
+    setBulletins([]);
     const q = query(collection(db, 'bulletins'), orderBy('date', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      if (!snapshot.empty) {
-        const list = snapshot.docs.map(doc => ({
+      const list = snapshot.docs
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .map(doc => ({
           id: doc.id,
           ...doc.data()
         }));
+      if (list.length > 0 || !isLegacySchool) {
         setBulletins(list);
       }
     }, (error) => {
       console.error("Error loading bulletins in StudentView:", error);
     });
     return () => unsubscribe();
-  }, []);
+  }, [activeSchoolCode, isLegacySchool]);
 
   const fetchBulletinsAndTakwim = () => {
-    // 1. Fetch bulletins from localStorage or load defaults
-    const storedBulletins = localStorage.getItem('saps_plus_bulletin');
+    // 1. Fetch bulletins from scoped localStorage
+    const storedBulletins =
+      localStorage.getItem(`saps_plus_bulletin_${activeSchoolCode}`) ||
+      (isLegacySchool ? localStorage.getItem('saps_plus_bulletin') : null);
     if (storedBulletins) {
       try {
         setBulletins(JSON.parse(storedBulletins));
@@ -127,22 +146,26 @@ export default function StudentView({ profile }: Props) {
       }
     }
 
-    // 2. Fetch takwim_v2 from localStorage or load INITIAL_EVENTS
-    const storedTakwim = localStorage.getItem('saps_plus_takwim_v2') || localStorage.getItem('saps_plus_takwim');
+    // 2. Fetch takwim_v2 from scoped localStorage (INITIAL_EVENTS only for legacy YCC3404)
+    const storedTakwim =
+      localStorage.getItem(`saps_plus_takwim_v2_${activeSchoolCode}`) ||
+      (isLegacySchool
+        ? localStorage.getItem('saps_plus_takwim_v2') || localStorage.getItem('saps_plus_takwim')
+        : null);
     if (storedTakwim) {
       try {
         setTakwimEvents(JSON.parse(storedTakwim));
       } catch (e) {
-        setTakwimEvents(INITIAL_EVENTS);
+        setTakwimEvents(isLegacySchool ? INITIAL_EVENTS : []);
       }
     } else {
-      setTakwimEvents(INITIAL_EVENTS);
+      setTakwimEvents(isLegacySchool ? INITIAL_EVENTS : []);
     }
   };
 
   const fetchStudentData = async () => {
     const activeStudentId = student?.student_id;
-    if (!activeStudentId) return;
+    if (!activeStudentId || !belongsToSchool(student as any, activeSchoolCode)) return;
 
     try {
       // 1. Fetch academic results - UASA
@@ -151,20 +174,21 @@ export default function StudentView({ profile }: Props) {
         where('term', '==', term)
       );
       const uSnap = await getDocs(qU);
-      setUasa(uSnap.docs.map(doc => doc.data() as UasaResult));
+      setUasa(uSnap.docs.filter(d => belongsToSchool(d.data(), activeSchoolCode)).map(doc => doc.data() as UasaResult));
 
       // 2. Fetch academic results - PBD
       const qP = query(collection(db, 'pbd_results'), 
         where('student_id', '==', activeStudentId)
       );
       const pSnap = await getDocs(qP);
-      setPbd(pSnap.docs.map(doc => doc.data() as PbdResult));
+      setPbd(pSnap.docs.filter(d => belongsToSchool(d.data(), activeSchoolCode)).map(doc => doc.data() as PbdResult));
 
       // 3. Fetch Koko Membership
       const qM = query(collection(db, 'koko_memberships'), where('student_id', '==', activeStudentId));
       const mSnap = await getDocs(qM);
-      if (!mSnap.empty) {
-        setKokoMembership(mSnap.docs[0].data());
+      const mDoc = mSnap.docs.find(d => belongsToSchool(d.data(), activeSchoolCode));
+      if (mDoc) {
+        setKokoMembership(mDoc.data());
       } else {
         setKokoMembership(null);
       }
@@ -172,12 +196,20 @@ export default function StudentView({ profile }: Props) {
       // 4. Fetch Koko Attendance database entries
       const qAtt = query(collection(db, 'koko_attendance'));
       const attSnap = await getDocs(qAtt);
-      setKokoAttendance(attSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setKokoAttendance(
+        attSnap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+      );
 
       // 5. Fetch Koko Activities & Tournament results
       const qAct = query(collection(db, 'koko_activities'));
       const actSnap = await getDocs(qAct);
-      setKokoActivities(actSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setKokoActivities(
+        actSnap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+      );
     } catch (err) {
       console.error("Error details loading student dashboard data:", err);
     }
@@ -290,7 +322,7 @@ export default function StudentView({ profile }: Props) {
     return (
       <div className="flex flex-col items-center justify-center p-20 bg-slate-50 min-h-[50vh] rounded-[40px] border border-slate-200">
         <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600 mb-4" />
-        <p className="text-xs font-mono font-black text-slate-500 uppercase tracking-widest">Menyelaras Profil Portal Murid SJK(C) Ek Hua...</p>
+        <p className="text-xs font-mono font-black text-slate-500 uppercase tracking-widest">Menyelaras Profil Portal Murid {tenantSchoolName}...</p>
       </div>
     );
   }
@@ -340,7 +372,7 @@ export default function StudentView({ profile }: Props) {
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-[9px] font-black tracking-widest text-blue-400 uppercase bg-blue-500/15 p-1 px-2.5 rounded-md border border-blue-500/10 leading-none">
-                  SJK(C) EK HUA MUKAH
+                  {tenantSchoolName} ({activeSchoolCode})
                 </span>
                 <span className="text-[9px] font-black tracking-widest text-emerald-400 uppercase bg-emerald-500/15 p-1 px-2.5 rounded-md border border-emerald-500/10 leading-none">
                   SMART SCHOOL SYSTEM
@@ -987,7 +1019,7 @@ export default function StudentView({ profile }: Props) {
                     </div>
                     <div>
                       <h3 className="font-black text-sm uppercase tracking-tight text-slate-850">Keahlian Mengikut Bahagian Kokurikulum</h3>
-                      <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest mt-0.5">Badan Beruniform, Kelab/Persatuan Utama SJK(C) Ek Hua</p>
+                      <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest mt-0.5">Badan Beruniform, Kelab/Persatuan Utama {tenantSchoolName}</p>
                     </div>
                   </div>
 

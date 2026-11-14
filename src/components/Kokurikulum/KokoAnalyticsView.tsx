@@ -14,6 +14,8 @@ import {
   KokoScopeLevel, 
   KokoPencapaianTier 
 } from '../../types/kokurikulum';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool } from '../../utils/schoolTenant';
 
 interface Props {
   profile: UserProfile;
@@ -55,6 +57,7 @@ interface DrillDownModalData {
 }
 
 export default function KokoAnalyticsView({ profile }: Props) {
+  const { schoolCode: activeSchoolCode } = useSchoolTenant();
   const [activePillar, setActivePillar] = useState<'guru' | 'murid' | 'kehadiran' | 'pencapaian'>('guru');
 
   const [activities, setActivities] = useState<KokoActivity[]>([]);
@@ -73,27 +76,29 @@ export default function KokoAnalyticsView({ profile }: Props) {
     // Activities
     unsubs.push(
       onSnapshot(collection(db, 'koko_activities'), (snap) => {
-        const list = snap.docs.map(d => {
-          const raw = d.data();
-          const legacyJurulatih: string[] = Array.isArray(raw.jurulatih)
-            ? raw.jurulatih
-            : raw.teacherName
-            ? [raw.teacherName]
-            : raw.namaJurulatih
-            ? [raw.namaJurulatih]
-            : [];
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => {
+            const raw = d.data();
+            const legacyJurulatih: string[] = Array.isArray(raw.jurulatih)
+              ? raw.jurulatih
+              : raw.teacherName
+              ? [raw.teacherName]
+              : raw.namaJurulatih
+              ? [raw.namaJurulatih]
+              : [];
 
-          const legacyGuruPengiring: string[] = Array.isArray(raw.guruPengiring)
-            ? raw.guruPengiring
-            : [];
+            const legacyGuruPengiring: string[] = Array.isArray(raw.guruPengiring)
+              ? raw.guruPengiring
+              : [];
 
-          return {
-            id: d.id,
-            ...raw,
-            jurulatih: legacyJurulatih,
-            guruPengiring: legacyGuruPengiring
-          } as KokoActivity;
-        });
+            return {
+              id: d.id,
+              ...raw,
+              jurulatih: legacyJurulatih,
+              guruPengiring: legacyGuruPengiring
+            } as KokoActivity;
+          });
         setActivities(list);
       })
     );
@@ -101,27 +106,39 @@ export default function KokoAnalyticsView({ profile }: Props) {
     // Groups
     unsubs.push(
       onSnapshot(collection(db, 'koko_groups'), (snap) => {
-        setGroups(snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoGroup)));
+        setGroups(
+          snap.docs
+            .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+            .map(d => ({ id: d.id, ...d.data() } as KokoGroup))
+        );
       })
     );
 
     // Attendance
     unsubs.push(
       onSnapshot(collection(db, 'koko_attendance'), (snap) => {
-        setAttendanceSessions(snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoAttendanceSession)));
+        setAttendanceSessions(
+          snap.docs
+            .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+            .map(d => ({ id: d.id, ...d.data() } as KokoAttendanceSession))
+        );
       })
     );
 
     // Students
     unsubs.push(
       onSnapshot(collection(db, 'students'), (snap) => {
-        setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() } as Student)));
+        setStudents(
+          snap.docs
+            .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+            .map(d => ({ id: d.id, ...d.data() } as Student))
+        );
         setLoading(false);
       })
     );
 
     return () => unsubs.forEach(u => u());
-  }, []);
+  }, [activeSchoolCode]);
 
   // ================= PILLAR A: PENGLIBATAN GURU COMPUTATIONS =================
   const teacherStatsByLevel = useMemo(() => {

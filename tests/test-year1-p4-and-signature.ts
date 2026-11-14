@@ -119,8 +119,8 @@ console.assert(isSignificantlyDifferentFromPrevious(dummyLessonsB) === true, 'Si
 console.log('✅ Schedule signature comparison passed all tests!');
 
 console.log('\n--- TEST 4: Dynamic schedule variation with full matrix ---');
-const defaultMatrix = buildDefaultCurriculumMatrix('2027');
-const defaultTeachers = getDefaultClassTeachers();
+const defaultMatrix = buildDefaultCurriculumMatrix('2027', { includeLegacyTeachers: true });
+const defaultTeachers = getDefaultClassTeachers(true);
 resetScheduleSignature();
 
 const res1 = generateAutoSchedule(defaultMatrix, defaultTeachers, '2027', 0);

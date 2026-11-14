@@ -16,6 +16,8 @@ import {
   KokoPencapaianTier, 
   KokoPengiktirafanType 
 } from '../../types/kokurikulum';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool } from '../../utils/schoolTenant';
 
 interface Props {
   profile: UserProfile;
@@ -50,6 +52,7 @@ const PENGIKTIRAFAN_TYPES: KokoPengiktirafanType[] = [
 ];
 
 export default function KokoSmartOPRManager({ profile, role, schoolSettings }: Props) {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName, isLegacySchool } = useSchoolTenant();
   const [activities, setActivities] = useState<KokoActivity[]>([]);
   const [teachers, setTeachers] = useState<string[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
@@ -110,28 +113,30 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
     // koko_activities
     unsubs.push(
       onSnapshot(collection(db, 'koko_activities'), (snap) => {
-        const list = snap.docs.map(d => {
-          const raw = d.data();
-          // Normalize legacy records for teacher role separation
-          const legacyJurulatih: string[] = Array.isArray(raw.jurulatih)
-            ? raw.jurulatih
-            : raw.teacherName
-            ? [raw.teacherName]
-            : raw.namaJurulatih
-            ? [raw.namaJurulatih]
-            : [];
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => {
+            const raw = d.data();
+            // Normalize legacy records for teacher role separation
+            const legacyJurulatih: string[] = Array.isArray(raw.jurulatih)
+              ? raw.jurulatih
+              : raw.teacherName
+              ? [raw.teacherName]
+              : raw.namaJurulatih
+              ? [raw.namaJurulatih]
+              : [];
 
-          const legacyGuruPengiring: string[] = Array.isArray(raw.guruPengiring)
-            ? raw.guruPengiring
-            : [];
+            const legacyGuruPengiring: string[] = Array.isArray(raw.guruPengiring)
+              ? raw.guruPengiring
+              : [];
 
-          return {
-            id: d.id,
-            ...raw,
-            jurulatih: legacyJurulatih,
-            guruPengiring: legacyGuruPengiring
-          } as KokoActivity;
-        });
+            return {
+              id: d.id,
+              ...raw,
+              jurulatih: legacyJurulatih,
+              guruPengiring: legacyGuruPengiring
+            } as KokoActivity;
+          });
         setActivities(list);
         setLoading(false);
       })
@@ -140,7 +145,11 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
     // Students
     unsubs.push(
       onSnapshot(collection(db, 'students'), (snap) => {
-        setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() } as Student)));
+        setStudents(
+          snap.docs
+            .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+            .map(d => ({ id: d.id, ...d.data() } as Student))
+        );
       })
     );
 
@@ -148,11 +157,17 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
     async function loadTeachers() {
       try {
         const pSnap = await getDocs(collection(db, 'personnel'));
-        if (!pSnap.empty) {
-          setTeachers(pSnap.docs.map(d => (d.data().name || d.data().nama || '').toUpperCase()).filter(Boolean));
+        const scopedP = pSnap.docs.filter(d => belongsToSchool(d.data(), activeSchoolCode));
+        if (scopedP.length > 0) {
+          setTeachers(scopedP.map(d => (d.data().name || d.data().nama || '').toUpperCase()).filter(Boolean));
         } else {
           const tSnap = await getDocs(collection(db, 'teachers'));
-          setTeachers(tSnap.docs.map(d => (d.data().name || '').toUpperCase()).filter(Boolean));
+          setTeachers(
+            tSnap.docs
+              .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+              .map(d => (d.data().name || '').toUpperCase())
+              .filter(Boolean)
+          );
         }
       } catch (err) {
         console.warn('Teacher load error:', err);
@@ -161,7 +176,7 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
     loadTeachers();
 
     return () => unsubs.forEach(u => u());
-  }, []);
+  }, [activeSchoolCode]);
 
   // Filtered Activities
   const filteredActivities = useMemo(() => {
@@ -181,10 +196,10 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
     setEditingId(null);
     setJenis('pertandingan');
     setProgramName('');
-    setOrganizer('PPD Mukah / JPN Sarawak / KPM');
+    setOrganizer(isLegacySchool ? 'PPD Mukah / JPN Sarawak / KPM' : 'PPD / JPN / KPM');
     setDate(new Date().toISOString().split('T')[0]);
     setEndDate('');
-    setVenue('Dewan / Padang SJK(C) Chung Hua Balingian');
+    setVenue(`Dewan / Padang ${tenantSchoolName}`);
     setLevel('Daerah/Zon');
     setCategory('sport');
     setUnit('');
@@ -254,7 +269,8 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
       ? [] 
       : students.filter(s => selectedStudentIds.includes(s.id || '')).map(s => s.name);
 
-    const payload: KokoActivity = {
+    const payload: KokoActivity & { schoolCode?: string } = {
+      schoolCode: activeSchoolCode,
       jenis,
       programName: programName.trim(),
       organizer: organizer.trim(),
@@ -990,7 +1006,7 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
             {/* Header */}
             <div className="text-center border-b-2 border-slate-900 pb-4">
               <h1 className="text-lg font-black uppercase tracking-wide">
-                {schoolSettings?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN'} ({schoolSettings?.schoolCode || 'YCC3404'})
+                {schoolSettings?.schoolName || tenantSchoolName} ({schoolSettings?.schoolCode || activeSchoolCode})
               </h1>
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700 mt-0.5">
                 ONE PAGE REPORT (OPR) KOKURIKULUM SESI 2026

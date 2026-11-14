@@ -33,6 +33,8 @@ import { UserProfile, SchoolSettings } from '../types';
 import { BilikGuruReliefView } from './Timetable/BilikGuruReliefView';
 import { ScheduleGrid, getGradeDaySlots } from './Timetable/types';
 import { createEmptyScheduleGrid } from './Timetable/autoScheduler';
+import { useSchoolTenant } from '../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../utils/schoolTenant';
 
 export interface ReliefAlertRecord {
   id: string;
@@ -76,6 +78,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
   schoolSettings,
   onNavigateToSuratMasuk,
 }) => {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName } = useSchoolTenant();
   const [alerts, setAlerts] = useState<ReliefAlertRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedAlert, setSelectedAlert] = useState<ReliefAlertRecord | null>(null);
@@ -117,7 +120,10 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       (snap) => {
         const list: ReliefAlertRecord[] = [];
         snap.forEach((d) => {
-          list.push({ id: d.id, ...(d.data() as Omit<ReliefAlertRecord, 'id'>) });
+          const data = d.data() as Omit<ReliefAlertRecord, 'id'>;
+          if (belongsToSchool(data, activeSchoolCode)) {
+            list.push({ id: d.id, ...data });
+          }
         });
         setAlerts(list);
         setLoading(false);
@@ -128,7 +134,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       }
     );
     return () => unsub();
-  }, []);
+  }, [activeSchoolCode]);
 
   // 2. Fetch Teachers and Timetable Schedule from Firestore
   useEffect(() => {
@@ -142,8 +148,9 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
         ]);
 
         const map = new Map<string, { id: string; name: string; email: string; code: string; phone?: string }>();
-        personnelSnap.docs.forEach((d, idx) => {
+        personnelSnap.docs.forEach((d) => {
           const data = d.data();
+          if (!belongsToSchool(data, activeSchoolCode)) return;
           const cleanName = data.name || data.fullName || d.id;
           const code = cleanName.slice(0, 3).toUpperCase();
           map.set(d.id, {
@@ -157,10 +164,8 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
 
         usersSnap.docs.forEach((d) => {
           const data = d.data();
-          const cleanEm = String(data.email || '').toLowerCase().trim();
-          const emailExists =
-            cleanEm && Array.from(map.values()).some((v) => String(v.email || '').toLowerCase().trim() === cleanEm);
-          if (!map.has(d.id) && !emailExists) {
+          if (!belongsToSchool(data, activeSchoolCode)) return;
+          if (!map.has(d.id)) {
             const cleanName = data.name || d.id;
             map.set(d.id, {
               id: d.id,
@@ -172,10 +177,13 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
           }
         });
 
-        // Load timetable schedule if exists
+        // Load timetable schedule scoped to active school if exists
         let loadedSchedule: ScheduleGrid = createEmptyScheduleGrid();
-        if (timetableSnap.docs.length > 0) {
-          const tDoc = timetableSnap.docs[0];
+        const scopedTimetableDocs = timetableSnap.docs.filter((d) => belongsToSchool(d.data(), activeSchoolCode));
+        if (scopedTimetableDocs.length > 0) {
+          const tDoc =
+            scopedTimetableDocs.find((d) => d.id.includes('schedule_') || ('schedule' in d.data() && d.data().schedule)) ||
+            scopedTimetableDocs[0];
           const tData = tDoc.data();
           if (tData && 'schedule' in tData && tData.schedule) {
             loadedSchedule = tData.schedule as ScheduleGrid;
@@ -195,7 +203,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [activeSchoolCode]);
 
   const pendingAlerts = useMemo(() => {
     return alerts.filter((a) => a.status === 'PERLU_JADUAL_GANTI');
@@ -237,7 +245,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
     if (!activeAlertForSchedule) return;
     try {
       setSubmittingSchedule(true);
-      const scheduleId = `relief_sched_${Date.now()}`;
+      const scheduleId = scopedDocId(activeSchoolCode, `relief_sched_${Date.now()}`);
 
       const assignments = activeAlertForSchedule.affectedClasses.map((cls, idx) => {
         const assignedTId = slotAssignments[`${cls.classId}_${cls.subjectCode}`];
@@ -256,6 +264,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       // 1. Save record into relief_schedules
       await setDoc(doc(db, 'relief_schedules', scheduleId), {
         id: scheduleId,
+        schoolCode: activeSchoolCode,
         alertId: activeAlertForSchedule.id,
         suratId: activeAlertForSchedule.suratId || '',
         perkara: activeAlertForSchedule.perkara,
@@ -804,7 +813,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
             <div className="bg-white text-black p-6 rounded-xl border border-black text-xs font-sans space-y-4">
               <div className="text-center border-b border-black pb-3">
                 <div className="font-bold text-sm uppercase">
-                  {schoolSettings?.schoolName || 'SJK(C) CHUNG HUA BALINGIAN'}
+                  {schoolSettings?.schoolName || tenantSchoolName}
                 </div>
                 <div className="text-[11px] font-bold text-slate-800 uppercase mt-0.5">
                   SLIP GURU GANTI (JADUAL RELIEF)

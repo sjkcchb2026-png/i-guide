@@ -8,73 +8,163 @@ import { auth, db } from './firebase';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, getDocs, setDoc, serverTimestamp } from 'firebase/firestore';
 import { deepSanitizeFirestore } from './utils/sanitizeFirestore';
-import { deduplicateStaffRecords, deduplicateUsersSnapshotInFirestore, normalizeStaffIc } from './utils/staffNormalizer';
-import { UserProfile, SchoolSettings, UserRole, StaffCategory } from './types';
+import { UserProfile, SchoolSettings, SchoolProfile, UserRole, StaffCategory } from './types';
 import { Header } from './components/Header';
 import { LoginView } from './components/LoginView';
-import { StaffPunchIn } from './components/StaffPunchIn';
-import { PrincipalDashboard } from './components/PrincipalDashboard';
+import { SchoolOnboardingView } from './components/SchoolOnboardingView';
 import { ISEPADUShell } from './components/Shell/ISEPADUShell';
-import { SuratMasukManagerView } from './components/SuratMasukManagerView';
-import { ReliefSchedulingView } from './components/ReliefSchedulingView';
-import { School, Loader2, ShieldAlert, UserX, LogOut } from 'lucide-react';
+import { SchoolTenantProvider } from './contexts/SchoolTenantContext';
+import {
+  DEFAULT_SCHOOL_CODE,
+  DEFAULT_SCHOOL_NAME,
+  DEFAULT_SCHOOL_SLOGAN,
+  isLegacyDefaultSchool,
+  normalizeActiveSchoolCode,
+  resolveRecordSchoolCode,
+  scopedDocId,
+  setRuntimeActiveSchoolCode,
+} from './utils/schoolTenant';
+import { School, Loader2, UserX, LogOut } from 'lucide-react';
 
 export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(null);
+  const [schoolProfile, setSchoolProfile] = useState<SchoolProfile | null>(null);
   const [schoolSettings, setSchoolSettings] = useState<SchoolSettings | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [accessDeniedReason, setAccessDeniedReason] = useState<'NOT_REGISTERED' | 'DEACTIVATED' | null>(null);
+  const [accessDeniedReason, setAccessDeniedReason] = useState<'DEACTIVATED' | null>(null);
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean>(false);
   const [activeView, setActiveView] = useState<'staff' | 'principal'>('staff');
 
-  // 1. Listen for School Settings changes
+  const activeSchoolCode = currentUserProfile
+    ? resolveRecordSchoolCode(currentUserProfile)
+    : '';
+
+  // Keep runtime schoolCode synced for deep helper functions
   useEffect(() => {
-    // Initial fetch via server API to ensure immediate state hydration
-    fetch('/api/school-info')
+    setRuntimeActiveSchoolCode(activeSchoolCode || DEFAULT_SCHOOL_CODE);
+  }, [activeSchoolCode]);
+
+  // 1. Subscribe to the logged-in user's school profile (schools/{schoolCode}) & scoped school_settings
+  useEffect(() => {
+    // Before login, fetch neutral/legacy header info optionally so login screen isn't empty
+    if (!currentUserProfile) {
+      fetch('/api/school-info')
+        .then((res) => res.json())
+        .then((info) => {
+          if (info?.initialized) {
+            setSchoolSettings((prev) => prev || ({
+              schoolName: info.schoolName,
+              schoolCode: info.schoolCode,
+              schoolLogo: info.schoolLogo || info.logoUrl || '',
+              slogan: info.slogan || DEFAULT_SCHOOL_SLOGAN,
+              principalEmail: info.principalEmail || '',
+              principalUid: '',
+            } as SchoolSettings));
+          }
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const code = normalizeActiveSchoolCode(activeSchoolCode);
+    const settingsDocId = scopedDocId(code, 'general');
+
+    // Hydrate via server API immediately
+    fetch(`/api/school-info?schoolCode=${encodeURIComponent(code)}`)
       .then((res) => res.json())
       .then((info) => {
-        if (info?.initialized) {
-          setSchoolSettings((prev) => prev || ({
+        if (info?.schoolName) {
+          setSchoolSettings((prev) => ({
+            ...(prev || { principalEmail: '', principalUid: '' }),
+            schoolCode: code,
             schoolName: info.schoolName,
-            schoolCode: info.schoolCode,
-            principalEmail: info.principalEmail,
-          } as SchoolSettings));
+            schoolLogo: info.schoolLogo || info.logoUrl || prev?.schoolLogo || '',
+            logoUrl: info.logoUrl || info.schoolLogo || prev?.logoUrl || '',
+            slogan: info.slogan || prev?.slogan || DEFAULT_SCHOOL_SLOGAN,
+            adminEmails: info.adminEmails || prev?.adminEmails || [],
+            principalEmail: info.principalEmail || prev?.principalEmail || '',
+            principalUid: prev?.principalUid || '',
+          }));
         }
       })
-      .catch((err) => console.warn('School info fetch:', err));
+      .catch((err) => console.warn('Scoped school info fetch:', err));
 
-    const unsub = onSnapshot(doc(db, 'school_settings', 'general'), (docSnap) => {
-      if (docSnap.exists()) {
-        setSchoolSettings(docSnap.data() as SchoolSettings);
-      } else {
-        setSchoolSettings(null);
-      }
-    }, (error) => {
-      console.warn('School settings subscription:', error);
-    });
+    const unsubSchool = onSnapshot(
+      doc(db, 'schools', code),
+      (snap) => {
+        if (snap.exists()) {
+          const sp = snap.data() as SchoolProfile;
+          setSchoolProfile(sp);
+          setSchoolSettings((prev) => ({
+            ...(prev || { principalEmail: '', principalUid: '' }),
+            schoolCode: sp.schoolCode || code,
+            schoolName: sp.schoolName || prev?.schoolName || (isLegacyDefaultSchool(code) ? DEFAULT_SCHOOL_NAME : code),
+            schoolLogo: sp.logoUrl || prev?.schoolLogo || '',
+            logoUrl: sp.logoUrl || '',
+            slogan: sp.slogan || prev?.slogan || DEFAULT_SCHOOL_SLOGAN,
+            adminEmails: sp.adminEmails || prev?.adminEmails || [],
+            principalEmail: sp.principalEmail || prev?.principalEmail || '',
+            principalUid: sp.principalUid || prev?.principalUid || '',
+          }));
+        }
+      },
+      (err) => console.warn('schools/{code} subscription:', err)
+    );
 
-    return () => unsub();
-  }, []);
+    const unsubSettings = onSnapshot(
+      doc(db, 'school_settings', settingsDocId),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const s = docSnap.data() as SchoolSettings;
+          setSchoolSettings((prev) => ({
+            ...s,
+            schoolCode: s.schoolCode || prev?.schoolCode || code,
+            schoolName: prev?.schoolName && schoolProfile?.schoolName ? schoolProfile.schoolName : s.schoolName,
+            schoolLogo: schoolProfile?.logoUrl || s.schoolLogo || s.logoUrl || prev?.schoolLogo || '',
+            slogan: schoolProfile?.slogan || s.slogan || prev?.slogan || DEFAULT_SCHOOL_SLOGAN,
+            adminEmails: schoolProfile?.adminEmails || s.adminEmails || prev?.adminEmails || [],
+          }));
+        } else if (isLegacyDefaultSchool(code)) {
+          setSchoolSettings((prev) => prev || ({
+            schoolCode: DEFAULT_SCHOOL_CODE,
+            schoolName: DEFAULT_SCHOOL_NAME,
+            slogan: DEFAULT_SCHOOL_SLOGAN,
+            principalEmail: '',
+            principalUid: '',
+          }));
+        }
+      },
+      (error) => console.warn('School settings subscription:', error)
+    );
+
+    return () => {
+      unsubSchool();
+      unsubSettings();
+    };
+  }, [currentUserProfile?.uid, activeSchoolCode]);
 
   // 2. Listen to Auth State
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       setAccessDeniedReason(null);
+      setNeedsOnboarding(false);
 
       if (!user) {
         setCurrentUserProfile(null);
+        setSchoolProfile(null);
         setLoading(false);
         return;
       }
 
+      setLoading(true);
       try {
-        // 1. Check if user is registered Admin in /admins/{uid} or is designated system admin
         const userEmail = (user.email || '').toLowerCase().trim();
         const isDesignatedAdmin = userEmail === 'sjkcchb2026@gmail.com' || userEmail === 'sean3919531@gmail.com';
         const adminDocRef = doc(db, 'admins', user.uid);
         const adminSnap = await getDoc(adminDocRef).catch(() => null);
-        const isAdmin = (adminSnap && adminSnap.exists()) || isDesignatedAdmin;
+        const isLegacySuperAdmin = (adminSnap && adminSnap.exists()) || isDesignatedAdmin;
 
         if (isDesignatedAdmin && (!adminSnap || !adminSnap.exists())) {
           await setDoc(adminDocRef, {
@@ -86,185 +176,141 @@ export default function App() {
           }, { merge: true }).catch(() => {});
         }
 
-        // 2. Fetch user profile from /users/{uid} OR existing in-place staff doc by uid/email
+        // Fetch existing user profile from /users/{uid}
         const userDocRef = doc(db, 'users', user.uid);
         let resolvedUserSnap = await getDoc(userDocRef);
 
-        if (!resolvedUserSnap.exists()) {
+        // If /users/{uid} doesn't exist yet, try email auto-link for pre-registered users/personnel/teachers/YCC3404 roster
+        if (!resolvedUserSnap.exists() && userEmail) {
+          // Stage A: Query pre-registered `users` collection by email (keeps its schoolCode, or YCC3404 if legacy)
           try {
-            const qByUid = query(collection(db, 'users'), where('uid', '==', user.uid));
-            const uidSnap = await getDocs(qByUid);
-            if (!uidSnap.empty) {
-              resolvedUserSnap = uidSnap.docs[0];
-            }
-          } catch {
-            // Fall through to email lookup
-          }
-        }
-
-        // If doc already exists at /users/{uid} and email also has another duplicate (e.g. staff_<uuid>), merge them cleanly
-        if (resolvedUserSnap.exists() && userEmail) {
-          try {
-            const qDup = query(collection(db, 'users'), where('email', '==', userEmail));
-            const dupSnap = await getDocs(qDup);
-            if (dupSnap.docs.length > 1) {
-              const rawDocs = dupSnap.docs.map((d) => ({ ...d.data(), _docId: d.id }));
-              const { dedupedUsers } = await deduplicateUsersSnapshotInFirestore(db, rawDocs, isAdmin);
-              const canonical = dedupedUsers[0];
-              if (canonical) {
-                const canonId = canonical._docId || canonical.uid || resolvedUserSnap.id;
-                resolvedUserSnap = await getDoc(doc(db, 'users', canonId));
-              }
-            } else if (resolvedUserSnap.data()?.isPreRegistered !== false || !resolvedUserSnap.data()?.isVerified) {
-              await setDoc(resolvedUserSnap.ref, {
-                uid: user.uid,
-                email: userEmail,
-                isVerified: true,
-                isPreRegistered: false,
-                updatedAt: serverTimestamp(),
-              }, { merge: true });
-              resolvedUserSnap = await getDoc(resolvedUserSnap.ref);
-            }
-          } catch (mergeErr) {
-            console.warn('Duplicate check on existing user notice:', mergeErr);
-          }
-        }
-
-        // 3. If user document does not exist yet by UID, resolve by email across users, personnel, teachers & backend roster
-        if (!resolvedUserSnap.exists() && user.email) {
-          const cleanEmail = user.email.toLowerCase().trim();
-
-          // Stage A: Query `users` collection by email and update existing doc IN-PLACE (zero duplicate creation!)
-          try {
-            const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
+            const qUsers = query(collection(db, 'users'), where('email', '==', userEmail));
             const querySnap = await getDocs(qUsers);
             if (!querySnap.empty) {
-              const rawDocs = querySnap.docs.map((d) => ({ ...d.data(), _docId: d.id } as any));
-              const [mergedPre] = deduplicateStaffRecords(rawDocs);
-              const targetDoc =
-                querySnap.docs.find((d) => d.id === mergedPre?._docId) || querySnap.docs[0];
-
+              const matchedDoc = querySnap.docs[0];
+              const preData = matchedDoc.data() as UserProfile;
+              const matchedSchoolCode = resolveRecordSchoolCode(preData);
               const linkedProfile = deepSanitizeFirestore({
-                ...(mergedPre || targetDoc.data()),
+                ...preData,
                 uid: user.uid,
-                email: cleanEmail,
-                isVerified: true,
+                schoolCode: matchedSchoolCode,
                 isPreRegistered: false,
-                active: (mergedPre || (targetDoc.data() as UserProfile)).active !== false,
+                active: preData.active !== false,
                 updatedAt: serverTimestamp(),
               });
-              delete (linkedProfile as any)._docId;
-
-              // Update existing doc in-place (DO NOT create a second users/{user.uid} doc!)
-              await setDoc(targetDoc.ref, linkedProfile, { merge: true });
-
-              // If duplicates already existed for this email and caller is admin, clean up redundant docs
-              if (querySnap.docs.length > 1 && isAdmin) {
-                await deduplicateUsersSnapshotInFirestore(
-                  db,
-                  querySnap.docs.map((d) => ({ ...d.data(), _docId: d.id })),
-                  true
-                );
+              await setDoc(userDocRef, linkedProfile, { merge: true });
+              if (matchedDoc.id !== user.uid) {
+                await setDoc(matchedDoc.ref, { uid: user.uid, schoolCode: matchedSchoolCode, isPreRegistered: false, active: true }, { merge: true }).catch(() => {});
               }
-              resolvedUserSnap = await getDoc(targetDoc.ref);
+              resolvedUserSnap = await getDoc(userDocRef);
             }
           } catch (syncErr) {
             console.warn('Stage A users email lookup:', syncErr);
           }
 
-          // Stage B: If not in users, check `personnel` Master Data by email
+          // Stage B: Check `personnel` Master Data by email
           if (!resolvedUserSnap.exists()) {
             try {
-              const qPersonnel = query(collection(db, 'personnel'), where('email', '==', cleanEmail));
+              const qPersonnel = query(collection(db, 'personnel'), where('email', '==', userEmail));
               const pSnap = await getDocs(qPersonnel);
               if (!pSnap.empty) {
                 const pDoc = pSnap.docs[0];
                 const pData: any = pDoc.data();
+                const matchedSchoolCode = resolveRecordSchoolCode(pData);
                 const posUpper = String(pData.position || pData.jawatan || '').toUpperCase();
-                const isPrincipalUser = posUpper.includes('GURU BESAR') || posUpper === 'GB' || pData.leadershipRole === 'GURU_BESAR' || cleanEmail === schoolSettings?.principalEmail?.toLowerCase().trim();
+                const isPrincipalUser = posUpper.includes('GURU BESAR') || posUpper === 'GB' || pData.leadershipRole === 'GURU_BESAR';
                 const catUpper = String(pData.category || '').toUpperCase();
                 const isAkpUser = catUpper === 'AKP' || posUpper.includes('PKA') || posUpper.includes('PPM') || posUpper.includes('PT') || posUpper.includes('PEMBANTU') || posUpper.includes('KERANI') || posUpper.includes('OPERASI');
                 const resolvedRole: UserRole = isPrincipalUser ? 'PRINCIPAL' : (isAkpUser ? 'AKP' : 'GURU');
                 const resolvedCat: StaffCategory = isPrincipalUser ? 'PRINCIPAL' : (isAkpUser ? 'AKP' : 'GURU');
-                const cleanIc = normalizeStaffIc(pData.ic);
-
-                // Check if staff_<ic> doc already exists in users before creating a new doc
-                let targetRef = userDocRef;
-                if (cleanIc) {
-                  const staffRef = doc(db, 'users', `staff_${cleanIc}`);
-                  const staffSnap = await getDoc(staffRef).catch(() => null);
-                  if (staffSnap && staffSnap.exists()) {
-                    targetRef = staffRef;
-                  }
-                }
 
                 const linkedProfile = deepSanitizeFirestore({
                   uid: user.uid,
-                  name: pData.name || pData.nama || user.displayName || cleanEmail.split('@')[0],
-                  email: cleanEmail,
+                  name: pData.name || pData.nama || user.displayName || userEmail.split('@')[0],
+                  email: userEmail,
+                  schoolCode: matchedSchoolCode,
                   category: resolvedCat,
                   role: resolvedRole,
-                  ic: cleanIc || pData.ic || '',
+                  ic: pData.ic || '',
                   phone: pData.phone || pData.noTel || '',
                   grade: pData.grade || pData.gred || '',
                   position: pData.position || pData.jawatan || '',
                   staffFileNo: pData.staffFileNo || pData.noFail || '',
                   personnelId: pDoc.id,
                   active: true,
-                  isVerified: true,
                   isPreRegistered: false,
                   createdAt: serverTimestamp(),
                   updatedAt: serverTimestamp(),
                 });
-                await setDoc(targetRef, linkedProfile, { merge: true });
-                resolvedUserSnap = await getDoc(targetRef);
+                await setDoc(userDocRef, linkedProfile, { merge: true });
+                resolvedUserSnap = await getDoc(userDocRef);
               }
             } catch (pErr) {
               console.warn('Stage B personnel email lookup:', pErr);
             }
           }
 
-          // Stage C: If not in personnel, check `teachers` collection by email
+          // Stage C: Check `teachers` collection by email
           if (!resolvedUserSnap.exists()) {
             try {
-              const qTeachers = query(collection(db, 'teachers'), where('email', '==', cleanEmail));
+              const qTeachers = query(collection(db, 'teachers'), where('email', '==', userEmail));
               const tSnap = await getDocs(qTeachers);
               if (!tSnap.empty) {
                 const tDoc = tSnap.docs[0];
                 const tData: any = tDoc.data();
-                const cleanIc = normalizeStaffIc(tData.ic);
-                let targetRef = userDocRef;
-                if (cleanIc) {
-                  const staffRef = doc(db, 'users', `staff_${cleanIc}`);
-                  const staffSnap = await getDoc(staffRef).catch(() => null);
-                  if (staffSnap && staffSnap.exists()) {
-                    targetRef = staffRef;
-                  }
-                }
-
+                const matchedSchoolCode = resolveRecordSchoolCode(tData);
                 const linkedProfile = deepSanitizeFirestore({
                   uid: user.uid,
-                  name: tData.name || user.displayName || cleanEmail.split('@')[0],
-                  email: cleanEmail,
+                  name: tData.name || user.displayName || userEmail.split('@')[0],
+                  email: userEmail,
+                  schoolCode: matchedSchoolCode,
                   category: 'GURU',
                   role: 'GURU',
-                  ic: cleanIc || tData.ic || '',
+                  ic: tData.ic || '',
                   personnelId: tDoc.id,
                   active: true,
-                  isVerified: true,
                   isPreRegistered: false,
                   createdAt: serverTimestamp(),
                   updatedAt: serverTimestamp(),
                 });
-                await setDoc(targetRef, linkedProfile, { merge: true });
-                resolvedUserSnap = await getDoc(targetRef);
+                await setDoc(userDocRef, linkedProfile, { merge: true });
+                resolvedUserSnap = await getDoc(userDocRef);
               }
             } catch (tErr) {
               console.warn('Stage C teachers email lookup:', tErr);
             }
           }
 
-          // Stage D: Fallback to server resolver endpoint (checks authoritative school staff roster)
+          // Stage D: Check if email is listed in any registered school's adminEmails
+          if (!resolvedUserSnap.exists()) {
+            try {
+              const qSchools = query(collection(db, 'schools'), where('adminEmails', 'array-contains', userEmail));
+              const sSnap = await getDocs(qSchools);
+              if (!sSnap.empty) {
+                const sp = sSnap.docs[0].data() as SchoolProfile;
+                const matchedSchoolCode = normalizeActiveSchoolCode(sp.schoolCode || sSnap.docs[0].id);
+                const linkedProfile = deepSanitizeFirestore({
+                  uid: user.uid,
+                  name: user.displayName || userEmail.split('@')[0] || 'Guru Besar',
+                  email: userEmail,
+                  schoolCode: matchedSchoolCode,
+                  category: 'PRINCIPAL',
+                  role: 'PRINCIPAL',
+                  hasClerkAccess: true,
+                  active: true,
+                  isPreRegistered: false,
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                });
+                await setDoc(userDocRef, linkedProfile, { merge: true });
+                resolvedUserSnap = await getDoc(userDocRef);
+              }
+            } catch (sErr) {
+              console.warn('Stage D schools adminEmails lookup:', sErr);
+            }
+          }
+
+          // Stage E: Fallback to YCC3404 official staff roster ONLY for YCC3404 accounts
           if (!resolvedUserSnap.exists()) {
             try {
               const idToken = await user.getIdToken();
@@ -274,74 +320,73 @@ export default function App() {
                   'Content-Type': 'application/json',
                   Authorization: `Bearer ${idToken}`,
                 },
-                body: JSON.stringify({ email: cleanEmail }),
+                body: JSON.stringify({ email: userEmail, schoolCode: DEFAULT_SCHOOL_CODE }),
               });
               if (res.ok) {
                 const data = await res.json();
                 if (data.profile) {
-                  const cleanIc = normalizeStaffIc(data.profile.ic);
-                  let targetRef = userDocRef;
-                  if (cleanIc) {
-                    const staffRef = doc(db, 'users', `staff_${cleanIc}`);
-                    const staffSnap = await getDoc(staffRef).catch(() => null);
-                    if (staffSnap && staffSnap.exists()) {
-                      targetRef = staffRef;
-                    }
-                  }
                   const linkedProfile = deepSanitizeFirestore({
                     ...data.profile,
                     uid: user.uid,
-                    email: cleanEmail,
-                    isVerified: true,
+                    schoolCode: DEFAULT_SCHOOL_CODE,
                     isPreRegistered: false,
                     active: true,
                     updatedAt: serverTimestamp(),
                   });
-                  await setDoc(targetRef, linkedProfile, { merge: true });
-                  resolvedUserSnap = await getDoc(targetRef);
+                  await setDoc(userDocRef, linkedProfile, { merge: true });
+                  resolvedUserSnap = await getDoc(userDocRef);
                 }
               }
             } catch (apiErr) {
-              console.warn('Stage D server resolver error:', apiErr);
+              console.warn('Stage E YCC3404 resolver error:', apiErr);
             }
           }
         }
 
-        if (isAdmin) {
-          // Principal profile
-          let profile: UserProfile;
-          if (resolvedUserSnap.exists()) {
-            profile = resolvedUserSnap.data() as UserProfile;
+        if (resolvedUserSnap.exists()) {
+          const profile = resolvedUserSnap.data() as UserProfile;
+          const resolvedCode = resolveRecordSchoolCode(profile);
+          if (!profile.schoolCode) {
+            profile.schoolCode = resolvedCode;
+            await setDoc(userDocRef, { schoolCode: resolvedCode }, { merge: true }).catch(() => {});
+          }
+
+          // Preserve legacy superAdmin principal elevation ONLY for YCC3404 or school's own principal
+          if (isLegacySuperAdmin && isLegacyDefaultSchool(resolvedCode)) {
             profile.role = 'PRINCIPAL';
             profile.category = 'PRINCIPAL';
-          } else {
-            profile = {
-              uid: user.uid,
-              name: user.displayName || '校长 / Guru Besar',
-              email: user.email || '',
-              category: 'PRINCIPAL',
-              role: 'PRINCIPAL',
-              hasClerkAccess: true,
-              active: true,
-            };
+            profile.hasClerkAccess = true;
           }
-          setCurrentUserProfile(profile);
-          setActiveView('principal');
-        } else if (resolvedUserSnap.exists()) {
-          const profile = resolvedUserSnap.data() as UserProfile;
 
-          // Check if active
           if (profile.active === false) {
             setAccessDeniedReason('DEACTIVATED');
             setCurrentUserProfile(null);
           } else {
-            // Valid active staff member
             setCurrentUserProfile(profile);
-            setActiveView('staff');
+            setActiveView(
+              profile.role === 'PRINCIPAL' || profile.category === 'PRINCIPAL' || profile.role === 'admin'
+                ? 'principal'
+                : 'staff'
+            );
           }
+        } else if (isLegacySuperAdmin) {
+          // Legacy YCC3404 designated admin without a /users doc yet
+          const fallbackProfile: UserProfile = {
+            uid: user.uid,
+            name: user.displayName || 'Guru Besar / Pentadbir',
+            email: user.email || '',
+            schoolCode: DEFAULT_SCHOOL_CODE,
+            category: 'PRINCIPAL',
+            role: 'PRINCIPAL',
+            hasClerkAccess: true,
+            active: true,
+          };
+          await setDoc(userDocRef, deepSanitizeFirestore(fallbackProfile), { merge: true }).catch(() => {});
+          setCurrentUserProfile(fallbackProfile);
+          setActiveView('principal');
         } else {
-          // Account exists in Firebase Auth but has NO authorized record in /users created by Principal or Master Data!
-          setAccessDeniedReason('NOT_REGISTERED');
+          // Unlinked authenticated user -> launch Multi-School Onboarding flow!
+          setNeedsOnboarding(true);
           setCurrentUserProfile(null);
         }
       } catch (err) {
@@ -358,7 +403,9 @@ export default function App() {
     try {
       await signOut(auth);
       setAccessDeniedReason(null);
+      setNeedsOnboarding(false);
       setCurrentUserProfile(null);
+      setSchoolProfile(null);
     } catch (err) {
       console.error('Logout error:', err);
     }
@@ -372,14 +419,14 @@ export default function App() {
         </div>
         <div className="flex items-center space-x-2 text-sm">
           <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-          <span>正在连接云端出勤系统 (Sistem Kehadiran)...</span>
+          <span>Menyambung ke Portal iSEPADU AI...</span>
         </div>
       </div>
     );
   }
 
-  // Access Denied Screen (Unregistered or Deactivated)
-  if (firebaseUser && accessDeniedReason) {
+  // Deactivated Screen
+  if (firebaseUser && accessDeniedReason === 'DEACTIVATED') {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
         <Header
@@ -391,29 +438,15 @@ export default function App() {
         <main className="flex-1 flex items-center justify-center p-4">
           <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 text-center shadow-2xl">
             <div className="w-16 h-16 rounded-2xl bg-rose-950/60 border border-rose-800/60 text-rose-400 flex items-center justify-center mx-auto mb-4">
-              {accessDeniedReason === 'DEACTIVATED' ? (
-                <UserX className="w-8 h-8" />
-              ) : (
-                <ShieldAlert className="w-8 h-8" />
-              )}
+              <UserX className="w-8 h-8" />
             </div>
 
             <h3 className="text-xl font-bold text-white mb-2">
-              {accessDeniedReason === 'DEACTIVATED'
-                ? '账号已被停用 (Akaun Dinyahaktifkan)'
-                : '未获校方授权建档 (Akaun Belum Disahkan)'}
+              账号已被停用 (Akaun Dinyahaktifkan)
             </h3>
 
             <p className="text-xs sm:text-sm text-slate-400 leading-relaxed mb-6">
-              {accessDeniedReason === 'DEACTIVATED' ? (
-                <>
-                  您的教职员账号（{firebaseUser.email}）已被校长暂时停用，目前无法进行打卡或查阅出勤。如需恢复打卡权限，请联系校方管理员。
-                </>
-              ) : (
-                <>
-                  当前登录账号（{firebaseUser.email}）尚未由校长在出勤系统后台建立档案。本系统禁止自行公开注册，请联系校长开通账号后方可打卡。
-                </>
-              )}
+              Akaun kakitangan anda ({firebaseUser.email}) telah dinyahaktifkan oleh pihak pentadbir sekolah. Sila hubungi Guru Besar atau Pentadbir sekolah anda untuk pengaktifan semula.
             </p>
 
             <button
@@ -421,7 +454,7 @@ export default function App() {
               className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium rounded-xl transition flex items-center justify-center space-x-2"
             >
               <LogOut className="w-4 h-4" />
-              <span>退出登录 / Log Keluar</span>
+              <span>Log Keluar</span>
             </button>
           </div>
         </main>
@@ -429,7 +462,34 @@ export default function App() {
     );
   }
 
-  // If not logged in, display Login and Initial Setup view
+  // Multi-School Onboarding (authenticated user without an assigned school profile yet)
+  if (firebaseUser && needsOnboarding && !currentUserProfile) {
+    return (
+      <SchoolOnboardingView
+        firebaseUser={firebaseUser}
+        onCompleted={(profile, sp) => {
+          setNeedsOnboarding(false);
+          setCurrentUserProfile(profile);
+          if (sp) {
+            setSchoolProfile(sp);
+            setSchoolSettings({
+              schoolCode: sp.schoolCode,
+              schoolName: sp.schoolName,
+              schoolLogo: sp.logoUrl || '',
+              logoUrl: sp.logoUrl || '',
+              slogan: sp.slogan || DEFAULT_SCHOOL_SLOGAN,
+              adminEmails: sp.adminEmails || [],
+              principalEmail: sp.principalEmail || profile.email || '',
+              principalUid: sp.principalUid || profile.uid,
+            });
+          }
+        }}
+        onLogout={handleLogout}
+      />
+    );
+  }
+
+  // Not logged in -> LoginView
   if (!firebaseUser || !currentUserProfile) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
@@ -450,11 +510,29 @@ export default function App() {
   }
 
   return (
-    <ISEPADUShell
-      currentUser={currentUserProfile}
+    <SchoolTenantProvider
+      schoolCode={activeSchoolCode}
       schoolSettings={schoolSettings}
-      onUpdateSchoolSettings={(updated) => setSchoolSettings(updated)}
-      onLogout={handleLogout}
-    />
+      schoolProfile={schoolProfile}
+    >
+      <ISEPADUShell
+        currentUser={currentUserProfile}
+        schoolSettings={schoolSettings}
+        onUpdateSchoolSettings={(updated) => {
+          setSchoolSettings(updated);
+          if (updated) {
+            setSchoolProfile((prev) => ({
+              ...(prev || { schoolCode: normalizeActiveSchoolCode(activeSchoolCode), schoolName: updated.schoolName }),
+              schoolCode: normalizeActiveSchoolCode(updated.schoolCode || activeSchoolCode),
+              schoolName: updated.schoolName,
+              logoUrl: updated.schoolLogo || updated.logoUrl || prev?.logoUrl || '',
+              slogan: updated.slogan || prev?.slogan || DEFAULT_SCHOOL_SLOGAN,
+              adminEmails: updated.adminEmails || prev?.adminEmails || [],
+            }));
+          }
+        }}
+        onLogout={handleLogout}
+      />
+    </SchoolTenantProvider>
   );
 }

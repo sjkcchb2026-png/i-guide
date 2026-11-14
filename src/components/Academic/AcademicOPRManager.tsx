@@ -11,6 +11,8 @@ import {
   orderBy 
 } from 'firebase/firestore';
 import { UserProfile, SchoolSettings } from '../../types';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 import { 
   FileText, 
   Plus, 
@@ -28,6 +30,7 @@ export type AcademicOPRType = 'AKTIVITI' | 'PLC';
 
 export interface AcademicOPRRecord {
   id: string;
+  schoolCode?: string;
   reportType: AcademicOPRType; // 'AKTIVITI' | 'PLC'
   plcTool?: string; // e.g. "Lesson Study", "Teacher Sharing Sessions", etc.
   bidang: string; // e.g. "Prasekolah (Pengurusan)" or "Panitia Sains"
@@ -95,6 +98,7 @@ function compressImage(dataUrl: string, maxWidth = 800, quality = 0.7): Promise<
 }
 
 export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSettings }) => {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName } = useSchoolTenant();
   const [records, setRecords] = useState<AcademicOPRRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [filterType, setFilterType] = useState<'ALL' | AcademicOPRType>('ALL');
@@ -129,7 +133,12 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
       const q = query(collection(db, 'academic_opr_reports'), orderBy('tarikh', 'desc'));
       const snap = await getDocs(q);
       const list: AcademicOPRRecord[] = [];
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() } as AcademicOPRRecord));
+      snap.forEach((d) => {
+        const data = d.data();
+        if (belongsToSchool(data, activeSchoolCode)) {
+          list.push({ id: d.id, ...data } as AcademicOPRRecord);
+        }
+      });
       setRecords(list);
     } catch (err) {
       console.error('Failed to load Academic OPR:', err);
@@ -152,7 +161,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
       isMounted = false;
       unsub();
     };
-  }, []);
+  }, [activeSchoolCode]);
 
   // 打开新建表单
   const handleOpenCreate = (type: AcademicOPRType) => {
@@ -227,9 +236,10 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
 
     try {
       setIsSaving(true);
-      const docId = editingId || `opr_${Date.now()}`;
+      const docId = editingId || scopedDocId(activeSchoolCode, `opr_${Date.now()}`);
       const payload: AcademicOPRRecord = {
         id: docId,
+        schoolCode: activeSchoolCode,
         reportType,
         plcTool: reportType === 'PLC' ? plcTool : undefined,
         bidang: bidang.trim(),
@@ -790,7 +800,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
             {/* Header Table */}
             <div className="text-center font-bold pb-4 border-b border-slate-300 mb-4">
               <h2 className="text-base uppercase tracking-tight">
-                {schoolSettings?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN'}
+                {schoolSettings?.schoolName || tenantSchoolName}
               </h2>
               <h3 className="text-sm font-black uppercase text-slate-800">
                 LAPORAN SATU MUKA SURAT (ONE PAGE REPORTING - OPR)
@@ -949,7 +959,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
                 <p className="font-bold uppercase underline">
                   {schoolSettings?.principalEmail ? 'GURU BESAR' : 'GURU BESAR / PK PENTADBIRAN'}
                 </p>
-                <p className="text-slate-500">{schoolSettings?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN'}</p>
+                <p className="text-slate-500">{schoolSettings?.schoolName || tenantSchoolName}</p>
               </div>
             </div>
 

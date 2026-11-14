@@ -97,11 +97,15 @@ export const Header: React.FC<HeaderProps> = ({
           
           {/* School Name & System Title */}
           <div className="flex items-center space-x-3">
-            <SchoolLogo className="w-10 h-10 sm:w-12 sm:h-12" src={schoolSettings?.schoolLogo} />
+            <SchoolLogo
+              className="w-10 h-10 sm:w-12 sm:h-12"
+              src={schoolSettings?.schoolLogo || schoolSettings?.logoUrl}
+              schoolCode={schoolSettings?.schoolCode}
+            />
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="font-bold text-base sm:text-lg text-white leading-tight">
-                  {schoolSettings?.schoolName || 'Sistem Kehadiran Sekolah'}
+                  {schoolSettings?.schoolName || 'iSEPADU AI Portal Sekolah'}
                 </h1>
                 {schoolSettings?.schoolCode && (
                   <span className="hidden sm:inline-block px-2 py-0.5 text-xs bg-blue-900/60 text-blue-200 border border-blue-700/50 rounded font-mono">
@@ -110,7 +114,7 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
               </div>
               <p className="text-xs text-slate-400">
-                学校出勤网页系统 <span className="text-slate-500">|</span> Sistem Kehadiran Guru & AKP
+                {schoolSettings?.slogan || 'Sistem Pengurusan Sekolah Bersepadu'}
               </p>
             </div>
           </div>

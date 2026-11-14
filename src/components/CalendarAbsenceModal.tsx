@@ -5,6 +5,8 @@ import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { ABSENCE_REASON_MAP, DEFAULT_SARAWAK_HOLIDAYS_2026 } from '../utils/monthlyAnalysis';
 import { validateLeaveSubmission } from '../utils/checkoutRules';
 import { deepSanitizeFirestore } from '../utils/sanitizeFirestore';
+import { useSchoolTenant } from '../contexts/SchoolTenantContext';
+import { normalizeActiveSchoolCode, scopedDocId } from '../utils/schoolTenant';
 import { Calendar, UserX, Plus, Trash2, X, AlertCircle, CheckCircle, ShieldCheck } from 'lucide-react';
 
 interface CalendarAbsenceModalProps {
@@ -25,6 +27,8 @@ export const CalendarAbsenceModal: React.FC<CalendarAbsenceModalProps> = ({
   calendarDays,
   absenceRecords,
 }) => {
+  const tenant = useSchoolTenant();
+  const activeSchoolCode = normalizeActiveSchoolCode(tenant.schoolCode);
   const [activeSubTab, setActiveSubTab] = useState<'absence' | 'calendar'>('absence');
 
   // Absence Form state
@@ -71,6 +75,7 @@ export const CalendarAbsenceModal: React.FC<CalendarAbsenceModalProps> = ({
 
       await setDoc(doc(db, 'absence_records', recordId), deepSanitizeFirestore({
         id: recordId,
+        schoolCode: activeSchoolCode,
         userId: staff.uid,
         userName: staff.name,
         userEmail: staff.email,
@@ -118,8 +123,10 @@ export const CalendarAbsenceModal: React.FC<CalendarAbsenceModalProps> = ({
 
     try {
       setIsSubmittingHoliday(true);
-      const calId = `cal_${holidayDate}`;
+      const calId = scopedDocId(activeSchoolCode, `cal_${holidayDate}`);
       await setDoc(doc(db, 'school_calendar', calId), deepSanitizeFirestore({
+        id: calId,
+        schoolCode: activeSchoolCode,
         date: holidayDate,
         name: holidayName.trim(),
         isSchoolDay: holidayType === 'SPECIAL_DUTY',
@@ -143,7 +150,7 @@ export const CalendarAbsenceModal: React.FC<CalendarAbsenceModalProps> = ({
   const handleDeleteHoliday = async (date: string, name: string) => {
     if (!confirm(`确定要移除 ${date} (${name}) 的校历日历设定吗？`)) return;
     try {
-      await deleteDoc(doc(db, 'school_calendar', `cal_${date}`));
+      await deleteDoc(doc(db, 'school_calendar', scopedDocId(activeSchoolCode, `cal_${date}`)));
       setFeedback({ type: 'success', message: `已移除 ${date} 的校历设定。` });
     } catch (err: any) {
       console.error('Delete calendar failed:', err);

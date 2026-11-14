@@ -29,6 +29,8 @@ import {
 import { db, auth } from '../firebase';
 import { UserProfile, SchoolSettings } from '../types';
 import { SmartDatePicker } from './Common/SmartDatePicker';
+import { useSchoolTenant } from '../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../utils/schoolTenant';
 
 export type SuratDomain = 'PENTADBIRAN' | 'KURIKULUM' | 'HEM' | 'KOKURIKULUM';
 
@@ -226,7 +228,8 @@ export const ARAHAN_TINDAKAN_META: Record<
  */
 export function resolveAutoCopiedSupervisorIds(
   domain: SuratDomain,
-  allStaff: TeacherProfile[]
+  allStaff: TeacherProfile[],
+  isLegacySchool: boolean = false
 ): string[] {
   const supervisorIds = new Set<string>();
 
@@ -241,7 +244,7 @@ export function resolveAutoCopiedSupervisorIds(
       subRole === 'GB' ||
       cat === 'PRINCIPAL' ||
       pos.includes('GURU BESAR') ||
-      name.includes('TEO YANG MING')
+      (isLegacySchool && name.includes('TEO YANG MING'))
     ) {
       supervisorIds.add(s.teacherId);
     }
@@ -309,6 +312,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
   addToast: propAddToast,
   onNavigateToRelief,
 }) => {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName, isLegacySchool } = useSchoolTenant();
   const [internalTeachers, setInternalTeachers] = useState<TeacherProfile[]>([]);
   const [internalAssignments, setInternalAssignments] = useState<SchoolAcademicAssignment[]>([]);
   const [localToast, setLocalToast] = useState<{ msg: string; type: 'info' | 'success' | 'warning' } | null>(null);
@@ -343,9 +347,10 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
 
         const map = new Map<string, TeacherProfile>();
 
-        // Load personnel
+        // Load personnel scoped to active school
         personnelSnap.docs.forEach((d) => {
           const data = d.data();
+          if (!belongsToSchool(data, activeSchoolCode)) return;
           map.set(d.id, {
             teacherId: d.id,
             fullName: data.name || data.fullName || d.id,
@@ -359,19 +364,11 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           });
         });
 
-        // Supplement from users (deduplicated by doc ID or normalized email)
-        const findByEmail = (em?: string) => {
-          const clean = String(em || '').toLowerCase().trim();
-          if (!clean) return undefined;
-          for (const val of map.values()) {
-            if (String(val.email || '').toLowerCase().trim() === clean) return val;
-          }
-          return undefined;
-        };
-
+        // Supplement from users scoped to active school
         usersSnap.docs.forEach((d) => {
           const data = d.data();
-          const existing = map.get(d.id) || findByEmail(data.email);
+          if (!belongsToSchool(data, activeSchoolCode)) return;
+          const existing = map.get(d.id);
           if (!existing) {
             map.set(d.id, {
               teacherId: d.id,
@@ -390,9 +387,10 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           }
         });
 
-        // Supplement from teacher_profiles
+        // Supplement from teacher_profiles scoped to active school
         teacherProfilesSnap.docs.forEach((d) => {
           const data = d.data();
+          if (!belongsToSchool(data, activeSchoolCode)) return;
           const existing = map.get(d.id);
           if (existing) {
             if (data.subRole && !existing.subRole) existing.subRole = data.subRole;
@@ -412,7 +410,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [propTeachers]);
+  }, [propTeachers, activeSchoolCode]);
 
   // Auto-hydrate academic assignments for relief schedule routing
   useEffect(() => {
@@ -428,6 +426,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
         const list: SchoolAcademicAssignment[] = [];
         snap.docs.forEach((d) => {
           const data = d.data();
+          if (!belongsToSchool(data, activeSchoolCode)) return;
           list.push({
             teacherId: data.teacherId || data.teacherCode || '',
             classId: String(data.year || data.grade || data.classId || ''),
@@ -450,7 +449,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [propAssignments]);
+  }, [propAssignments, activeSchoolCode]);
 
   const allTeachers = propTeachers && propTeachers.length > 0 ? propTeachers : internalTeachers;
   const academicAssignments = propAssignments && propAssignments.length > 0 ? propAssignments : internalAssignments;
@@ -471,8 +470,8 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
   const [tarikhSurat, setTarikhSurat] = useState<string>(todayStr);
   const [tarikhTerima, setTarikhTerima] = useState<string>(todayStr);
   const [perkara, setPerkara] = useState<string>('');
-  const [noRujukanLuar, setNoRujukanLuar] = useState<string>('PPDMKH.');
-  const [noFailSekolah, setNoFailSekolah] = useState<string>('Sjkcch.');
+  const [noRujukanLuar, setNoRujukanLuar] = useState<string>(isLegacySchool ? 'PPDMKH.' : '');
+  const [noFailSekolah, setNoFailSekolah] = useState<string>(isLegacySchool ? 'Sjkcch.' : '');
   const [domain, setDomain] = useState<SuratDomain>('PENTADBIRAN');
 
   // The 5 Official Dispositions + Perlu Hadir / Laporan
@@ -489,7 +488,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
   const [tarikhHadirMula, setTarikhHadirMula] = useState<string>(todayStr);
   const [tarikhHadirTamat, setTarikhHadirTamat] = useState<string>(todayStr);
   const [masaHadir, setMasaHadir] = useState<string>('SEPANJANG_HARI');
-  const [lokasiHadir, setLokasiHadir] = useState<string>('PPD Mukah / PKG');
+  const [lokasiHadir, setLokasiHadir] = useState<string>(isLegacySchool ? 'PPD Mukah / PKG' : '');
   const [jenisKeberadaan, setJenisKeberadaan] = useState<'KURSUS' | 'URUSAN_RASMI'>('URUSAN_RASMI');
   const [perluJadualGanti, setPerluJadualGanti] = useState<boolean>(true);
   const [catatanLaporan, setCatatanLaporan] = useState<string>('');
@@ -505,7 +504,12 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
       q,
       (snap) => {
         const list: SuratMasukRecord[] = [];
-        snap.forEach((d) => list.push({ id: d.id, ...(d.data() as Omit<SuratMasukRecord, 'id'>) }));
+        snap.forEach((d) => {
+          const data = d.data() as Omit<SuratMasukRecord, 'id'>;
+          if (belongsToSchool(data, activeSchoolCode)) {
+            list.push({ id: d.id, ...data });
+          }
+        });
         setRecords(list);
         setLoading(false);
       },
@@ -515,7 +519,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
       }
     );
     return () => unsub();
-  }, []);
+  }, [activeSchoolCode]);
 
   const filteredRecords = useMemo(() => {
     return records.filter((r) => {
@@ -583,7 +587,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
     try {
       setSaving(true);
       const batch = writeBatch(db);
-      const suratId = `surat_${Date.now()}`;
+      const suratId = scopedDocId(activeSchoolCode, `surat_${Date.now()}`);
       const bulanLabel = tarikhTerima.slice(0, 7);
 
       const isHadir = arahanTindakan === 'PERLU_HADIR' || actionMode === 'PERLU_HADIR' || actionMode === 'HADIR_DAN_LAPOR';
@@ -615,7 +619,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
       // If "Sila bincang dengan GB" or text explicitly mentions GB
       if (
         arahanTindakan === 'SILA_BINCANG_DENGAN_GB' ||
-        textToScan.includes('TEO YANG MING') ||
+        (isLegacySchool && textToScan.includes('TEO YANG MING')) ||
         textToScan.includes('GURU BESAR') ||
         textToScan.includes('GB')
       ) {
@@ -626,7 +630,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
             t.category === 'PRINCIPAL' ||
             (t as any).subRole === 'GB' ||
             (t.position || '').toUpperCase().includes('BESAR') ||
-            (t.fullName || '').toUpperCase().includes('TEO YANG MING')
+            (isLegacySchool && (t.fullName || '').toUpperCase().includes('TEO YANG MING'))
         );
         if (gbTeacher) {
           targetIdsSet.add(gbTeacher.teacherId);
@@ -639,7 +643,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
       const effectiveTargetTeacherIds = Array.from(targetIdsSet);
 
       // 3. Resolve Supervisors (GB + PK of the domain)
-      const supervisorTeacherIds = resolveAutoCopiedSupervisorIds(domain, activeTeachers);
+      const supervisorTeacherIds = resolveAutoCopiedSupervisorIds(domain, activeTeachers, isLegacySchool);
 
       const linkedMaklumanIds: string[] = [];
       const linkedUnavailabilityIds: string[] = [];
@@ -658,6 +662,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           doc(db, 'makluman_tasks', maklumanTaskId),
           cleanFirestoreData({
             id: maklumanTaskId,
+            schoolCode: activeSchoolCode,
             title: `${taskTitlePrefix} ${perkara.trim().toUpperCase()}`,
             description: `No. Ruj: ${noRujukanLuar} (${noFailSekolah}) | Arahan: ${currentMeta.label.toUpperCase()} | Tarikh Akhir: ${formatDotDate(tarikhAkhirTindakan)}`,
             domain: domain,
@@ -689,6 +694,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           doc(db, 'makluman_tasks', maklumanTaskId),
           cleanFirestoreData({
             id: maklumanTaskId,
+            schoolCode: activeSchoolCode,
             title: `[SILA BINCANG DENGAN GB] ${perkara.trim().toUpperCase()}`,
             description: `No. Ruj: ${noRujukanLuar} (${noFailSekolah}) | Guru Bertanggungjawab: ${finalTindakanLabel.replace(/\n/g, ', ')}`,
             domain: domain,
@@ -720,6 +726,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           doc(db, 'makluman_tasks', maklumanTaskId),
           cleanFirestoreData({
             id: maklumanTaskId,
+            schoolCode: activeSchoolCode,
             title: `[UNTUK DIPAMERKAN] ${perkara.trim().toUpperCase()}`,
             description: `No. Ruj: ${noRujukanLuar} (${noFailSekolah}) — Sila pamerkan di papan kenyataan sekolah untuk makluman umum.`,
             domain: domain,
@@ -751,6 +758,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           doc(db, 'makluman_tasks', maklumanHadirId),
           cleanFirestoreData({
             id: maklumanHadirId,
+            schoolCode: activeSchoolCode,
             title: `[HADIR] ${perkara.trim().toUpperCase()}`,
             description: `No. Ruj: ${noRujukanLuar} (${noFailSekolah}) | Tindakan: ${finalTindakanLabel.replace(/\n/g, ', ')}`,
             domain: domain,
@@ -782,6 +790,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
             cleanFirestoreData({
               id: noticeId,
               noticeId,
+              schoolCode: activeSchoolCode,
               teacherId: tId,
               startDate: tarikhHadirMula,
               endDate: tarikhHadirTamat || tarikhHadirMula,
@@ -817,6 +826,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
             doc(db, 'relief_alerts_from_surat', linkedReliefAlertId),
             cleanFirestoreData({
               id: linkedReliefAlertId,
+              schoolCode: activeSchoolCode,
               suratId,
               perkara: perkara.trim().toUpperCase(),
               noRujukanLuar,
@@ -840,6 +850,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           doc(db, 'makluman_tasks', maklumanLaporId),
           cleanFirestoreData({
             id: maklumanLaporId,
+            schoolCode: activeSchoolCode,
             title: `[HANTAR LAPORAN] ${perkara.trim().toUpperCase()}`,
             description: `Ruj. Surat: ${noRujukanLuar} (${noFailSekolah}) | Catatan: ${catatanLaporan || 'Sila hantar laporan sebelum tarikh akhir.'}`,
             domain: domain,
@@ -865,6 +876,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
       // 5. Build Master Surat Masuk Document Payload
       const recordPayload: Record<string, any> = {
         id: suratId,
+        schoolCode: activeSchoolCode,
         tarikhSurat,
         tarikhTerima,
         bulanTahunLabel: bulanLabel,
@@ -979,7 +991,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
       return;
     }
 
-    const schoolName = schoolProfile?.schoolName || 'SJK(C) CHUNG HUA BALINGIAN';
+    const schoolName = schoolProfile?.schoolName || tenantSchoolName;
     const deadlineText = rec.tarikhAkhirTindakan
       ? `⏰ *Tarikh Akhir Tindakan / Laporan:* ${formatDotDate(rec.tarikhAkhirTindakan)}`
       : '';
@@ -1580,7 +1592,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
                   type="text"
                   value={customTindakanText}
                   onChange={(e) => setCustomTindakanText(e.target.value)}
-                  placeholder="Atau taip nama pegawai khas (cth: DORIS TIONG SHU QI / TEO YANG MING)"
+                  placeholder="Atau taip nama pegawai khas (cth: Nama Guru Besar / Penolong Kanan)"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white font-medium"
                 />
               </div>

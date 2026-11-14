@@ -58,8 +58,9 @@ export interface TimetableClash {
  * Year 1 (Tahun 1): Includes dedicated 07:15 - 07:30 Program Membaca morning slot
  * PKAR: 15-minute slot immediately before Recess (auto-paired to pre-recess teacher)
  */
-export function getGradeDaySlots(grade: number, day: DayOfWeek): SlotTimeInfo[] {
-  const isT1 = grade === 1;
+export function getGradeDaySlots(grade: number, day: DayOfWeek, academicYear?: string): SlotTimeInfo[] {
+  const isKP2027Year1 = !academicYear || parseInt(academicYear, 10) >= 2027;
+  const isT1 = grade === 1 && isKP2027Year1;
   const isFriday = day === 'JUMAAT';
   const isMonTue = day === 'ISNIN' || day === 'SELASA';
 

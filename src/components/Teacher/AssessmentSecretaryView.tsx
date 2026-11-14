@@ -3,7 +3,9 @@ import React, { useState, useEffect } from 'react';
 import { collection, getDocs, addDoc, query, where, deleteDoc, doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db, auth } from '../../lib/firebase';
 import { Student, UserProfile } from '../../types';
-import { ACADEMIC_YEARS, DEFAULT_ACADEMIC_YEAR, CLASSES, SCHOOL_NAME_MS } from '../../constants';
+import { ACADEMIC_YEARS, DEFAULT_ACADEMIC_YEAR, CLASSES } from '../../constants';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 import SchoolLogo from '../SchoolLogo';
 import { FileUp, Users, Trash2, Search, Table as TableIcon, AlertCircle, Info, Download, Edit3, Plus } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -32,6 +34,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 export default function AssessmentSecretaryView() {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName } = useSchoolTenant();
   const [activeTab, setActiveTab] = useState<'students' | 'teachers'>('students');
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<any[]>([]);
@@ -78,6 +81,7 @@ export default function AssessmentSecretaryView() {
         student_id: editStudentId.trim(),
         class: editClass.trim(),
         year: Number(editYear),
+        schoolCode: activeSchoolCode,
       };
       if (editGender) updatedFields.gender = editGender;
       if (editRace) updatedFields.race = editRace;
@@ -86,8 +90,9 @@ export default function AssessmentSecretaryView() {
 
       // Kemas kini keahlian kokurikulum jika wujud
       try {
-        const kokoRef = doc(db, 'koko_memberships', editStudentId.trim());
+        const kokoRef = doc(db, 'koko_memberships', scopedDocId(activeSchoolCode, editStudentId.trim()));
         await setDoc(kokoRef, {
+          schoolCode: activeSchoolCode,
           name: editName.toUpperCase().trim(),
           class: editClass.trim(),
           academic_year: academicYear,
@@ -124,7 +129,8 @@ export default function AssessmentSecretaryView() {
         where('academic_year', '==', academicYear)
       );
       const snap = await getDocs(q);
-      if (!snap.empty) {
+      const duplicateExists = snap.docs.some((d) => belongsToSchool(d.data(), activeSchoolCode));
+      if (duplicateExists) {
         alert("Murid dengan ID / MyKad ini telah sedia ada untuk sesi akademik ini!");
         setAddingStudentState(false);
         return;
@@ -136,6 +142,7 @@ export default function AssessmentSecretaryView() {
         class: addClass.trim(),
         year: Number(addYear),
         academic_year: academicYear,
+        schoolCode: activeSchoolCode,
       };
       if (addGender) studentData.gender = addGender;
       if (addRace) studentData.race = addRace;
@@ -144,8 +151,9 @@ export default function AssessmentSecretaryView() {
 
       // Sediakan default koko membership
       try {
-        const kokoRef = doc(db, 'koko_memberships', addStudentId.trim());
+        const kokoRef = doc(db, 'koko_memberships', scopedDocId(activeSchoolCode, addStudentId.trim()));
         await setDoc(kokoRef, {
+          schoolCode: activeSchoolCode,
           student_id: addStudentId.trim(),
           name: addName.toUpperCase().trim(),
           class: addClass.trim(),
@@ -179,11 +187,11 @@ export default function AssessmentSecretaryView() {
 
   useEffect(() => {
     fetchStudents();
-  }, [selectedYear, academicYear]);
+  }, [selectedYear, academicYear, activeSchoolCode]);
 
   useEffect(() => {
     fetchTeachers();
-  }, []);
+  }, [activeSchoolCode]);
 
   const fetchStudents = async () => {
     setLoading(true);
@@ -195,7 +203,9 @@ export default function AssessmentSecretaryView() {
       );
 
       const snapshot = await getDocs(q);
-      const studentList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Student));
+      const studentList = snapshot.docs
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .map(doc => ({ id: doc.id, ...doc.data() } as Student));
       setStudents(studentList.sort((a, b) => a.name.localeCompare(b.name)));
     } catch (error) {
       console.error(error);
@@ -208,7 +218,9 @@ export default function AssessmentSecretaryView() {
     try {
       const q = collection(db, 'teachers');
       const snapshot = await getDocs(q);
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      const list = snapshot.docs
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .map(doc => ({ id: doc.id, ...doc.data() } as any));
       setTeachers(list.sort((a, b) => a.name.localeCompare(b.name)));
     } catch (error) {
       console.error(error);
@@ -240,12 +252,14 @@ export default function AssessmentSecretaryView() {
 
         console.log('Total baris dijumpai:', rows.length);
 
-        // Ambil semua murid sedia ada untuk mengelakkan ralat data bertindih
+        // Ambil semua murid sedia ada untuk sekolah aktif sahaja
         const existingSnap = await getDocs(query(
           collection(db, 'students'),
           where('academic_year', '==', academicYear)
         ));
-        const existingStudents = existingSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Student));
+        const existingStudents = existingSnap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(doc => ({ id: doc.id, ...doc.data() } as Student));
         
         const existingById = new Map<string, Student>();
         const existingByName = new Map<string, Student>();
@@ -384,6 +398,7 @@ export default function AssessmentSecretaryView() {
             class: finalClass,
             year: Number(finalYear),
             academic_year: academicYear,
+            schoolCode: activeSchoolCode,
           };
           if (finalGender) studentData.gender = finalGender;
           if (finalRace) studentData.race = finalRace;
@@ -406,11 +421,13 @@ export default function AssessmentSecretaryView() {
                   const uasaSnap = await getDocs(query(collection(db, 'uasa_results'), where('student_id', '==', oldSId)));
                   for (const uDoc of uasaSnap.docs) {
                     const uData = uDoc.data();
+                    if (!belongsToSchool(uData, activeSchoolCode)) continue;
                     const oldDocId = uDoc.id;
                     const newDocId = oldDocId.replace(oldSId, newSId);
                     
                     await setDoc(doc(db, 'uasa_results', newDocId), {
                       ...uData,
+                      schoolCode: activeSchoolCode,
                       student_id: newSId,
                       updatedAt: serverTimestamp()
                     });
@@ -425,11 +442,13 @@ export default function AssessmentSecretaryView() {
                   const pbdSnap = await getDocs(query(collection(db, 'pbd_results'), where('student_id', '==', oldSId)));
                   for (const pDoc of pbdSnap.docs) {
                     const pData = pDoc.data();
+                    if (!belongsToSchool(pData, activeSchoolCode)) continue;
                     const oldDocId = pDoc.id;
                     const newDocId = oldDocId.replace(oldSId, newSId);
                     
                     await setDoc(doc(db, 'pbd_results', newDocId), {
                       ...pData,
+                      schoolCode: activeSchoolCode,
                       student_id: newSId,
                       updatedAt: serverTimestamp()
                     });
@@ -444,11 +463,13 @@ export default function AssessmentSecretaryView() {
                   const kokoSnap = await getDocs(query(collection(db, 'koko_memberships'), where('student_id', '==', oldSId)));
                   for (const kDoc of kokoSnap.docs) {
                     const kData = kDoc.data();
+                    if (!belongsToSchool(kData, activeSchoolCode)) continue;
                     const oldDocId = kDoc.id;
                     const newDocId = oldDocId.replace(oldSId, newSId);
                     
                     await setDoc(doc(db, 'koko_memberships', newDocId), {
                       ...kData,
+                      schoolCode: activeSchoolCode,
                       student_id: newSId,
                     });
                     await deleteDoc(kDoc.ref);
@@ -459,8 +480,9 @@ export default function AssessmentSecretaryView() {
               } else {
                 // Keep koko memberships up to date if student_id was same
                 try {
-                  const kokoRef = doc(db, 'koko_memberships', rawId);
+                  const kokoRef = doc(db, 'koko_memberships', scopedDocId(activeSchoolCode, rawId));
                   await setDoc(kokoRef, {
+                    schoolCode: activeSchoolCode,
                     name: rawName.toUpperCase(),
                     class: finalClass,
                     academic_year: academicYear,
@@ -602,7 +624,8 @@ export default function AssessmentSecretaryView() {
           const teacherData = {
             name: rawName.toUpperCase(),
             ic: rawIc,
-            email: rawEmail
+            email: rawEmail,
+            schoolCode: activeSchoolCode,
           };
           
           try {
@@ -663,7 +686,8 @@ export default function AssessmentSecretaryView() {
           name: s.name,
           class: s.class,
           year: nextYear,
-          academic_year: nextSession
+          academic_year: nextSession,
+          schoolCode: activeSchoolCode,
         };
         return await addDoc(collection(db, 'students'), studentData);
       });
@@ -696,7 +720,7 @@ export default function AssessmentSecretaryView() {
           <SchoolLogo className="w-20 h-20" p="p-1" />
           <div>
             <div className="flex flex-col">
-              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 leading-none">{SCHOOL_NAME_MS}</h4>
+              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 leading-none">{tenantSchoolName}</h4>
               <h1 className="text-3xl font-black italic uppercase tracking-tighter text-slate-900 leading-none">Setiausaha Pentaksiran</h1>
             </div>
             <p className="text-slate-500 font-medium mt-2">

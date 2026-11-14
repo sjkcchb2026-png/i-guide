@@ -7,6 +7,7 @@ import {
 } from './types';
 import { SubjectAllocationRow } from './SchoolTimetableMatrix';
 import { Printer, GraduationCap, Clock, Award } from 'lucide-react';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 
 interface ClassTimetableViewProps {
   schedule: ScheduleGrid;
@@ -23,14 +24,17 @@ interface ClassTimetableViewProps {
 export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   schedule,
   academicYear,
-  schoolName = 'SJK (C) CHUNG HUA BALINGIAN',
-  schoolCode = 'YCC3404',
+  schoolName: propSchoolName,
+  schoolCode: propSchoolCode,
   classTeachers,
   matrixData,
   displayMode,
   teacherMapping,
   onUpdateSchedule,
 }) => {
+  const tenant = useSchoolTenant();
+  const schoolName = propSchoolName || tenant.schoolName;
+  const schoolCode = propSchoolCode || tenant.schoolCode;
   const [selectedGrade, setSelectedGrade] = useState<number>(1);
 
   const isKP = selectedGrade === 1 && parseInt(academicYear, 10) >= 2027;
@@ -145,7 +149,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
             <thead>
               <tr className="bg-slate-100 text-slate-800 font-black text-center border-b border-slate-400">
                 <th className="p-3 border border-slate-400 w-24">Hari / Waktu</th>
-                {getGradeDaySlots(selectedGrade, 'ISNIN').map((s) => (
+                {getGradeDaySlots(selectedGrade, 'ISNIN', academicYear).map((s) => (
                   <th
                     key={s.slotId}
                     className={`p-2 border border-slate-400 ${
@@ -162,8 +166,8 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-300 font-mono text-center">
               {DAYS_OF_WEEK.map((day) => {
-                const headerSlots = getGradeDaySlots(selectedGrade, 'ISNIN');
-                const daySlots = getGradeDaySlots(selectedGrade, day);
+                const headerSlots = getGradeDaySlots(selectedGrade, 'ISNIN', academicYear);
+                const daySlots = getGradeDaySlots(selectedGrade, day, academicYear);
                 return (
                   <tr key={day} className="hover:bg-slate-50 transition">
                     <td className="p-3 border border-slate-400 font-sans font-black text-slate-900 bg-slate-50 text-left">

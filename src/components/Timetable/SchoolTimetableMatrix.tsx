@@ -5,6 +5,18 @@ import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
 import { PersonnelProfile } from '../../types';
 import { isTeacherForTimetable } from '../../utils/checkoutRules';
 import { OFFICIAL_TEACHERS, generateTeacherShortCode } from '../../constants/officialRoster';
+import {
+  getDefaultClassTeachers,
+  hasAnyTeacherAssigned,
+  hydrateMatrixTeachers,
+} from '../../constants/defaultCurriculumMatrix';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import {
+  belongsToSchool,
+  isLegacyDefaultSchool,
+  normalizeActiveSchoolCode,
+  scopedDocId,
+} from '../../utils/schoolTenant';
 import { 
   Users, 
   Save, 
@@ -29,11 +41,19 @@ export interface SubjectAllocationRow {
 
 interface SchoolTimetableMatrixProps {
   activeAcademicYear?: string;
+  schoolCode?: string;
+  onMatrixSaved?: (rows: SubjectAllocationRow[], classTeachers: Record<number, string>, year: string) => void;
 }
 
 export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
   activeAcademicYear = '2027',
+  schoolCode: propSchoolCode,
+  onMatrixSaved,
 }) => {
+  const tenant = useSchoolTenant();
+  const activeSchoolCode = normalizeActiveSchoolCode(propSchoolCode || tenant.schoolCode);
+  const isLegacySchool = isLegacyDefaultSchool(activeSchoolCode);
+
   const [selectedYear, setSelectedYear] = useState<string>(activeAcademicYear);
   const [displayMode, setDisplayMode] = useState<'NUMBER' | 'CODE'>('CODE');
   const [personnelList, setPersonnelList] = useState<PersonnelProfile[]>([]);
@@ -47,10 +67,10 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     }
   }, [activeAcademicYear]);
 
-  // 级任老师 (T1 - T6) 默认全部放空
-  const [classTeachers, setClassTeachers] = useState<Record<number, string>>({
-    1: '', 2: '', 3: '', 4: '', 5: '', 6: '',
-  });
+  // 级任老师 (T1 - T6) 默认采用正式级任名册 (hanya untuk sekolah legasi YCC3404)
+  const [classTeachers, setClassTeachers] = useState<Record<number, string>>(() =>
+    getDefaultClassTeachers(isLegacySchool)
+  );
 
   // 判断某一年级在选定年份是否已采用 KP2027
   // 2027: T1 | 2028: T1-T2 | 2029: T1-T3 | 2030: T1-T4 | 2031: T1-T5 | 2032+: T1-T6
@@ -61,12 +81,12 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     return grade <= maxKP2027Grade;
   };
 
-  // 生成严格符合 KP2027 逐年推进规则的预设科目表（节数可自由微调，不锁死）
+  // 生成严格符合 KP2027 / KSSR 逐年推进规则的预设科目表（节数与默认教师自动预填且不锁死）
   const buildPresetRows = (yearStr: string): SubjectAllocationRow[] => {
     const kp = (g: number) => isGradeKP2027(yearStr, g);
     const emptyTeachers = () => ({ 1: '', 2: '', 3: '', 4: '', 5: '', 6: '' });
 
-    return [
+    const baseRows: SubjectAllocationRow[] = [
       // ================= 1. 共同核心科目 (KP2027 & KSSR Semakan 共有) =================
       {
         id: 'pn',
@@ -440,9 +460,10 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         teachers: emptyTeachers(),
       },
     ];
+    return hydrateMatrixTeachers(baseRows, yearStr, isLegacySchool);
   };
 
-  const presetRows = useMemo(() => buildPresetRows(selectedYear), [selectedYear]);
+  const presetRows = useMemo(() => buildPresetRows(selectedYear), [selectedYear, isLegacySchool]);
   const [matrixData, setMatrixData] = useState<SubjectAllocationRow[]>(presetRows);
 
   // 纯动态从 Firestore 读取 Master Data 教师名册（绝不使用任何硬编码假名册）
@@ -456,27 +477,29 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         if (pSnap && !pSnap.empty) {
           pSnap.forEach((d) => {
             const data = d.data();
-            if (isTeacherForTimetable(data)) {
+            if (belongsToSchool(data, activeSchoolCode) && isTeacherForTimetable(data)) {
               teachers.push({ id: d.id, ...data } as PersonnelProfile);
             }
           });
         }
 
-        // 融合官方名册（确保包括伊斯兰教教师 Muhammad Fahim Amar 及全部 14 位正规教师）
-        OFFICIAL_TEACHERS.forEach((ot) => {
-          const exists = teachers.some(
-            (p) =>
-              (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
-              (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
-          );
-          if (!exists) {
-            teachers.push(ot as any);
-          }
-        });
+        // 融合官方名册（仅限 legasi YCC3404）
+        if (isLegacySchool) {
+          OFFICIAL_TEACHERS.forEach((ot) => {
+            const exists = teachers.some(
+              (p) =>
+                (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
+                (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
+            );
+            if (!exists) {
+              teachers.push(ot as any);
+            }
+          });
+        }
 
         if (isMounted) setPersonnelList(teachers);
 
-        const matrixDocRef = doc(db, 'school_timetables', `matrix_${selectedYear}`);
+        const matrixDocRef = doc(db, 'school_timetables', scopedDocId(activeSchoolCode, `matrix_${selectedYear}`));
         const matrixDocSnap = await getDoc(matrixDocRef);
         if (matrixDocSnap.exists()) {
           const data = matrixDocSnap.data();
@@ -500,15 +523,21 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                 ...rows.slice(idx + 1),
               ];
             }
+            if (!hasAnyTeacherAssigned(rows) && isLegacySchool) {
+              rows = hydrateMatrixTeachers(rows, selectedYear, true);
+            }
             setMatrixData(rows);
           } else if (isMounted) {
             setMatrixData(buildPresetRows(selectedYear));
           }
-          if (data.classTeachers && isMounted) {
+          if (data.classTeachers && Object.values(data.classTeachers).filter(Boolean).length > 0 && isMounted) {
             setClassTeachers(data.classTeachers);
+          } else if (isMounted) {
+            setClassTeachers(getDefaultClassTeachers(isLegacySchool));
           }
         } else if (isMounted) {
           setMatrixData(buildPresetRows(selectedYear));
+          setClassTeachers(getDefaultClassTeachers(isLegacySchool));
         }
       } catch (err) {
         console.warn('Could not load Master Data matrix:', err);
@@ -529,38 +558,42 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
       isMounted = false;
       unsub();
     };
-  }, [selectedYear]);
+  }, [selectedYear, activeSchoolCode, isLegacySchool]);
 
   // 动态生成教师 编号 (1..50) 与 缩写代号 (Kod Singkatan)
   const dynamicTeacherMapping = useMemo(() => {
     const sourceList: PersonnelProfile[] = [...personnelList];
 
-    // 确保包含全部 14 位官方教师
-    OFFICIAL_TEACHERS.forEach((ot) => {
-      const exists = sourceList.some(
-        (p) =>
-          (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
-          (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
-      );
-      if (!exists) {
-        sourceList.push({
-          id: ot.id,
-          name: ot.name,
-          email: ot.email,
-          category: ot.category,
-          role: ot.role,
-          position: ot.position,
-        } as any);
-      }
-    });
+    // 确保包含全部 14 位官方教师（仅限 YCC3404）
+    if (isLegacySchool) {
+      OFFICIAL_TEACHERS.forEach((ot) => {
+        const exists = sourceList.some(
+          (p) =>
+            (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
+            (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
+        );
+        if (!exists) {
+          sourceList.push({
+            id: ot.id,
+            name: ot.name,
+            email: ot.email,
+            category: ot.category,
+            role: ot.role,
+            position: ot.position,
+          } as any);
+        }
+      });
+    }
 
     const list = sourceList.slice(0, 50).map((t, idx) => {
       const num = idx + 1;
       let cleanName = (t.name || '').replace(/\s+/g, ' ').trim();
-      if (cleanName.toUpperCase().includes('FAHIM') && cleanName.toUpperCase().includes('AMAR')) {
-        cleanName = 'MUHAMMAD FAHIM AMAR';
-      } else if (cleanName.toUpperCase().includes('STEPHANIE') && cleanName.toUpperCase().includes('WONG')) {
-        cleanName = 'STEPHANIE WONG ENG HEE';
+      if (isLegacySchool) {
+        if (cleanName.toUpperCase().includes('FAHIM') && cleanName.toUpperCase().includes('AMAR')) {
+          cleanName = 'MUHAMMAD FAHIM AMAR';
+        } else if (cleanName.toUpperCase().includes('STEPHANIE') && cleanName.toUpperCase().includes('WONG')) {
+          cleanName = 'STEPHANIE WONG ENG HEE';
+        }
       }
 
       // 生成代号：4个词的名字只取前2个字母缩写（例如 Stephanie Wong Eng Hee -> SW）
@@ -575,7 +608,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
     });
 
     return { list };
-  }, [personnelList]);
+  }, [personnelList, isLegacySchool]);
 
   // 修改各科节数（完全不锁死）
   const handlePeriodChange = (rowId: string, grade: number, val: number) => {
@@ -679,9 +712,10 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
   const handleSaveAllocations = async () => {
     try {
       setSaveStatus('Menyimpan ke pangkalan data...');
-      const targetDoc = doc(db, 'school_timetables', `matrix_${selectedYear}`);
+      const targetDoc = doc(db, 'school_timetables', scopedDocId(activeSchoolCode, `matrix_${selectedYear}`));
       const payload = JSON.parse(
         JSON.stringify({
+          schoolCode: activeSchoolCode,
           academicYear: selectedYear,
           matrixData,
           classTeachers,
@@ -689,6 +723,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         })
       );
       await setDoc(targetDoc, payload, { merge: true });
+      onMatrixSaved?.(matrixData, classTeachers, selectedYear);
 
       setSaveStatus('Tersimpan dengan jayanya!');
       setTimeout(() => setSaveStatus(null), 3000);
@@ -1106,14 +1141,17 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                       <th className="p-2 w-8">No</th>
                       <th className="p-2 w-14">Guru</th>
                       <th className="p-2">Nama Penuh</th>
-                      <th className="p-2 text-right w-12">Waktu</th>
+                      <th className="p-2 text-right w-24">Waktu</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
                     {sortedTeachersByWorkload.map((t) => {
                       const workload = teacherWorkloads[t.code] || 0;
+                      const estMaxDaily = Math.min(8, Math.ceil(workload / 5));
+                      const isOver40 = workload > 40;
+                      const isOver35 = workload > 35 && workload <= 40;
+                      const isHeavyBalanced = workload > 30 && workload <= 35;
                       const isOptimal = workload >= 22 && workload <= 30;
-                      const isOverload = workload > 30;
 
                       return (
                         <tr
@@ -1125,7 +1163,13 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                             e.dataTransfer.effectAllowed = 'copyMove';
                           }}
                           className="hover:bg-slate-800/50 cursor-grab active:cursor-grabbing transition group"
-                          title="Tarik kod guru ini ke dalam petak jadual untuk menetapkan guru"
+                          title={
+                            isOver40
+                              ? `${t.code}: >40w Melebihi Had 8w/hari!`
+                              : isOver35
+                              ? `${t.code}: >35w Perlu >7w/hari`
+                              : 'Tarik kod guru ini ke dalam petak jadual untuk menetapkan guru'
+                          }
                         >
                           <td className="p-2 font-bold text-slate-400">{t.num}</td>
                           <td className="p-2 font-black text-indigo-300">
@@ -1140,17 +1184,33 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                             {t.name}
                           </td>
                           <td className="p-2 text-right">
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                isOverload
-                                  ? 'bg-rose-950 text-rose-300 border border-rose-800'
-                                  : isOptimal
-                                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                                  : 'bg-slate-800 text-slate-400'
-                              }`}
-                            >
-                              {workload}
-                            </span>
+                            <div className="inline-flex flex-col items-end gap-0.5">
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                  isOver40
+                                    ? 'bg-rose-950 text-rose-300 border border-rose-700'
+                                    : isOver35
+                                    ? 'bg-amber-950 text-amber-300 border border-amber-700'
+                                    : isHeavyBalanced
+                                    ? 'bg-sky-950 text-sky-300 border border-sky-700'
+                                    : isOptimal
+                                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                                    : 'bg-slate-800 text-slate-400'
+                                }`}
+                              >
+                                {workload}w · Max {estMaxDaily}w/h
+                              </span>
+                              {isOver40 && (
+                                <span className="text-[9px] font-sans font-bold text-rose-400">
+                                  &gt;40w: Melebihi Had 8w/hari!
+                                </span>
+                              )}
+                              {isOver35 && (
+                                <span className="text-[9px] font-sans font-bold text-amber-400">
+                                  &gt;35w: Perlu &gt;7w/hari
+                                </span>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );

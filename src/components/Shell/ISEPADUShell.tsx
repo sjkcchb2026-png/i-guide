@@ -2,6 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { UserProfile, SchoolSettings } from '../../types';
 import { db, auth } from '../../firebase';
 import { collection, getDocs, query } from 'firebase/firestore';
+import {
+  belongsToSchool,
+  DEFAULT_SCHOOL_NAME,
+  DEFAULT_SCHOOL_SLOGAN,
+  isLegacyDefaultSchool,
+  resolveRecordSchoolCode,
+} from '../../utils/schoolTenant';
 import { 
   LayoutDashboard, 
   BookOpen, 
@@ -76,16 +83,22 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
   const isPrincipal = currentUser.role === 'PRINCIPAL';
   const isAkp = currentUser.category === 'AKP';
   const isGuru = currentUser.category === 'GURU' || isPrincipal;
+  const activeSchoolCode = resolveRecordSchoolCode(currentUser);
+  const displaySchoolName =
+    schoolSettings?.schoolName || (isLegacyDefaultSchool(activeSchoolCode) ? DEFAULT_SCHOOL_NAME : activeSchoolCode);
+  const displaySchoolCode = schoolSettings?.schoolCode || activeSchoolCode;
+  const displaySlogan = schoolSettings?.slogan || DEFAULT_SCHOOL_SLOGAN;
+  const displayLogo = schoolSettings?.schoolLogo || schoolSettings?.logoUrl || '';
 
   useEffect(() => {
     let isMounted = true;
     async function loadStats() {
       try {
-        // 1. Fetch Authoritative Core Personnel count via Core API
+        // 1. Fetch Authoritative Core Personnel count via Core API scoped to schoolCode
         let coreCount = 0;
         try {
           const idToken = await auth.currentUser?.getIdToken();
-          const coreRes = await fetch('/api/core/personnel', {
+          const coreRes = await fetch(`/api/core/personnel?schoolCode=${encodeURIComponent(activeSchoolCode)}`, {
             headers: { Authorization: `Bearer ${idToken || ''}` }
           });
           if (coreRes.ok) {
@@ -98,19 +111,23 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
           // If Core API is unreachable, keep 0
         }
 
-        // 2. Fetch Attendance users and academic collections
+        // 2. Fetch Attendance users and academic collections filtered strictly by activeSchoolCode
         const [usersSnap, studentsSnap, pbdSnap, uasaSnap] = await Promise.all([
-          getDocs(query(collection(db, 'users'))).catch(() => ({ size: 0 })),
-          getDocs(query(collection(db, 'students'))).catch(() => ({ size: 0 })),
-          getDocs(query(collection(db, 'pbd_results'))).catch(() => ({ size: 0 })),
-          getDocs(query(collection(db, 'uasa_results'))).catch(() => ({ size: 0 })),
+          getDocs(query(collection(db, 'users'))).catch(() => null),
+          getDocs(query(collection(db, 'students'))).catch(() => null),
+          getDocs(query(collection(db, 'pbd_results'))).catch(() => null),
+          getDocs(query(collection(db, 'uasa_results'))).catch(() => null),
         ]);
+        const countScoped = (snap: any) =>
+          snap && snap.docs
+            ? snap.docs.filter((d: any) => belongsToSchool(d.data(), activeSchoolCode)).length
+            : 0;
         if (isMounted) {
           setPersonnelCount(coreCount);
-          setActiveAccountCount(usersSnap.size);
-          setStudentCount(studentsSnap.size);
-          setPbdCount(pbdSnap.size);
-          setUasaCount(uasaSnap.size);
+          setActiveAccountCount(countScoped(usersSnap));
+          setStudentCount(countScoped(studentsSnap));
+          setPbdCount(countScoped(pbdSnap));
+          setUasaCount(countScoped(uasaSnap));
           setLoadingStats(false);
         }
       } catch (err) {
@@ -122,7 +139,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [activeSchoolCode]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -143,7 +160,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                 }}
                 title={isPrincipal ? 'Klik untuk Tukar Logo Sekolah (Upload / URL)' : 'Kembali ke Dashboard'}
               >
-                <SchoolLogo className="w-10 h-10 sm:w-11 sm:h-11" src={schoolSettings?.schoolLogo} />
+                <SchoolLogo className="w-10 h-10 sm:w-11 sm:h-11" src={displayLogo} schoolCode={displaySchoolCode} />
                 {isPrincipal && (
                   <div className="absolute inset-0 bg-black/60 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white">
                     <Camera className="w-4 h-4 text-white" />
@@ -156,13 +173,13 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                     iSEPADU <span className="text-blue-500 font-extrabold">AI</span>
                   </span>
                   <span className="hidden sm:inline-block px-2 py-0.5 text-[10px] bg-blue-950 text-blue-300 border border-blue-800/80 rounded-md font-mono font-bold">
-                    {schoolSettings?.schoolCode || 'YCC3404'}
+                    {displaySchoolCode}
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-400 font-medium">
-                  {schoolSettings?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN'}
+                  {displaySchoolName}
                   <span className="text-slate-600 mx-1.5 hidden md:inline">|</span>
-                  <span className="hidden md:inline text-slate-500">Sistem Pengurusan Sekolah Bersepadu</span>
+                  <span className="hidden md:inline text-slate-500">{displaySlogan}</span>
                 </p>
               </div>
             </div>
@@ -387,7 +404,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                     Selamat Kembali, {currentUser.name}
                   </h2>
                   <p className="text-xs sm:text-sm text-slate-400 max-w-2xl mt-1">
-                    Portal pengurusan teras {schoolSettings?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN'}. Akses terus modul pentaksiran PBD, UASA, rekod kehadiran staf dan integriti data sekolah.
+                    Portal pengurusan teras {displaySchoolName}. Akses terus modul pentaksiran PBD, UASA, rekod kehadiran staf dan integriti data sekolah.
                   </p>
                 </div>
 
@@ -759,7 +776,9 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               <div className="animate-fade-in">
                 <TimetableSystem 
                   activeAcademicYear="2027" 
-                  initialTab={isPrincipal ? 'AGIHAN' : 'JG1_50'} 
+                  initialTab={isPrincipal ? 'AGIHAN' : 'JG1_50'}
+                  schoolCode={displaySchoolCode}
+                  schoolName={displaySchoolName}
                 />
               </div>
             )}
@@ -848,7 +867,12 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
         {activeWorkspace === 'master-data' && (
           <div className="animate-fade-in">
             {isPrincipal ? (
-              <MasterDataDashboard />
+              <MasterDataDashboard
+                schoolCode={displaySchoolCode}
+                schoolSettings={schoolSettings}
+                currentUser={currentUser}
+                onUpdateSchoolSettings={onUpdateSchoolSettings}
+              />
             ) : (
               <div className="bg-slate-900 border border-slate-800 rounded-3xl p-12 text-center max-w-md mx-auto my-12 shadow-2xl">
                 <AlertTriangle className="w-12 h-12 text-rose-400 mx-auto mb-4" />
@@ -872,8 +896,8 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
       {/* ================= FOOTER ================= */}
       <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">
         <p>
-          iSEPADU AI &copy; {new Date().getFullYear()} · {schoolSettings?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN'} ({schoolSettings?.schoolCode || 'YCC3404'})
-          {' · '}Sistem Pengurusan Sekolah Bersepadu
+          iSEPADU AI &copy; {new Date().getFullYear()} · {displaySchoolName} ({displaySchoolCode})
+          {' · '}{displaySlogan}
         </p>
       </footer>
 
@@ -881,10 +905,20 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
       <SchoolLogoModal
         isOpen={isLogoModalOpen}
         onClose={() => setIsLogoModalOpen(false)}
-        currentLogoUrl={schoolSettings?.schoolLogo || ''}
+        currentLogoUrl={displayLogo}
+        schoolCode={displaySchoolCode}
         onLogoUpdated={(newLogo) => {
-          if (schoolSettings && onUpdateSchoolSettings) {
-            onUpdateSchoolSettings({ ...schoolSettings, schoolLogo: newLogo });
+          if (onUpdateSchoolSettings) {
+            onUpdateSchoolSettings({
+              ...(schoolSettings || {
+                schoolName: displaySchoolName,
+                schoolCode: displaySchoolCode,
+                principalEmail: currentUser.email,
+                principalUid: currentUser.uid,
+              }),
+              schoolLogo: newLogo,
+              logoUrl: newLogo,
+            });
           }
         }}
       />

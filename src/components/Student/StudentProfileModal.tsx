@@ -25,6 +25,8 @@ import {
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { StudentMaster, Student, PbdResult, UasaResult, KokoMembership } from '../../types';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 
 interface StudentProfileModalProps {
   studentId: string | null;
@@ -41,6 +43,7 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
   preloadedStudent,
   academicYear = '2026',
 }) => {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName } = useSchoolTenant();
   const [activeTab, setActiveTab] = useState<'emergency' | 'bio' | 'academic' | 'koko'>('emergency');
   const [loading, setLoading] = useState<boolean>(false);
   const [studentMaster, setStudentMaster] = useState<StudentMaster | null>(null);
@@ -70,24 +73,26 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
       try {
         const targetId = studentId!;
         
-        // 1. Fetch Student Master record
+        // 1. Fetch Student Master record (scoped by activeSchoolCode with legacy fallback)
         let masterData: StudentMaster | null = null;
-        const masterRef = doc(db, 'student_master', targetId);
-        const masterSnap = await getDoc(masterRef);
+        const scopedMasterRef = doc(db, 'student_master', scopedDocId(activeSchoolCode, targetId));
+        const masterSnap = await getDoc(scopedMasterRef);
 
-        if (masterSnap.exists()) {
+        if (masterSnap.exists() && belongsToSchool(masterSnap.data(), activeSchoolCode)) {
           masterData = { student_id: masterSnap.id, ...masterSnap.data() } as StudentMaster;
         } else {
-          // Fallback: search by apdmId or icNumber
+          // Fallback: search by apdmId or icNumber within active school
           const qApdm = query(collection(db, 'student_master'), where('apdmId', '==', targetId));
           const snapApdm = await getDocs(qApdm);
-          if (!snapApdm.empty) {
-            masterData = { student_id: snapApdm.docs[0].id, ...snapApdm.docs[0].data() } as StudentMaster;
+          const matchedApdm = snapApdm.docs.find((d) => belongsToSchool(d.data(), activeSchoolCode));
+          if (matchedApdm) {
+            masterData = { student_id: matchedApdm.id, ...matchedApdm.data() } as StudentMaster;
           } else {
             const qIc = query(collection(db, 'student_master'), where('icNumber', '==', targetId.replace(/[^0-9]/g, '')));
             const snapIc = await getDocs(qIc);
-            if (!snapIc.empty) {
-              masterData = { student_id: snapIc.docs[0].id, ...snapIc.docs[0].data() } as StudentMaster;
+            const matchedIc = snapIc.docs.find((d) => belongsToSchool(d.data(), activeSchoolCode));
+            if (matchedIc) {
+              masterData = { student_id: matchedIc.id, ...matchedIc.data() } as StudentMaster;
             }
           }
         }
@@ -95,21 +100,22 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
         // 2. Fetch sessional enrollment (students collection)
         let enrollData: Student | null = null;
         const enrollId = `${targetId}_${academicYear.replace(/\//g, '-')}`;
-        const enrollRef = doc(db, 'students', enrollId);
+        const enrollRef = doc(db, 'students', scopedDocId(activeSchoolCode, enrollId));
         const enrollSnap = await getDoc(enrollRef);
 
-        if (enrollSnap.exists()) {
+        if (enrollSnap.exists() && belongsToSchool(enrollSnap.data(), activeSchoolCode)) {
           enrollData = { id: enrollSnap.id, ...enrollSnap.data() } as Student;
         } else {
-          // Search by student_id and academic_year
+          // Search by student_id and academic_year within active school
           const qEnroll = query(
             collection(db, 'students'),
             where('student_id', '==', targetId),
             where('academic_year', '==', academicYear)
           );
           const snapEnroll = await getDocs(qEnroll);
-          if (!snapEnroll.empty) {
-            enrollData = { id: snapEnroll.docs[0].id, ...snapEnroll.docs[0].data() } as Student;
+          const matchedEnroll = snapEnroll.docs.find((d) => belongsToSchool(d.data(), activeSchoolCode));
+          if (matchedEnroll) {
+            enrollData = { id: matchedEnroll.id, ...matchedEnroll.data() } as Student;
           }
         }
 
@@ -120,7 +126,9 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
           where('academic_year', '==', academicYear)
         );
         const pbdSnap = await getDocs(qPbd);
-        const pbdList = pbdSnap.docs.map(d => ({ id: d.id, ...d.data() } as PbdResult));
+        const pbdList = pbdSnap.docs
+          .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as PbdResult));
 
         const qUasa = query(
           collection(db, 'uasa_results'),
@@ -128,7 +136,9 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
           where('academic_year', '==', academicYear)
         );
         const uasaSnap = await getDocs(qUasa);
-        const uasaList = uasaSnap.docs.map(d => ({ id: d.id, ...d.data() } as UasaResult));
+        const uasaList = uasaSnap.docs
+          .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as UasaResult));
 
         // 4. Fetch Kokurikulum memberships
         const qKoko = query(
@@ -137,7 +147,9 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
           where('academicYear', '==', academicYear)
         );
         const kokoSnap = await getDocs(qKoko);
-        const kokoList = kokoSnap.docs.map(d => ({ id: d.id, ...d.data() } as KokoMembership));
+        const kokoList = kokoSnap.docs
+          .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as KokoMembership));
 
         if (isMounted) {
           setStudentMaster(masterData);
@@ -160,7 +172,7 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, studentId, academicYear]);
+  }, [isOpen, studentId, academicYear, activeSchoolCode]);
 
   if (!isOpen) return null;
 
@@ -191,7 +203,7 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
     if (!clean) return '';
     if (clean.startsWith('0')) clean = '6' + clean;
     else if (!clean.startsWith('60') && !clean.startsWith('6')) clean = '60' + clean;
-    return `https://wa.me/${clean}?text=${encodeURIComponent(`Salam Sejahtera, ini dari pihak SJK(C) Chung Hua Balingian berkenaan murid ${name}.`)}`;
+    return `https://wa.me/${clean}?text=${encodeURIComponent(`Salam Sejahtera, ini dari pihak ${tenantSchoolName} berkenaan murid ${name}.`)}`;
   };
 
   const copyAddressToClipboard = () => {

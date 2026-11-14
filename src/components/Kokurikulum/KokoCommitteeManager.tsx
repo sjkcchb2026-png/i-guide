@@ -19,6 +19,8 @@ import {
   StudentCommitteeRole 
 } from '../../types/kokurikulum';
 import * as XLSX from 'xlsx';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 
 interface Props {
   profile: UserProfile;
@@ -30,6 +32,7 @@ const DEFAULT_CLUBS = ['Kelab STEM & Robotik', 'Kelab Bahasa & Budaya', 'Kelab P
 const DEFAULT_SPORTS = ['Bola Tampar', 'Bola Keranjang', 'Badminton', 'Olahraga & Merentas Desa', 'Catur & Permainan Tradisional', 'Wushu'];
 
 export default function KokoCommitteeManager({ profile, role }: Props) {
+  const { schoolCode: activeSchoolCode } = useSchoolTenant();
   const [activeTab, setActiveTab] = useState<'committee' | 'members' | 'groups'>('committee');
   const [selectedCategory, setSelectedCategory] = useState<'uniform' | 'club' | 'sport'>('uniform');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
@@ -69,7 +72,9 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     // Groups
     unsubs.push(
       onSnapshot(collection(db, 'koko_groups'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoGroup));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as KokoGroup));
         setGroups(list);
       })
     );
@@ -77,7 +82,9 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     // Memberships
     unsubs.push(
       onSnapshot(collection(db, 'koko_memberships'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoMembership));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as KokoMembership));
         setMemberships(list);
       })
     );
@@ -85,7 +92,9 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     // Students
     unsubs.push(
       onSnapshot(collection(db, 'students'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as Student));
         setStudents(list);
       })
     );
@@ -94,9 +103,11 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     unsubs.push(
       onSnapshot(collection(db, 'koko_committees'), (snap) => {
         const map: Record<string, any> = {};
-        snap.docs.forEach(d => {
-          map[d.id] = d.data();
-        });
+        snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .forEach(d => {
+            map[d.id] = d.data();
+          });
         setCommittees(map);
       })
     );
@@ -105,26 +116,31 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     async function fetchPersonnel() {
       try {
         const pSnap = await getDocs(collection(db, 'personnel'));
-        if (!pSnap.empty) {
-          const list = pSnap.docs.map(d => ({
+        const scopedP = pSnap.docs.filter(d => belongsToSchool(d.data(), activeSchoolCode));
+        if (scopedP.length > 0) {
+          const list = scopedP.map(d => ({
             id: d.id,
             name: (d.data().name || d.data().nama || '').toUpperCase()
           })).filter(t => t.name.length > 0);
           setTeachers(list);
         } else {
           const tSnap = await getDocs(collection(db, 'teachers'));
-          if (!tSnap.empty) {
-            const list = tSnap.docs.map(d => ({
+          const scopedT = tSnap.docs.filter(d => belongsToSchool(d.data(), activeSchoolCode));
+          if (scopedT.length > 0) {
+            const list = scopedT.map(d => ({
               id: d.id,
               name: (d.data().name || '').toUpperCase()
             })).filter(t => t.name.length > 0);
             setTeachers(list);
           } else {
             const uSnap = await getDocs(collection(db, 'users'));
-            const list = uSnap.docs.map(d => ({
-              id: d.id,
-              name: (d.data().name || '').toUpperCase()
-            })).filter(t => t.name.length > 0);
+            const list = uSnap.docs
+              .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+              .map(d => ({
+                id: d.id,
+                name: (d.data().name || '').toUpperCase()
+              }))
+              .filter(t => t.name.length > 0);
             setTeachers(list);
           }
         }
@@ -139,7 +155,7 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     return () => {
       unsubs.forEach(u => u());
     };
-  }, []);
+  }, [activeSchoolCode]);
 
   // Filter groups by current category
   const categoryGroups = useMemo(() => {
@@ -165,7 +181,9 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
   // Current committee record for this group
   const currentCommitteeData = useMemo(() => {
     if (!selectedGroupId) return null;
-    return committees[selectedGroupId] || committees[currentGroup?.name || ''] || {
+    const scopedId = scopedDocId(activeSchoolCode, selectedGroupId);
+    const scopedName = currentGroup?.name ? scopedDocId(activeSchoolCode, currentGroup.name) : '';
+    return committees[scopedId] || committees[selectedGroupId] || (scopedName ? committees[scopedName] : null) || committees[currentGroup?.name || ''] || {
       ketuaGuruPenasihat: '',
       guruPenasihat: [],
       pengerusi: null,
@@ -176,7 +194,7 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
       penolongBendahari: null,
       ajkList: []
     };
-  }, [committees, selectedGroupId, currentGroup]);
+  }, [committees, selectedGroupId, currentGroup, activeSchoolCode]);
 
   // Members enrolled in current group
   const groupMembers = useMemo(() => {
@@ -220,7 +238,8 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
   // Teacher committee actions
   const handleAssignTeacher = async () => {
     if (!currentGroup || !selectedTeacherName) return;
-    const docId = currentGroup.id || currentGroup.name;
+    const rawGroupId = currentGroup.id || currentGroup.name;
+    const docId = scopedDocId(activeSchoolCode, rawGroupId);
     const data = { ...currentCommitteeData };
 
     if (selectedTeacherRole === 'Ketua Guru Penasihat') {
@@ -235,7 +254,8 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     try {
       await setDoc(doc(db, 'koko_committees', docId), {
         ...data,
-        groupId: docId,
+        schoolCode: activeSchoolCode,
+        groupId: rawGroupId,
         groupName: currentGroup.name,
         category: currentGroup.category,
         updatedAt: new Date().toISOString()
@@ -249,7 +269,7 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
 
   const handleRemoveTeacher = async (name: string, roleType: 'ketua' | 'penasihat') => {
     if (!currentGroup) return;
-    const docId = currentGroup.id || currentGroup.name;
+    const docId = scopedDocId(activeSchoolCode, currentGroup.id || currentGroup.name);
     const data = { ...currentCommitteeData };
 
     if (roleType === 'ketua') {
@@ -261,6 +281,7 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     try {
       await setDoc(doc(db, 'koko_committees', docId), {
         ...data,
+        schoolCode: activeSchoolCode,
         updatedAt: new Date().toISOString()
       }, { merge: true });
     } catch (err) {
@@ -271,7 +292,8 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
   // Student committee actions
   const handleAssignStudentRole = async () => {
     if (!currentGroup || !assignStudentId) return;
-    const docId = currentGroup.id || currentGroup.name;
+    const rawGroupId = currentGroup.id || currentGroup.name;
+    const docId = scopedDocId(activeSchoolCode, rawGroupId);
     const member = groupMembers.find(m => m.student_id === assignStudentId);
     if (!member) return;
 
@@ -301,7 +323,8 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     try {
       await setDoc(doc(db, 'koko_committees', docId), {
         ...data,
-        groupId: docId,
+        schoolCode: activeSchoolCode,
+        groupId: rawGroupId,
         groupName: currentGroup.name,
         category: currentGroup.category,
         updatedAt: new Date().toISOString()
@@ -324,7 +347,7 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
 
   const handleRemoveStudentRole = async (roleKey: string, studentId?: string) => {
     if (!currentGroup) return;
-    const docId = currentGroup.id || currentGroup.name;
+    const docId = scopedDocId(activeSchoolCode, currentGroup.id || currentGroup.name);
     const data = { ...currentCommitteeData };
 
     if (roleKey === 'ajk' && studentId) {
@@ -336,6 +359,7 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
     try {
       await setDoc(doc(db, 'koko_committees', docId), {
         ...data,
+        schoolCode: activeSchoolCode,
         updatedAt: new Date().toISOString()
       }, { merge: true });
     } catch (err) {
@@ -350,6 +374,7 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
       await setDoc(doc(collection(db, 'koko_groups')), {
         name: newGroupName.trim(),
         category: selectedCategory,
+        schoolCode: activeSchoolCode,
         createdAt: new Date().toISOString()
       });
       setNewGroupName('');

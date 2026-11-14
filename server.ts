@@ -240,27 +240,153 @@ export function loadOfficialStaffRoster(): any[] {
   }
 }
 
-// Helper: White-label ready school code resolver
-async function getRuntimeSchoolCode(): Promise<string> {
+// =========================================================================
+// MULTI-SCHOOL (MULTI-TENANT) ISOLATION HELPERS
+// Legacy docs without schoolCode/schoolId belong to 'YCC3404'.
+// =========================================================================
+const DEFAULT_SCHOOL_CODE = 'YCC3404';
+const DEFAULT_SCHOOL_NAME = 'SJK (C) CHUNG HUA BALINGIAN';
+const SUPER_ADMIN_EMAILS = ['sjkcchb2026@gmail.com', 'sean3919531@gmail.com'];
+
+function sanitizeSchoolCodeInput(code?: string | null): string {
+  if (!code || typeof code !== 'string') return '';
+  return code.trim().replace(/\s+/g, '').toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+}
+
+function normalizeSchoolCode(code?: string | null): string {
+  return sanitizeSchoolCodeInput(code) || DEFAULT_SCHOOL_CODE;
+}
+
+function resolveRecordSchoolCode(record?: { schoolCode?: string | null; schoolId?: string | null } | null): string {
+  const explicit = sanitizeSchoolCodeInput(record?.schoolCode || record?.schoolId);
+  return explicit || DEFAULT_SCHOOL_CODE;
+}
+
+function belongsToSchool(
+  record: { schoolCode?: string | null; schoolId?: string | null } | null | undefined,
+  activeSchoolCode?: string | null
+): boolean {
+  return resolveRecordSchoolCode(record) === normalizeSchoolCode(activeSchoolCode);
+}
+
+function isLegacyDefaultSchool(schoolCode?: string | null): boolean {
+  return normalizeSchoolCode(schoolCode) === DEFAULT_SCHOOL_CODE;
+}
+
+function scopedDocId(schoolCode: string | null | undefined, baseId: string): string {
+  const target = normalizeSchoolCode(schoolCode);
+  if (target === DEFAULT_SCHOOL_CODE) return baseId;
+  const prefix = `${target}__`;
+  return baseId.startsWith(prefix) ? baseId : `${prefix}${baseId}`;
+}
+
+function isSuperAdminEmail(email?: string | null): boolean {
+  const clean = String(email || '').toLowerCase().trim();
+  return SUPER_ADMIN_EMAILS.includes(clean);
+}
+
+async function fetchUserDataResilient(uid: string): Promise<any | null> {
+  try {
+    const docSnap = await adminDb.doc(`users/${uid}`).get();
+    if (docSnap.exists) return docSnap.data();
+  } catch {
+    const restDoc = await fetchDocumentViaFirestoreRest(`users/${uid}`);
+    if (restDoc.exists) return restDoc.data;
+  }
+  return null;
+}
+
+async function fetchSchoolProfileResilient(schoolCode?: string | null): Promise<{ exists: boolean; data: any | null; code: string }> {
+  const code = normalizeSchoolCode(schoolCode);
+  const schoolDocPath = `schools/${code}`;
+  const settingsDocPath = `school_settings/${scopedDocId(code, 'general')}`;
+
+  // 1. Check schools/{code}
+  try {
+    const snap = await adminDb.doc(schoolDocPath).get();
+    if (snap.exists) {
+      return { exists: true, data: { schoolCode: code, ...snap.data() }, code };
+    }
+  } catch {
+    const restSnap = await fetchDocumentViaFirestoreRest(schoolDocPath);
+    if (restSnap.exists && restSnap.data) {
+      return { exists: true, data: { schoolCode: code, ...restSnap.data }, code };
+    }
+  }
+
+  // 2. Fallback to school_settings/{scopedDocId(code, 'general')}
+  try {
+    const settingsSnap = await adminDb.doc(settingsDocPath).get();
+    if (settingsSnap.exists) {
+      return { exists: true, data: { schoolCode: code, ...settingsSnap.data() }, code };
+    }
+  } catch {
+    const restSettings = await fetchDocumentViaFirestoreRest(settingsDocPath);
+    if (restSettings.exists && restSettings.data) {
+      return { exists: true, data: { schoolCode: code, ...restSettings.data }, code };
+    }
+  }
+
+  return { exists: false, data: null, code };
+}
+
+async function resolveCallerSchoolCode(
+  req: Request,
+  caller?: { uid: string; email?: string; claims?: any } | null
+): Promise<string> {
+  const requestedRaw =
+    (typeof req.body?.activeSchoolCode === 'string' && req.body.activeSchoolCode) ||
+    (typeof req.body?.schoolCode === 'string' && req.body.schoolCode) ||
+    (typeof req.query?.schoolCode === 'string' && req.query.schoolCode) ||
+    '';
+  const requestedCode = sanitizeSchoolCodeInput(requestedRaw);
+
+  let userSchoolCode = '';
+  if (caller?.uid) {
+    const userData = await fetchUserDataResilient(caller.uid);
+    if (userData?.schoolCode || userData?.schoolId) {
+      userSchoolCode = resolveRecordSchoolCode(userData);
+    }
+  }
+
+  // SuperAdmin can target an explicitly requested school; regular users are locked to their assigned schoolCode
+  if (caller && isSuperAdminEmail(caller.email)) {
+    if (requestedCode) return requestedCode;
+    if (userSchoolCode) return userSchoolCode;
+  } else if (userSchoolCode) {
+    return userSchoolCode;
+  }
+
+  if (requestedCode) return requestedCode;
+  const claimsSchool = sanitizeSchoolCodeInput(caller?.claims?.schoolId);
+  if (claimsSchool) return claimsSchool;
+
+  return await getRuntimeSchoolCode();
+}
+
+// Helper: White-label & multi-tenant ready school code resolver
+async function getRuntimeSchoolCode(requestedCode?: string | null): Promise<string> {
+  const explicit = sanitizeSchoolCodeInput(requestedCode);
+  if (explicit) return explicit;
   try {
     try {
       const generalDoc = await adminDb.doc('school_settings/general').get();
       if (generalDoc.exists) {
         const data = generalDoc.data();
         if (data?.schoolCode && typeof data.schoolCode === 'string' && data.schoolCode.trim()) {
-          return data.schoolCode.trim().toUpperCase();
+          return normalizeSchoolCode(data.schoolCode);
         }
       }
     } catch {
       const restDoc = await fetchDocumentViaFirestoreRest('school_settings/general');
       if (restDoc.exists && restDoc.data?.schoolCode && typeof restDoc.data.schoolCode === 'string') {
-        return restDoc.data.schoolCode.trim().toUpperCase();
+        return normalizeSchoolCode(restDoc.data.schoolCode);
       }
     }
   } catch (err) {
     console.warn('Error reading school_settings/general, using default fallback:', err);
   }
-  return 'YCC3404';
+  return DEFAULT_SCHOOL_CODE;
 }
 
 // Helper: Decode Firebase ID Token payload (JWT segment 2)
@@ -340,106 +466,100 @@ async function verifyCallerAuth(req: Request, checkRevoked: boolean = true): Pro
   }
 }
 
-// Helper: Resolve canonical user document by docId, uid field, or normalized email
-async function resolveUserDocRef(uidOrDocId: string, email?: string) {
-  const directRef = adminDb.doc(`users/${uidOrDocId}`);
-  const directSnap = await directRef.get();
-  if (directSnap.exists) {
-    return { ref: directRef, snap: directSnap };
-  }
-  const byUidSnap = await adminDb.collection('users').where('uid', '==', uidOrDocId).limit(1).get();
-  if (!byUidSnap.empty) {
-    const d = byUidSnap.docs[0];
-    return { ref: d.ref, snap: d };
-  }
-  if (email) {
-    const cleanEmail = String(email).toLowerCase().trim();
-    if (cleanEmail) {
-      const byEmailSnap = await adminDb.collection('users').where('email', '==', cleanEmail).limit(1).get();
-      if (!byEmailSnap.empty) {
-        const d = byEmailSnap.docs[0];
-        return { ref: d.ref, snap: d };
-      }
-    }
-  }
-  return { ref: directRef, snap: directSnap };
-}
-
-// Helper: Check if caller is registered Principal AND user profile exists with active === true
-async function isCallerPrincipal(uid: string, callerClaims?: any): Promise<boolean> {
+// Helper: Check if caller is registered Principal AND belongs to targetSchoolCode
+async function isCallerPrincipal(uid: string, callerClaims?: any, targetSchoolCode?: string): Promise<boolean> {
   try {
-    // 1. Check verified token claims if provided (zero latency, zero network)
-    if (callerClaims?.isPrincipal === true) {
-      return true;
-    }
-
-    // 2. Check caller email against designated administrative emails
+    const targetCode = normalizeSchoolCode(targetSchoolCode || callerClaims?.schoolId || DEFAULT_SCHOOL_CODE);
     const callerEmail = String(callerClaims?.email || '').toLowerCase().trim();
-    if (callerEmail === 'sjkcchb2026@gmail.com' || callerEmail === 'sean3919531@gmail.com') {
+
+    // 1. Designated super-admins retain authority
+    if (isSuperAdminEmail(callerEmail)) {
       return true;
     }
 
-    // 3. Check school_settings/general authoritative principalUid (try adminDb, then resilient REST)
-    try {
-      const settingsDoc = await adminDb.doc('school_settings/general').get();
-      if (settingsDoc.exists && (settingsDoc.data()?.principalUid === uid || (callerEmail && settingsDoc.data()?.principalEmail === callerEmail))) {
-        return true;
-      }
-    } catch {
-      // adminDb IAM restricted in sandbox, fallback to Firestore REST
-      const restDoc = await fetchDocumentViaFirestoreRest('school_settings/general');
-      if (restDoc.exists && (restDoc.data?.principalUid === uid || (callerEmail && restDoc.data?.principalEmail === callerEmail))) {
+    // 2. Check canonical users/{uid} collection first to enforce school isolation
+    const userData = await fetchUserDataResilient(uid);
+    if (userData && !belongsToSchool(userData, targetCode)) {
+      // Caller belongs to a different school -> deny cross-school Principal access
+      return false;
+    }
+    if (userData?.active === true && (userData.role === 'principal' || userData.role === 'PRINCIPAL' || userData.category === 'PRINCIPAL')) {
+      return true;
+    }
+
+    // 3. Check verified token claims if school matches
+    if (callerClaims?.isPrincipal === true) {
+      const claimsSchool = sanitizeSchoolCodeInput(callerClaims?.schoolId);
+      if ((!claimsSchool && isLegacyDefaultSchool(targetCode)) || claimsSchool === targetCode) {
         return true;
       }
     }
 
-    // 4. Check canonical users/{uid} (or in-place matched doc by uid/email)
-    try {
-      const { snap: userDoc } = await resolveUserDocRef(uid, callerEmail);
-      if (userDoc.exists) {
-        const userData = userDoc.data();
-        if (userData?.active === true && (userData.role === 'principal' || userData.role === 'PRINCIPAL' || userData.category === 'PRINCIPAL')) {
-          return true;
-        }
-      }
-    } catch {
-      const restUser = await fetchDocumentViaFirestoreRest(`users/${uid}`);
-      if (restUser.exists && restUser.data?.active === true && (restUser.data.role === 'principal' || restUser.data.role === 'PRINCIPAL' || restUser.data.category === 'PRINCIPAL')) {
+    // 4. Check schools/{targetCode} profile (principalUid, principalEmail, adminEmails)
+    const schoolRes = await fetchSchoolProfileResilient(targetCode);
+    if (schoolRes.exists && schoolRes.data) {
+      const s = schoolRes.data;
+      const adminEmails = Array.isArray(s.adminEmails)
+        ? s.adminEmails.map((e: any) => String(e || '').toLowerCase().trim())
+        : [];
+      if (
+        s.principalUid === uid ||
+        (callerEmail && (String(s.principalEmail || '').toLowerCase().trim() === callerEmail || adminEmails.includes(callerEmail)))
+      ) {
         return true;
       }
     }
 
-    // 5. Legacy compatibility fallback for admins collection (try adminDb, then resilient REST)
+    // 5. Check school_settings/{scopedDocId(targetCode, 'general')}
+    const settingsPath = `school_settings/${scopedDocId(targetCode, 'general')}`;
+    try {
+      const settingsDoc = await adminDb.doc(settingsPath).get();
+      if (settingsDoc.exists && (settingsDoc.data()?.principalUid === uid || (callerEmail && String(settingsDoc.data()?.principalEmail || '').toLowerCase().trim() === callerEmail))) {
+        return true;
+      }
+    } catch {
+      const restDoc = await fetchDocumentViaFirestoreRest(settingsPath);
+      if (restDoc.exists && (restDoc.data?.principalUid === uid || (callerEmail && String(restDoc.data?.principalEmail || '').toLowerCase().trim() === callerEmail))) {
+        return true;
+      }
+    }
+
+    // 6. Legacy compatibility fallback for admins collection (scoped to targetCode)
     try {
       const adminDoc = await adminDb.doc(`admins/${uid}`).get();
-      if (adminDoc.exists && (adminDoc.data()?.role === 'PRINCIPAL' || adminDoc.data()?.role === 'SYSTEM_ADMIN' || adminDoc.data()?.role === 'ADMIN')) {
+      if (adminDoc.exists && belongsToSchool(adminDoc.data(), targetCode) && (adminDoc.data()?.role === 'PRINCIPAL' || adminDoc.data()?.role === 'SYSTEM_ADMIN' || adminDoc.data()?.role === 'ADMIN')) {
         return true;
       }
     } catch {
       const restAdmin = await fetchDocumentViaFirestoreRest(`admins/${uid}`);
-      if (restAdmin.exists && (restAdmin.data?.role === 'PRINCIPAL' || restAdmin.data?.role === 'SYSTEM_ADMIN' || restAdmin.data?.role === 'ADMIN')) {
+      if (restAdmin.exists && belongsToSchool(restAdmin.data, targetCode) && (restAdmin.data?.role === 'PRINCIPAL' || restAdmin.data?.role === 'SYSTEM_ADMIN' || restAdmin.data?.role === 'ADMIN')) {
         return true;
       }
     }
 
-    // 6. Match official school roster GB record
-    try {
-      const roster = loadOfficialStaffRoster();
-      const gbRecord = roster.find((r: any) => r.position === 'GB' || r.position?.includes('GURU BESAR'));
-      if (gbRecord) {
-        if (gbRecord.id === uid || `staff_${gbRecord.ic}` === uid || (callerEmail && gbRecord.email && gbRecord.email.toLowerCase().trim() === callerEmail)) {
-          return true;
+    // 7. Match official school roster GB record STRICTLY for YCC3404 only
+    if (isLegacyDefaultSchool(targetCode)) {
+      try {
+        const roster = loadOfficialStaffRoster();
+        const gbRecord = roster.find((r: any) => r.position === 'GB' || r.position?.includes('GURU BESAR'));
+        if (gbRecord) {
+          if (gbRecord.id === uid || `staff_${gbRecord.ic}` === uid || (callerEmail && gbRecord.email && gbRecord.email.toLowerCase().trim() === callerEmail)) {
+            return true;
+          }
         }
+      } catch {
+        // ignore roster error
       }
-    } catch {
-      // ignore roster error
     }
 
-    // 7. Try adminAuth custom claims as fallback
+    // 8. Try adminAuth custom claims as fallback
     try {
       const authUser = await adminAuth.getUser(uid);
       if (authUser.customClaims?.isPrincipal === true) {
-        return true;
+        const claimsSchool = sanitizeSchoolCodeInput(authUser.customClaims?.schoolId);
+        if ((!claimsSchool && isLegacyDefaultSchool(targetCode)) || claimsSchool === targetCode) {
+          return true;
+        }
       }
     } catch {
       // Ignore Auth API lookup errors (e.g. Identity Toolkit disabled in environment)
@@ -452,67 +572,81 @@ async function isCallerPrincipal(uid: string, callerClaims?: any): Promise<boole
   }
 }
 
-// Helper: Check if caller has System Administrator authority
-async function isCallerSystemAdmin(uid: string, callerClaims?: any): Promise<boolean> {
+// Helper: Check if caller has System Administrator authority for targetSchoolCode
+async function isCallerSystemAdmin(uid: string, callerClaims?: any, targetSchoolCode?: string): Promise<boolean> {
   try {
-    // 1. Check verified token claims if provided (zero latency, zero network)
-    if (callerClaims?.isSystemAdmin === true) {
-      return true;
-    }
-
-    // 2. Check caller email against designated administrative emails
+    const targetCode = normalizeSchoolCode(targetSchoolCode || callerClaims?.schoolId || DEFAULT_SCHOOL_CODE);
     const callerEmail = String(callerClaims?.email || '').toLowerCase().trim();
-    if (callerEmail === 'sjkcchb2026@gmail.com' || callerEmail === 'sean3919531@gmail.com') {
+
+    // 1. Check caller email against designated super-admin emails
+    if (isSuperAdminEmail(callerEmail)) {
       return true;
     }
 
-    // 3. Check school_governance/security authoritative firstAdminUid (try adminDb, then resilient REST)
-    try {
-      const secDoc = await adminDb.doc('school_governance/security').get();
-      if (secDoc.exists && (secDoc.data()?.firstAdminUid === uid || (callerEmail && secDoc.data()?.firstAdminEmail === callerEmail))) {
-        return true;
-      }
-    } catch {
-      const restSec = await fetchDocumentViaFirestoreRest('school_governance/security');
-      if (restSec.exists && (restSec.data?.firstAdminUid === uid || (callerEmail && restSec.data?.firstAdminEmail === callerEmail))) {
+    // 2. Check canonical users/{uid} collection to enforce school boundary
+    const userData = await fetchUserDataResilient(uid);
+    if (userData && !belongsToSchool(userData, targetCode)) {
+      return false;
+    }
+    if (userData?.active === true && (userData.role === 'admin' || userData.role === 'ADMIN' || userData.role === 'SYSTEM_ADMIN' || userData.category === 'PENTADBIR' || userData.role === 'PRINCIPAL' || userData.category === 'PRINCIPAL')) {
+      return true;
+    }
+
+    // 3. Check verified token claims if school matches
+    if (callerClaims?.isSystemAdmin === true) {
+      const claimsSchool = sanitizeSchoolCodeInput(callerClaims?.schoolId);
+      if ((!claimsSchool && isLegacyDefaultSchool(targetCode)) || claimsSchool === targetCode) {
         return true;
       }
     }
 
-    // 4. Check canonical users/{uid} (or in-place matched doc by uid/email)
-    try {
-      const { snap: userDoc } = await resolveUserDocRef(uid, callerEmail);
-      if (userDoc.exists) {
-        const userData = userDoc.data();
-        if (userData?.active === true && (userData.role === 'admin' || userData.role === 'ADMIN' || userData.role === 'SYSTEM_ADMIN' || userData.category === 'PENTADBIR')) {
-          return true;
-        }
-      }
-    } catch {
-      const restUser = await fetchDocumentViaFirestoreRest(`users/${uid}`);
-      if (restUser.exists && restUser.data?.active === true && (restUser.data.role === 'admin' || restUser.data.role === 'ADMIN' || restUser.data.role === 'SYSTEM_ADMIN' || restUser.data.category === 'PENTADBIR')) {
+    // 4. Check schools/{targetCode} adminEmails / principalUid
+    const schoolRes = await fetchSchoolProfileResilient(targetCode);
+    if (schoolRes.exists && schoolRes.data) {
+      const s = schoolRes.data;
+      const adminEmails = Array.isArray(s.adminEmails)
+        ? s.adminEmails.map((e: any) => String(e || '').toLowerCase().trim())
+        : [];
+      if (s.principalUid === uid || (callerEmail && adminEmails.includes(callerEmail))) {
         return true;
       }
     }
 
-    // 5. Legacy compatibility fallback for admins collection (try adminDb, then resilient REST)
+    // 5. Check school_governance/{scopedDocId(targetCode, 'security')} authoritative firstAdminUid
+    const secPath = `school_governance/${scopedDocId(targetCode, 'security')}`;
+    try {
+      const secDoc = await adminDb.doc(secPath).get();
+      if (secDoc.exists && (secDoc.data()?.firstAdminUid === uid || (callerEmail && String(secDoc.data()?.firstAdminEmail || '').toLowerCase().trim() === callerEmail))) {
+        return true;
+      }
+    } catch {
+      const restSec = await fetchDocumentViaFirestoreRest(secPath);
+      if (restSec.exists && (restSec.data?.firstAdminUid === uid || (callerEmail && String(restSec.data?.firstAdminEmail || '').toLowerCase().trim() === callerEmail))) {
+        return true;
+      }
+    }
+
+    // 6. Legacy compatibility fallback for admins collection (scoped to targetCode)
     try {
       const adminDoc = await adminDb.doc(`admins/${uid}`).get();
-      if (adminDoc.exists && (adminDoc.data()?.role === 'SYSTEM_ADMIN' || adminDoc.data()?.role === 'ADMIN')) {
+      if (adminDoc.exists && belongsToSchool(adminDoc.data(), targetCode) && (adminDoc.data()?.role === 'SYSTEM_ADMIN' || adminDoc.data()?.role === 'ADMIN' || adminDoc.data()?.role === 'PRINCIPAL')) {
         return true;
       }
     } catch {
       const restAdmin = await fetchDocumentViaFirestoreRest(`admins/${uid}`);
-      if (restAdmin.exists && (restAdmin.data?.role === 'SYSTEM_ADMIN' || restAdmin.data?.role === 'ADMIN')) {
+      if (restAdmin.exists && belongsToSchool(restAdmin.data, targetCode) && (restAdmin.data?.role === 'SYSTEM_ADMIN' || restAdmin.data?.role === 'ADMIN' || restAdmin.data?.role === 'PRINCIPAL')) {
         return true;
       }
     }
 
-    // 6. Try adminAuth custom claims as fallback
+    // 7. Try adminAuth custom claims as fallback
     try {
       const authUser = await adminAuth.getUser(uid);
       if (authUser.customClaims?.isSystemAdmin === true) {
-        return true;
+        const claimsSchool = sanitizeSchoolCodeInput(authUser.customClaims?.schoolId);
+        if ((!claimsSchool && isLegacyDefaultSchool(targetCode)) || claimsSchool === targetCode) {
+          return true;
+        }
       }
     } catch {
       // Ignore Auth API lookup errors
@@ -567,51 +701,57 @@ async function startServer() {
     res.sendFile(path.resolve('public/sw.js'));
   });
 
-  // Public endpoint: Fetch current school basic configuration (White-label ready)
-  app.get('/api/school-info', async (_req: Request, res: Response) => {
+  // Public/tenant-scoped endpoint: Fetch current school basic configuration (White-label & Multi-tenant ready)
+  app.get('/api/school-info', async (req: Request, res: Response) => {
     try {
-      let data: any = null;
-      let exists = false;
+      const requestedQueryCode = sanitizeSchoolCodeInput(String(req.query?.schoolCode || ''));
+      let targetCode = requestedQueryCode;
 
-      // 1. First attempt via Firebase Admin SDK
-      try {
-        const generalDoc = await adminDb.doc('school_settings/general').get();
-        if (generalDoc.exists) {
-          exists = true;
-          data = generalDoc.data();
-        }
-      } catch {
-        // Fallback to Firestore REST API using Web API key (handles sandbox without GCP ADC IAM)
-        const restResult = await fetchDocumentViaFirestoreRest('school_settings/general');
-        if (restResult.exists && restResult.data) {
-          exists = true;
-          data = restResult.data;
+      if (!targetCode) {
+        const caller = await verifyCallerAuth(req, false).catch(() => null);
+        if (caller?.uid) {
+          const userData = await fetchUserDataResilient(caller.uid);
+          if (userData?.schoolCode || userData?.schoolId) {
+            targetCode = resolveRecordSchoolCode(userData);
+          }
         }
       }
 
-      if (!exists || !data) {
-        return res.json({ 
+      targetCode = normalizeSchoolCode(targetCode || DEFAULT_SCHOOL_CODE);
+      const profile = await fetchSchoolProfileResilient(targetCode);
+
+      if (!profile.exists || !profile.data) {
+        return res.json({
           initialized: false,
-          schoolCode: 'YCC3404',
-          schoolName: 'SJK (C) CHUNG HUA BALINGIAN',
+          schoolCode: targetCode,
+          schoolName: isLegacyDefaultSchool(targetCode) ? DEFAULT_SCHOOL_NAME : `SEKOLAH ${targetCode}`,
           schoolLogo: '',
+          logoUrl: '',
+          slogan: 'Sistem Pengurusan Sekolah Bersepadu',
         });
       }
 
+      const d = profile.data;
+      const logo = d.logoUrl || d.schoolLogo || '';
       return res.json({
         initialized: true,
-        schoolName: data?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN',
-        schoolCode: data?.schoolCode || 'YCC3404',
-        principalEmail: data?.principalEmail || '',
-        schoolLogo: data?.schoolLogo || '',
+        schoolName: d.schoolName || (isLegacyDefaultSchool(targetCode) ? DEFAULT_SCHOOL_NAME : `SEKOLAH ${targetCode}`),
+        schoolCode: normalizeSchoolCode(d.schoolCode || targetCode),
+        principalEmail: d.principalEmail || '',
+        schoolLogo: logo,
+        logoUrl: logo,
+        slogan: d.slogan || d.subtitle || 'Sistem Pengurusan Sekolah Bersepadu',
+        adminEmails: Array.isArray(d.adminEmails) ? d.adminEmails : [],
       });
     } catch (err: any) {
       console.warn('Error fetching school-info:', err.message);
-      return res.json({ 
+      const fallbackCode = normalizeSchoolCode(String(req.query?.schoolCode || ''));
+      return res.json({
         initialized: false,
-        schoolCode: 'YCC3404',
-        schoolName: 'SJK (C) CHUNG HUA BALINGIAN',
+        schoolCode: fallbackCode,
+        schoolName: isLegacyDefaultSchool(fallbackCode) ? DEFAULT_SCHOOL_NAME : `SEKOLAH ${fallbackCode}`,
         schoolLogo: '',
+        logoUrl: '',
       });
     }
   });
@@ -729,27 +869,50 @@ async function startServer() {
     }
   });
 
-  // Endpoint: Update School Logo in school_settings and school_config
+  // Endpoint: Update School Logo in schools, school_settings, and school_config (Scoped by schoolCode)
   app.post('/api/update-school-logo', async (req: Request, res: Response) => {
     try {
+      const caller = await verifyCallerAuth(req, false);
+      if (!caller) {
+        return res.status(401).json({ success: false, message: '未授权：请先登录' });
+      }
+      const targetCode = await resolveCallerSchoolCode(req, caller);
+      const [isPrincipal, isSysAdmin] = await Promise.all([
+        isCallerPrincipal(caller.uid, caller.claims, targetCode),
+        isCallerSystemAdmin(caller.uid, caller.claims, targetCode),
+      ]);
+      if (!isPrincipal && !isSysAdmin) {
+        return res.status(403).json({ success: false, message: '禁止访问：只有该校校长或管理员可更改学校标志' });
+      }
+
       const { schoolLogo } = req.body;
       const logoValue = typeof schoolLogo === 'string' ? schoolLogo.trim() : '';
+      const nowIso = new Date().toISOString();
 
-      await adminDb.doc('school_settings/general').set({
+      await adminDb.doc(`schools/${targetCode}`).set({
+        schoolCode: targetCode,
+        logoUrl: logoValue,
+        updatedAt: nowIso,
+      }, { merge: true });
+
+      await adminDb.doc(`school_settings/${scopedDocId(targetCode, 'general')}`).set({
+        schoolCode: targetCode,
         schoolLogo: logoValue,
-        updatedAt: new Date().toISOString()
+        logoUrl: logoValue,
+        updatedAt: nowIso,
       }, { merge: true });
 
       try {
-        await adminDb.doc('school_config/default').set({
+        await adminDb.doc(`school_config/${scopedDocId(targetCode, 'default')}`).set({
+          schoolCode: targetCode,
           schoolLogo: logoValue,
-          updatedAt: new Date().toISOString()
+          updatedAt: nowIso,
         }, { merge: true });
       } catch (e) {
         // Safe ignore
       }
 
-      return res.json({ success: true, schoolLogo: logoValue });
+      return res.json({ success: true, schoolCode: targetCode, schoolLogo: logoValue });
     } catch (err: any) {
       console.error('Update logo error:', err);
       return res.status(500).json({ success: false, message: err.message });
@@ -808,14 +971,20 @@ async function startServer() {
     }
 
     const cleanEmail = principalEmail.trim().toLowerCase();
+    const targetSchoolCode = normalizeSchoolCode(schoolCode);
+    const settingsDocPath = `school_settings/${scopedDocId(targetSchoolCode, 'general')}`;
+    const configDocPath = `school_config/${scopedDocId(targetSchoolCode, 'default')}`;
     let createdUid: string | null = null;
     let uid = (req.body.principalUid || '').trim();
 
     try {
-      // 2. Pre-check: Ensure school is not already initialized
-      const generalDoc = await adminDb.doc('school_settings/general').get();
-      if (generalDoc.exists) {
-        return res.status(400).json({ error: '系统已完成初始化设定，禁止重复执行！' });
+      // 2. Pre-check: Ensure this schoolCode is not already initialized
+      const [schoolDoc, generalDoc] = await Promise.all([
+        adminDb.doc(`schools/${targetSchoolCode}`).get(),
+        adminDb.doc(settingsDocPath).get(),
+      ]);
+      if (schoolDoc.exists || generalDoc.exists) {
+        return res.status(400).json({ error: `Kod Sekolah ${targetSchoolCode} telah pun didaftarkan sebelum ini!` });
       }
 
       // 3. Create or resolve Principal account via Admin Auth if UID not provided
@@ -824,7 +993,7 @@ async function startServer() {
           const createdAuthUser = await adminAuth.createUser({
             email: cleanEmail,
             password: principalPassword,
-            displayName: (principalName || '').trim() || '校长',
+            displayName: (principalName || '').trim() || 'Guru Besar',
           });
           createdUid = createdAuthUser.uid;
           uid = createdAuthUser.uid;
@@ -835,7 +1004,7 @@ async function startServer() {
               uid = existingUser.uid;
               await adminAuth.updateUser(uid, {
                 password: principalPassword,
-                displayName: (principalName || '').trim() || '校长',
+                displayName: (principalName || '').trim() || 'Guru Besar',
               });
             } catch (resolveErr: any) {
               return res.status(400).json({
@@ -850,35 +1019,62 @@ async function startServer() {
         }
       }
 
-      // 4. Atomic Firestore Transaction for School Settings, Admin Registry, and Profile
+      // 4. Atomic Firestore Transaction for School Profile, Settings, Admin Registry, and User Profile
       await adminDb.runTransaction(async (transaction) => {
-        const settingsRef = adminDb.doc('school_settings/general');
-        const settingsSnap = await transaction.get(settingsRef);
-        if (settingsSnap.exists) {
+        const schoolRef = adminDb.doc(`schools/${targetSchoolCode}`);
+        const settingsRef = adminDb.doc(settingsDocPath);
+        const configRef = adminDb.doc(configDocPath);
+        const [schoolSnap, settingsSnap] = await Promise.all([
+          transaction.get(schoolRef),
+          transaction.get(settingsRef),
+        ]);
+        if (schoolSnap.exists || settingsSnap.exists) {
           throw new Error('ALREADY_INITIALIZED');
         }
 
         const adminRef = adminDb.doc(`admins/${uid}`);
         const userRef = adminDb.doc(`users/${uid}`);
+        const cleanSchoolName = schoolName.trim();
+
+        transaction.set(schoolRef, {
+          schoolCode: targetSchoolCode,
+          schoolName: cleanSchoolName,
+          logoUrl: '',
+          slogan: 'Sistem Pengurusan Sekolah Bersepadu',
+          principalEmail: cleanEmail,
+          principalUid: uid,
+          adminEmails: [cleanEmail],
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
 
         transaction.set(settingsRef, {
-          schoolName: schoolName.trim(),
-          schoolCode: (schoolCode || '').trim().toUpperCase(),
+          schoolName: cleanSchoolName,
+          schoolCode: targetSchoolCode,
           principalEmail: cleanEmail,
           principalUid: uid,
           createdAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         });
 
+        transaction.set(configRef, {
+          id: scopedDocId(targetSchoolCode, 'default'),
+          schoolName: cleanSchoolName,
+          schoolCode: targetSchoolCode,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+
         transaction.set(adminRef, {
           email: cleanEmail,
+          schoolCode: targetSchoolCode,
           role: 'PRINCIPAL',
           createdAt: FieldValue.serverTimestamp(),
         });
 
         transaction.set(userRef, {
           uid,
-          name: (principalName || '').trim() || '校长',
+          schoolCode: targetSchoolCode,
+          name: (principalName || '').trim() || 'Guru Besar',
           email: cleanEmail,
           category: 'PRINCIPAL',
           role: 'PRINCIPAL',
@@ -889,7 +1085,7 @@ async function startServer() {
         });
       });
 
-      return res.json({ success: true, uid });
+      return res.json({ success: true, uid, schoolCode: targetSchoolCode });
     } catch (err: any) {
       console.error('Error during school setup transaction:', err);
 
@@ -904,7 +1100,7 @@ async function startServer() {
       }
 
       const msg = err.message === 'ALREADY_INITIALIZED'
-        ? '系统已完成初始化设立，禁止重复执行！'
+        ? 'Sekolah ini telah pun didaftarkan, sila pilih Kod Sekolah lain atau log masuk!'
         : (err.message || '初始化数据库事务失败，已回滚。');
 
       return res.status(500).json({ error: msg });
@@ -919,22 +1115,23 @@ async function startServer() {
     }
 
     const cleanEmail = caller.email.toLowerCase().trim();
-    const secRef = adminDb.doc('school_governance/security');
+    const schoolId = await resolveCallerSchoolCode(req, caller);
+    const secRef = adminDb.doc(`school_governance/${scopedDocId(schoolId, 'security')}`);
 
-    return await withUserLock('first_admin_bootstrap', async () => {
+    return await withUserLock(`first_admin_bootstrap_${schoolId}`, async () => {
       try {
         const secSnap = await secRef.get();
         const existingData = secSnap.exists ? secSnap.data() : null;
 
         // Idempotency Check: Already completed by this user
         if (existingData?.status === 'BOOTSTRAP_COMPLETED' && existingData?.firstAdminUid === caller.uid) {
-          const schoolCode = existingData.schoolCode || await getRuntimeSchoolCode();
+          const resolvedSchoolCode = normalizeSchoolCode(existingData.schoolCode || schoolId);
           return res.json({
             success: true,
             idempotent: true,
             message: '第一系统管理员 (First System Admin) 初始化已完成，幂等返回现有会话。',
             personnelId: existingData.firstAdminPersonnelId,
-            schoolId: schoolCode,
+            schoolId: resolvedSchoolCode,
             isSystemAdmin: true,
             isPrincipal: false,
             status: 'BOOTSTRAP_COMPLETED',
@@ -951,6 +1148,7 @@ async function startServer() {
 
         // STEP 1: BOOTSTRAP_INITIATED
         await secRef.set({
+          schoolCode: schoolId,
           status: 'BOOTSTRAP_INITIATED',
           initiatedAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
@@ -963,26 +1161,24 @@ async function startServer() {
         let matchedName = '';
         const personnelQuery = await adminDb.collection('personnel')
           .where('email', '==', cleanEmail)
-          .limit(1)
           .get();
 
-        if (!personnelQuery.empty) {
-          const pDoc = personnelQuery.docs[0];
-          personnelId = pDoc.id;
-          matchedName = pDoc.data()?.name || pDoc.data()?.nama || '';
+        const matchingPersonnelDoc = personnelQuery.docs.find((d) => belongsToSchool(d.data(), schoolId));
+
+        if (matchingPersonnelDoc) {
+          personnelId = matchingPersonnelDoc.id;
+          matchedName = matchingPersonnelDoc.data()?.name || matchingPersonnelDoc.data()?.nama || '';
         } else {
           // Check if external operator requested
           if (req.body.isExternalOperator === true) {
-            personnelId = `ext_operator_${caller.uid.substring(0, 8)}`;
+            personnelId = scopedDocId(schoolId, `ext_operator_${caller.uid.substring(0, 8)}`);
             matchedName = (req.body.operatorName || cleanEmail.split('@')[0]).trim();
           } else {
             // Fallback staff ID using caller UID prefix without polluting canonical personnel
-            personnelId = `staff_${caller.uid.substring(0, 8)}`;
+            personnelId = scopedDocId(schoolId, `staff_${caller.uid.substring(0, 8)}`);
             matchedName = cleanEmail.split('@')[0];
           }
         }
-
-        const schoolId = await getRuntimeSchoolCode();
 
         await secRef.update({
           status: 'IDENTITY_VERIFIED',
@@ -1023,6 +1219,7 @@ async function startServer() {
         // Canonical user profile
         batch.set(adminDb.doc(`users/${caller.uid}`), {
           uid: caller.uid,
+          schoolCode: schoolId,
           name: matchedName || 'SISTEM PENTADBIR',
           email: cleanEmail,
           category: 'GURU',
@@ -1034,6 +1231,7 @@ async function startServer() {
         // Backward-compatibility projection for legacy attendance admin reader
         batch.set(adminDb.doc(`admins/${caller.uid}`), {
           email: cleanEmail,
+          schoolCode: schoolId,
           role: 'SYSTEM_ADMIN',
           personnelId,
           active: true,
@@ -1045,6 +1243,7 @@ async function startServer() {
         const auditRef = adminDb.collection('audit_trail').doc();
         batch.set(auditRef, {
           timestamp: new Date().toISOString(),
+          schoolCode: schoolId,
           actor_id: caller.uid,
           actor_name: matchedName || cleanEmail,
           actor_role: 'admin',
@@ -1084,6 +1283,7 @@ async function startServer() {
         // Mark interrupted state for audit and safe reconciliation
         try {
           await secRef.set({
+            schoolCode: schoolId,
             status: 'BOOTSTRAP_INCOMPLETE',
             errorReason: err.message || 'Bootstrap step failed',
             interruptedAt: FieldValue.serverTimestamp(),
@@ -1092,6 +1292,7 @@ async function startServer() {
 
           await adminDb.collection('audit_trail').add({
             timestamp: new Date().toISOString(),
+            schoolCode: schoolId,
             actor_id: caller.uid,
             actor_name: cleanEmail,
             actor_role: 'admin',
@@ -1100,6 +1301,7 @@ async function startServer() {
             entity_id: caller.uid,
             details: {
               error: err.message,
+              schoolCode: schoolId,
             },
           });
         } catch (recordErr) {
@@ -1124,13 +1326,20 @@ async function startServer() {
     try {
       const authUser = await adminAuth.getUser(caller.uid);
       const claims = authUser.customClaims || {};
-      const schoolCode = await getRuntimeSchoolCode();
+      const schoolCode = await resolveCallerSchoolCode(req, caller);
 
-      // Read governance assignments for this personnel if available
+      // Read governance assignments for this personnel if available (scoped)
       let governanceAssignments = null;
       if (claims.personnelId) {
-        const govDoc = await adminDb.doc(`governance_assignments/${claims.personnelId}`).get();
-        if (govDoc.exists) {
+        const scopedGovId = scopedDocId(schoolCode, String(claims.personnelId));
+        let govDoc = await adminDb.doc(`governance_assignments/${scopedGovId}`).get();
+        if (!govDoc.exists && scopedGovId !== claims.personnelId) {
+          const fallbackDoc = await adminDb.doc(`governance_assignments/${claims.personnelId}`).get();
+          if (fallbackDoc.exists && belongsToSchool(fallbackDoc.data(), schoolCode)) {
+            govDoc = fallbackDoc;
+          }
+        }
+        if (govDoc.exists && belongsToSchool(govDoc.data(), schoolCode)) {
           governanceAssignments = govDoc.data();
         }
       }
@@ -1159,10 +1368,12 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
-    // Must be either System Admin or Current Principal
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
+    // Must be either System Admin or Current Principal for this school
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid, caller.claims),
-      isCallerPrincipal(caller.uid, caller.claims),
+      isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+      isCallerPrincipal(caller.uid, caller.claims, schoolCode),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
@@ -1174,9 +1385,9 @@ async function startServer() {
       return res.status(400).json({ error: '请提供接任校长的有效 Auth UID。' });
     }
 
-    const transferDocRef = adminDb.doc('school_governance/principal_transfer');
+    const transferDocRef = adminDb.doc(`school_governance/${scopedDocId(schoolCode, 'principal_transfer')}`);
 
-    return await withUserLock('principal_transfer', async () => {
+    return await withUserLock(`principal_transfer_${schoolCode}`, async () => {
       // Check for ongoing transfer
       const activeSnap = await transferDocRef.get();
       if (activeSnap.exists) {
@@ -1190,7 +1401,7 @@ async function startServer() {
         }
       }
 
-      // Verify target user in Firebase Auth
+      // Verify target user in Firebase Auth & ensure target belongs to the same school
       let targetUser: UserRecord;
       try {
         targetUser = await adminAuth.getUser(targetUid);
@@ -1198,11 +1409,16 @@ async function startServer() {
         return res.status(400).json({ error: `目标接任用户在认证系统中不存在: ${authErr.message}` });
       }
 
+      const targetUserData = await fetchUserDataResilient(targetUid);
+      if (targetUserData && !belongsToSchool(targetUserData, schoolCode)) {
+        return res.status(403).json({ error: `Akses ditolak: Pengguna sasaran berdaftar di bawah sekolah lain (${resolveRecordSchoolCode(targetUserData)}).` });
+      }
+
       // Fetch current Principal identity
-      const schoolSettingsSnap = await adminDb.doc('school_settings/general').get();
+      const settingsPath = `school_settings/${scopedDocId(schoolCode, 'general')}`;
+      const schoolSettingsSnap = await adminDb.doc(settingsPath).get();
       const oldPrincipalUid = schoolSettingsSnap.data()?.principalUid || '';
       const oldPrincipalEmail = schoolSettingsSnap.data()?.principalEmail || '';
-      const schoolCode = await getRuntimeSchoolCode();
 
       const transferId = `transfer_${Date.now()}`;
       const resolvedTargetPersonnelId = targetPersonnelId || targetUser.customClaims?.personnelId || targetUid;
@@ -1210,6 +1426,7 @@ async function startServer() {
       // STAGE 1: TRANSFER_INITIATED
       await transferDocRef.set({
         transferId,
+        schoolCode,
         fromUid: oldPrincipalUid,
         fromEmail: oldPrincipalEmail,
         toUid: targetUid,
@@ -1260,15 +1477,26 @@ async function startServer() {
         });
 
         // STAGE 4: GOVERNANCE_UPDATED
+        const newPrincipalEmail = (targetUser.email || '').toLowerCase().trim();
         const batch = adminDb.batch();
-        batch.set(adminDb.doc('school_settings/general'), {
+        batch.set(adminDb.doc(settingsPath), {
+          schoolCode,
           principalUid: targetUid,
-          principalEmail: (targetUser.email || '').toLowerCase().trim(),
+          principalEmail: newPrincipalEmail,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+
+        batch.set(adminDb.doc(`schools/${schoolCode}`), {
+          schoolCode,
+          principalUid: targetUid,
+          principalEmail: newPrincipalEmail,
+          ...(newPrincipalEmail ? { adminEmails: FieldValue.arrayUnion(newPrincipalEmail) } : {}),
           updatedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
 
         batch.set(adminDb.doc(`admins/${targetUid}`), {
-          email: (targetUser.email || '').toLowerCase().trim(),
+          email: newPrincipalEmail,
+          schoolCode,
           role: 'PRINCIPAL',
           personnelId: resolvedTargetPersonnelId,
           active: true,
@@ -1276,6 +1504,7 @@ async function startServer() {
         }, { merge: true });
 
         batch.set(adminDb.doc(`users/${targetUid}`), {
+          schoolCode,
           category: 'PRINCIPAL',
           role: 'principal',
           hasClerkAccess: true,
@@ -1308,6 +1537,7 @@ async function startServer() {
 
         await adminDb.collection('audit_trail').add({
           timestamp: new Date().toISOString(),
+          schoolCode,
           actor_id: caller.uid,
           actor_name: caller.email || 'Admin',
           actor_role: isSysAdmin ? 'admin' : 'principal',
@@ -1316,6 +1546,7 @@ async function startServer() {
           entity_id: targetUid,
           details: {
             transferId,
+            schoolCode,
             fromUid: oldPrincipalUid,
             toUid: targetUid,
             toPersonnelId: resolvedTargetPersonnelId,
@@ -1325,6 +1556,7 @@ async function startServer() {
         return res.json({
           success: true,
           transferId,
+          schoolCode,
           status: 'TRANSFER_COMPLETED',
           newPrincipalUid: targetUid,
         });
@@ -1339,6 +1571,7 @@ async function startServer() {
 
         await adminDb.collection('audit_trail').add({
           timestamp: new Date().toISOString(),
+          schoolCode,
           actor_id: caller.uid,
           actor_name: caller.email || 'Admin',
           actor_role: isSysAdmin ? 'admin' : 'principal',
@@ -1347,6 +1580,7 @@ async function startServer() {
           entity_id: targetUid,
           details: {
             transferId,
+            schoolCode,
             error: stageErr.message,
           },
         });
@@ -1368,18 +1602,20 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid, caller.claims),
-      isCallerPrincipal(caller.uid, caller.claims),
+      isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+      isCallerPrincipal(caller.uid, caller.claims, schoolCode),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
       return res.status(403).json({ error: '禁止访问：只有校长或系统管理员可恢复交接程序。' });
     }
 
-    const transferDocRef = adminDb.doc('school_governance/principal_transfer');
+    const transferDocRef = adminDb.doc(`school_governance/${scopedDocId(schoolCode, 'principal_transfer')}`);
 
-    return await withUserLock('principal_transfer', async () => {
+    return await withUserLock(`principal_transfer_${schoolCode}`, async () => {
       const snap = await transferDocRef.get();
       if (!snap.exists) {
         return res.status(404).json({ error: '未发现任何交接记录。' });
@@ -1404,8 +1640,6 @@ async function startServer() {
       if (!targetUid) {
         return res.status(400).json({ error: '交接记录损坏：缺少目标 UID。' });
       }
-
-      const schoolCode = await getRuntimeSchoolCode();
 
       try {
         // Re-execute remaining stages
@@ -1450,15 +1684,27 @@ async function startServer() {
         }
 
         // Stage 4 check & apply
+        const newPrincipalEmail = (targetUser.email || '').toLowerCase().trim();
+        const settingsPath = `school_settings/${scopedDocId(schoolCode, 'general')}`;
         const batch = adminDb.batch();
-        batch.set(adminDb.doc('school_settings/general'), {
+        batch.set(adminDb.doc(settingsPath), {
+          schoolCode,
           principalUid: targetUid,
-          principalEmail: (targetUser.email || '').toLowerCase().trim(),
+          principalEmail: newPrincipalEmail,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+
+        batch.set(adminDb.doc(`schools/${schoolCode}`), {
+          schoolCode,
+          principalUid: targetUid,
+          principalEmail: newPrincipalEmail,
+          ...(newPrincipalEmail ? { adminEmails: FieldValue.arrayUnion(newPrincipalEmail) } : {}),
           updatedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
 
         batch.set(adminDb.doc(`admins/${targetUid}`), {
-          email: (targetUser.email || '').toLowerCase().trim(),
+          email: newPrincipalEmail,
+          schoolCode,
           role: 'PRINCIPAL',
           personnelId: toPersonnelId || targetUid,
           active: true,
@@ -1466,6 +1712,7 @@ async function startServer() {
         }, { merge: true });
 
         batch.set(adminDb.doc(`users/${targetUid}`), {
+          schoolCode,
           category: 'PRINCIPAL',
           role: 'principal',
           hasClerkAccess: true,
@@ -1498,6 +1745,7 @@ async function startServer() {
 
         await adminDb.collection('audit_trail').add({
           timestamp: new Date().toISOString(),
+          schoolCode,
           actor_id: caller.uid,
           actor_name: caller.email || 'Admin',
           actor_role: isSysAdmin ? 'admin' : 'principal',
@@ -1506,6 +1754,7 @@ async function startServer() {
           entity_id: targetUid,
           details: {
             transferId,
+            schoolCode,
             fromUid,
             toUid: targetUid,
           },
@@ -1530,7 +1779,8 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
-    const isSysAdmin = await isCallerSystemAdmin(caller.uid);
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+    const isSysAdmin = await isCallerSystemAdmin(caller.uid, caller.claims, schoolCode);
     if (!isSysAdmin) {
       return res.status(403).json({ error: '禁止访问：只有系统管理员可授予或撤回管理权限。' });
     }
@@ -1546,8 +1796,13 @@ async function startServer() {
 
     try {
       const targetUser = await adminAuth.getUser(targetUid);
+      const targetUserData = await fetchUserDataResilient(targetUid);
+      if (targetUserData && !belongsToSchool(targetUserData, schoolCode)) {
+        return res.status(403).json({ error: 'Akses ditolak: Pengguna sasaran bukan ahli sekolah ini.' });
+      }
+
       const currentClaims = (targetUser.customClaims || {}) as any;
-      const schoolCode = await getRuntimeSchoolCode();
+      const targetEmail = (targetUser.email || '').toLowerCase().trim();
 
       if (action === 'GRANT') {
         await adminAuth.setCustomUserClaims(targetUid, {
@@ -1559,15 +1814,25 @@ async function startServer() {
         });
 
         await adminDb.doc(`admins/${targetUid}`).set({
-          email: (targetUser.email || '').toLowerCase().trim(),
+          email: targetEmail,
+          schoolCode,
           role: 'SYSTEM_ADMIN',
           grantedBy: caller.uid,
           updatedAt: FieldValue.serverTimestamp(),
           active: true,
         }, { merge: true });
 
+        if (targetEmail) {
+          await adminDb.doc(`schools/${schoolCode}`).set({
+            schoolCode,
+            adminEmails: FieldValue.arrayUnion(targetEmail),
+            updatedAt: FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
+
         await adminDb.collection('audit_trail').add({
           timestamp: new Date().toISOString(),
+          schoolCode,
           actor_id: caller.uid,
           actor_name: caller.email || 'Admin',
           actor_role: 'admin',
@@ -1576,6 +1841,7 @@ async function startServer() {
           entity_id: targetUid,
           details: {
             targetUid,
+            schoolCode,
             grantedBy: caller.uid,
           },
         });
@@ -1593,8 +1859,17 @@ async function startServer() {
 
         await adminDb.doc(`admins/${targetUid}`).delete();
 
+        if (targetEmail) {
+          await adminDb.doc(`schools/${schoolCode}`).set({
+            schoolCode,
+            adminEmails: FieldValue.arrayRemove(targetEmail),
+            updatedAt: FieldValue.serverTimestamp(),
+          }, { merge: true }).catch(() => {});
+        }
+
         await adminDb.collection('audit_trail').add({
           timestamp: new Date().toISOString(),
+          schoolCode,
           actor_id: caller.uid,
           actor_name: caller.email || 'Admin',
           actor_role: 'admin',
@@ -1603,6 +1878,7 @@ async function startServer() {
           entity_id: targetUid,
           details: {
             targetUid,
+            schoolCode,
             revokedBy: caller.uid,
           },
         });
@@ -1622,47 +1898,44 @@ async function startServer() {
         return res.status(401).json({ error: 'Sila log masuk terlebih dahulu.' });
       }
 
+      const schoolCode = await resolveCallerSchoolCode(req, caller);
+      const [isSysAdmin, isPrincipal] = await Promise.all([
+        isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+        isCallerPrincipal(caller.uid, caller.claims, schoolCode),
+      ]);
+      if (!isSysAdmin && !isPrincipal) {
+        return res.status(403).json({ error: 'Akses ditolak: Hanya Guru Besar atau Pentadbir sekolah ini boleh mengubah kategori staf.' });
+      }
+
       const { userId, userEmail, category } = req.body;
       if (!userId || (category !== 'GURU' && category !== 'AKP')) {
         return res.status(400).json({ error: 'userId dan category (GURU/AKP) diperlukan.' });
       }
 
-      // 1. Update in users collection (resolve by docId, uid field, or email to avoid duplicates)
-      const { ref: userDocRef, snap: userSnap } = await resolveUserDocRef(userId, userEmail);
-      const { subRole, position } = req.body;
-      const updates: Record<string, any> = {
-        category,
-        updatedAt: FieldValue.serverTimestamp(),
-      };
-      if (subRole) {
-        updates.subRole = subRole;
-        updates.primaryRoleCode = subRole;
-        if (category === 'GURU') {
-          updates.leadershipRole = subRole === 'GURU' ? null : subRole;
-          updates.akpRole = null;
-        } else {
-          updates.akpRole = subRole;
-          updates.leadershipRole = null;
-        }
-      }
-      if (position) updates.position = position;
-
+      // 1. Update in users collection (verify school boundary)
+      const userDocRef = adminDb.doc(`users/${userId}`);
+      const userSnap = await userDocRef.get();
       if (userSnap.exists) {
-        await userDocRef.update(deepSanitizeFirestore(updates));
-      } else if (req.body.userName || userEmail) {
-        await userDocRef.set(deepSanitizeFirestore({
-          ...updates,
-          ...(req.body.userName ? { name: String(req.body.userName).trim().toUpperCase() } : {}),
-          ...(userEmail ? { email: String(userEmail).toLowerCase().trim() } : {}),
-          active: true,
-        }), { merge: true });
+        if (!belongsToSchool(userSnap.data(), schoolCode)) {
+          return res.status(403).json({ error: 'Akses ditolak: Rekod pengguna milik sekolah lain.' });
+        }
+        await userDocRef.update({
+          category,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } else {
+        await userDocRef.set({
+          schoolCode,
+          category,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
       }
 
-      // 2. Synchronize to personnel collection (Master Data)
+      // 2. Synchronize to personnel collection (Master Data) scoped to schoolCode
       let personnelUpdated = false;
       const directPersonnelRef = adminDb.doc(`personnel/${userId}`);
       const directSnap = await directPersonnelRef.get();
-      if (directSnap.exists) {
+      if (directSnap.exists && belongsToSchool(directSnap.data(), schoolCode)) {
         await directPersonnelRef.update({
           category,
           updatedAt: FieldValue.serverTimestamp(),
@@ -1670,11 +1943,12 @@ async function startServer() {
         personnelUpdated = true;
       }
 
-      // If not updated by userId, match by email
+      // If not updated by userId, match by email within this schoolCode
       const searchEmail = (userEmail || (userSnap.exists ? userSnap.data()?.email : '') || '').toLowerCase().trim();
       if (searchEmail) {
         const pSnap = await adminDb.collection('personnel').where('email', '==', searchEmail).get();
         for (const pDoc of pSnap.docs) {
+          if (!belongsToSchool(pDoc.data(), schoolCode)) continue;
           await pDoc.ref.update({
             category,
             updatedAt: FieldValue.serverTimestamp(),
@@ -1686,6 +1960,7 @@ async function startServer() {
       // 3. Audit trail
       await adminDb.collection('audit_trail').add({
         timestamp: new Date().toISOString(),
+        schoolCode,
         actor_id: caller.uid,
         actor_name: caller.email || 'Admin',
         actor_role: 'admin',
@@ -1693,6 +1968,7 @@ async function startServer() {
         layer: 'MASTER_DATA',
         entity_id: userId,
         details: {
+          schoolCode,
           targetUserId: userId,
           targetEmail: searchEmail,
           newCategory: category,
@@ -1898,7 +2174,11 @@ async function startServer() {
   // =========================================================================
   // PERSONNEL TO USERS AUTO-SYNC (MIRROR TO KEHADIRAN STAF USERS COLLECTION)
   // =========================================================================
-  async function syncPersonnelToUsers(actorUid: string, actorEmail: string = 'Admin'): Promise<{
+  async function syncPersonnelToUsers(
+    actorUid: string,
+    actorEmail: string = 'Admin',
+    schoolCode: string = DEFAULT_SCHOOL_CODE
+  ): Promise<{
     success: boolean;
     totalPersonnel: number;
     syncedCount: number;
@@ -1908,15 +2188,18 @@ async function startServer() {
     errors: string[];
     roster?: any[];
   }> {
+    const targetSchoolCode = normalizeSchoolCode(schoolCode);
     let personnelList: any[] = [];
     try {
       const { db: targetCoreDb } = await getCoreDbInstance();
       const personnelSnap = await targetCoreDb.collection('personnel').get();
-      personnelList = personnelSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      personnelList = personnelSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(p => belongsToSchool(p as any, targetSchoolCode));
     } catch {
-      personnelList = loadOfficialStaffRoster();
+      personnelList = isLegacyDefaultSchool(targetSchoolCode) ? loadOfficialStaffRoster() : [];
     }
-    if (!personnelList || personnelList.length === 0) {
+    if ((!personnelList || personnelList.length === 0) && isLegacyDefaultSchool(targetSchoolCode)) {
       personnelList = loadOfficialStaffRoster();
     }
 
@@ -1924,75 +2207,21 @@ async function startServer() {
     const existingUsersByEmail = new Map<string, any>();
     const existingUsersByIc = new Map<string, any>();
     const existingUsersById = new Map<string, any>();
-    const duplicateDocIdsToDelete: string[] = [];
-
-    const isPreRegId = (id?: string) =>
-      !id || id.startsWith('staff_') || id.startsWith('user_') || /^P\d{5,}/i.test(id);
+    const otherSchoolUserIds = new Set<string>();
 
     try {
       const usersSnap = await adminDb.collection('users').get();
-      const rawUsers: any[] = [];
-      usersSnap.forEach((d) => {
-        rawUsers.push({ ...d.data(), _docId: d.id });
-      });
-
-      // Deduplicate existing users in Firestore by email / IC
-      const byKey = new Map<string, any[]>();
-      const registerKey = (k: string, item: any) => {
-        if (!k) return;
-        const arr = byKey.get(k) || [];
-        arr.push(item);
-        byKey.set(k, arr);
-      };
-
-      const seenDoc = new Set<string>();
-      for (const u of rawUsers) {
-        if (seenDoc.has(u._docId)) continue;
-        const em = String(u.email || '').toLowerCase().trim();
-        const ic = String(u.ic || '').replace(/[^0-9]/g, '');
-        const matches = rawUsers.filter(
-          (other) =>
-            (em && String(other.email || '').toLowerCase().trim() === em) ||
-            (ic && ic.length >= 6 && String(other.ic || '').replace(/[^0-9]/g, '') === ic) ||
-            other._docId === u._docId
-        );
-        matches.forEach((m) => seenDoc.add(m._docId));
-
-        // Pick canonical doc (prefer real Auth UID docId, then real Auth uid field, then pre-reg)
-        matches.sort((a, b) => {
-          const sa = (!isPreRegId(a._docId) ? 1000 : 0) + (!isPreRegId(a.uid) ? 500 : 0) + (a.position ? 50 : 0);
-          const sb = (!isPreRegId(b._docId) ? 1000 : 0) + (!isPreRegId(b.uid) ? 500 : 0) + (b.position ? 50 : 0);
-          return sb - sa;
-        });
-
-        const canonical = { ...matches[0] };
-        for (const extra of matches.slice(1)) {
-          duplicateDocIdsToDelete.push(extra._docId);
-          if (!canonical.uid || isPreRegId(canonical.uid)) {
-            if (extra.uid && !isPreRegId(extra.uid)) canonical.uid = extra.uid;
-          }
-          if (extra.isVerified === true || extra.isPreRegistered === false) {
-            canonical.isVerified = true;
-            canonical.isPreRegistered = false;
-          }
-          if (!canonical.position && extra.position) canonical.position = extra.position;
-          if (!canonical.ic && extra.ic) canonical.ic = extra.ic;
-          if (!canonical.phone && extra.phone) canonical.phone = extra.phone;
-          if (!canonical.grade && extra.grade) canonical.grade = extra.grade;
-          if (!canonical.staffFileNo && extra.staffFileNo) canonical.staffFileNo = extra.staffFileNo;
-          if (!canonical.personnelId && extra.personnelId) canonical.personnelId = extra.personnelId;
-          if (!canonical.subRole && extra.subRole) canonical.subRole = extra.subRole;
-          if (!canonical.leadershipRole && extra.leadershipRole) canonical.leadershipRole = extra.leadershipRole;
-          if (extra.hasClerkAccess) canonical.hasClerkAccess = true;
+      usersSnap.forEach(d => {
+        const data: any = { ...d.data(), _docId: d.id };
+        if (!belongsToSchool(data, targetSchoolCode)) {
+          otherSchoolUserIds.add(d.id);
+          return;
         }
-
-        existingUsersById.set(canonical._docId, canonical);
-        if (canonical.personnelId) existingUsersByPersonnelId.set(String(canonical.personnelId).trim(), canonical);
-        if (em) existingUsersByEmail.set(em, canonical);
-        if (ic && ic.length >= 6) existingUsersByIc.set(ic, canonical);
-      }
-      registerKey; // keep lint clean
-      byKey.clear();
+        existingUsersById.set(d.id, data);
+        if (data.personnelId) existingUsersByPersonnelId.set(String(data.personnelId).trim(), data);
+        if (data.email) existingUsersByEmail.set(String(data.email).toLowerCase().trim(), data);
+        if (data.ic) existingUsersByIc.set(String(data.ic).replace(/[^0-9]/g, ''), data);
+      });
     } catch (usersErr) {
       console.warn('Note: adminDb users list restricted, continuing with memory map:', usersErr);
     }
@@ -2004,11 +2233,6 @@ async function startServer() {
 
     let batch = adminDb.batch();
     let opCount = 0;
-
-    for (const dupId of duplicateDocIdsToDelete) {
-      batch.delete(adminDb.doc(`users/${dupId}`));
-      opCount++;
-    }
 
     for (const p of personnelList) {
       try {
@@ -2023,10 +2247,6 @@ async function startServer() {
         const pFileNo = String((p as any).staffFileNo || (p as any).noFail || '').trim();
         const pTeachingStatus = String((p as any).teachingStatus || 'Aktif').trim();
 
-        if (!pName && !pEmail && !pIc) {
-          skippedCount++;
-          continue;
-        }
         if (pTeachingStatus.toLowerCase().includes('tamat') || pTeachingStatus.toLowerCase().includes('berhenti')) {
           skippedCount++;
           continue;
@@ -2058,7 +2278,7 @@ async function startServer() {
         if (!targetUserDocId && pEmail) {
           try {
             const authUser = await adminAuth.getUserByEmail(pEmail);
-            if (authUser?.uid) {
+            if (authUser?.uid && !otherSchoolUserIds.has(authUser.uid)) {
               targetUserDocId = authUser.uid;
               matchedUser = existingUsersById.get(authUser.uid);
             }
@@ -2068,8 +2288,7 @@ async function startServer() {
         }
 
         if (!targetUserDocId) {
-          const cleanPId = pId ? (pId.startsWith('staff_') ? pId : `staff_${pId}`) : '';
-          targetUserDocId = pIc ? `staff_${pIc}` : (cleanPId || `staff_${crypto.randomUUID().slice(0, 12)}`);
+          targetUserDocId = scopedDocId(targetSchoolCode, pId || `user_${crypto.randomUUID().slice(0, 12)}`);
         }
 
         const userDocRef = adminDb.doc(`users/${targetUserDocId}`);
@@ -2077,17 +2296,11 @@ async function startServer() {
         if (matchedUser) {
           const preservedRole = (matchedUser.role === 'admin' || matchedUser.role === 'ADMIN' || matchedUser.role === 'SYSTEM_ADMIN')
             ? matchedUser.role
-            : (matchedUser.role === 'PRINCIPAL' || isPrincipal ? 'PRINCIPAL' : (matchedUser.hasClerkAccess ? 'CLERK' : resolvedRole));
-
-          const isVerified = Boolean(
-            matchedUser.isVerified === true ||
-            matchedUser.isPreRegistered === false ||
-            !isPreRegId(matchedUser.uid) ||
-            !isPreRegId(targetUserDocId)
-          );
+            : (matchedUser.role === 'PRINCIPAL' || isPrincipal ? 'PRINCIPAL' : resolvedRole);
 
           const updatePayload = deepSanitizeFirestore({
-            uid: matchedUser.uid || targetUserDocId,
+            uid: targetUserDocId,
+            schoolCode: targetSchoolCode,
             name: pName || matchedUser.name,
             email: pEmail || matchedUser.email || '',
             category: isPrincipal ? 'PRINCIPAL' : (matchedUser.category || resolvedCategory),
@@ -2097,15 +2310,8 @@ async function startServer() {
             grade: pGrade || matchedUser.grade || '',
             position: pPosition || matchedUser.position || '',
             staffFileNo: pFileNo || matchedUser.staffFileNo || '',
-            personnelId: pId || matchedUser.personnelId || '',
-            subRole: (p as any).subRole || (p as any).primaryRoleCode || matchedUser.subRole,
-            primaryRoleCode: (p as any).primaryRoleCode || (p as any).subRole || matchedUser.primaryRoleCode,
-            leadershipRole: (p as any).leadershipRole || matchedUser.leadershipRole,
-            akpRole: (p as any).akpRole || matchedUser.akpRole,
-            hasClerkAccess: Boolean(matchedUser.hasClerkAccess),
-            active: matchedUser.active !== false,
-            isVerified,
-            isPreRegistered: !isVerified,
+            personnelId: pId,
+            active: true,
             updatedAt: FieldValue.serverTimestamp(),
           });
 
@@ -2114,6 +2320,7 @@ async function startServer() {
         } else {
           const newPayload = deepSanitizeFirestore({
             uid: targetUserDocId,
+            schoolCode: targetSchoolCode,
             name: pName,
             email: pEmail,
             category: resolvedCategory,
@@ -2125,8 +2332,6 @@ async function startServer() {
             staffFileNo: pFileNo,
             personnelId: pId,
             active: true,
-            isVerified: false,
-            isPreRegistered: true,
             createdAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp(),
           });
@@ -2154,6 +2359,7 @@ async function startServer() {
 
       await adminDb.collection('audit_trail').add(deepSanitizeFirestore({
         timestamp: new Date().toISOString(),
+        schoolCode: targetSchoolCode,
         actor_id: actorUid,
         actor_name: actorEmail,
         actor_role: 'admin',
@@ -2161,6 +2367,7 @@ async function startServer() {
         layer: 'MASTER_DATA',
         entity_id: 'users',
         details: {
+          schoolCode: targetSchoolCode,
           totalPersonnel: personnelList.length,
           createdCount,
           updatedCount,
@@ -2191,9 +2398,11 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid, caller.claims),
-      isCallerPrincipal(caller.uid, caller.claims),
+      isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+      isCallerPrincipal(caller.uid, caller.claims, schoolCode),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
@@ -2201,18 +2410,21 @@ async function startServer() {
     }
 
     try {
-      const result = await syncPersonnelToUsers(caller.uid, caller.email || 'Admin');
+      const result = await syncPersonnelToUsers(caller.uid, caller.email || 'Admin', schoolCode);
       return res.json({
         ...result,
+        schoolCode,
         roster: result.roster || [],
-        message: `Penyelarasan berjaya: ${result.syncedCount} rekod personel telah diselaraskan ke dalam senarai Kehadiran Staf (${result.createdCount} baharu, ${result.updatedCount} dikemaskini).`,
+        message: `Penyelarasan berjaya (${schoolCode}): ${result.syncedCount} rekod personel telah diselaraskan ke dalam senarai Kehadiran Staf (${result.createdCount} baharu, ${result.updatedCount} dikemaskini).`,
       });
     } catch (err: any) {
-      console.warn('Sync personnel note (fallback to official roster):', err?.message || err);
-      // Fallback: return official roster so caller can sync locally
-      const roster = loadOfficialStaffRoster();
+      console.warn('Sync personnel note (fallback to official roster for YCC3404 only):', err?.message || err);
+      const roster = isLegacyDefaultSchool(schoolCode)
+        ? loadOfficialStaffRoster().map((r: any) => ({ ...r, schoolCode: DEFAULT_SCHOOL_CODE }))
+        : [];
       return res.json({
         success: true,
+        schoolCode,
         totalPersonnel: roster.length,
         syncedCount: roster.length,
         createdCount: roster.length,
@@ -2220,17 +2432,24 @@ async function startServer() {
         skippedCount: 0,
         errors: [],
         roster,
-        message: `Penyelarasan berjaya menggunakan senarai rasmi: ${roster.length} rekod personel tersedia.`,
+        message: roster.length > 0
+          ? `Penyelarasan berjaya menggunakan senarai rasmi: ${roster.length} rekod personel tersedia.`
+          : `Tiada rekod personel sedia ada bagi sekolah ${schoolCode}.`,
       });
     }
   });
 
-  // Staff profile resolver by email (used by App.tsx authentication gateway)
+  // Staff profile resolver by email (used by App.tsx authentication gateway, strictly scoped to YCC3404)
   app.post('/api/auth/resolve-staff-profile', async (req: Request, res: Response) => {
     const caller = await verifyCallerAuth(req, false);
     const emailToResolve = (caller?.email || req.body?.email || '').toLowerCase().trim();
     if (!emailToResolve) {
       return res.status(400).json({ error: 'Sila berikan emel untuk disemak' });
+    }
+
+    const schoolCode = normalizeSchoolCode(req.body?.schoolCode || req.query?.schoolCode as string);
+    if (!isLegacyDefaultSchool(schoolCode)) {
+      return res.status(404).json({ error: `Rekod staf tidak ditemui dalam senarai rasmi sekolah ${schoolCode}.` });
     }
 
     const roster = loadOfficialStaffRoster();
@@ -2242,6 +2461,7 @@ async function startServer() {
     const isPrincipalUser = matched.category === 'PRINCIPAL' || matched.role === 'PRINCIPAL';
     const profile: any = {
       uid: caller?.uid || matched.id,
+      schoolCode: DEFAULT_SCHOOL_CODE,
       name: matched.name,
       email: emailToResolve,
       category: matched.category,
@@ -2260,9 +2480,13 @@ async function startServer() {
     return res.json({ success: true, profile });
   });
 
-  // Public/authenticated endpoint: Get official master roster list
-  app.get('/api/personnel/official-roster', (_req: Request, res: Response) => {
-    const roster = loadOfficialStaffRoster();
+  // Public/authenticated endpoint: Get official master roster list (YCC3404 only)
+  app.get('/api/personnel/official-roster', (req: Request, res: Response) => {
+    const reqCode = typeof req.query?.schoolCode === 'string' ? req.query.schoolCode : '';
+    if (reqCode && !isLegacyDefaultSchool(reqCode)) {
+      return res.json({ success: true, count: 0, roster: [] });
+    }
+    const roster = loadOfficialStaffRoster().map((r: any) => ({ ...r, schoolCode: DEFAULT_SCHOOL_CODE }));
     return res.json({ success: true, count: roster.length, roster });
   });
 
@@ -2277,17 +2501,22 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     try {
       const { db: targetCoreDb, isTargetCore, targetInfo } = await getCoreDbInstance();
       const snap = await targetCoreDb.collection('personnel').get();
-      const personnel = snap.docs.map(d => ({
-        id: d.id,
-        ...d.data(),
-      }));
+      const personnel = snap.docs
+        .map(d => ({
+          id: d.id,
+          ...d.data(),
+        }))
+        .filter(p => belongsToSchool(p as any, schoolCode));
       personnel.sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
 
       return res.json({
         success: true,
+        schoolCode,
         count: personnel.length,
         personnel,
         targetInfo,
@@ -2316,9 +2545,11 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid, caller.claims),
-      isCallerPrincipal(caller.uid, caller.claims),
+      isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+      isCallerPrincipal(caller.uid, caller.claims, schoolCode),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
@@ -2356,32 +2587,38 @@ async function startServer() {
       let docId = id ? String(id).trim() : '';
 
       if (!docId) {
-        // Prevent duplicate creation: check existing by email
+        // Prevent duplicate creation within the SAME school: check existing by email
         if (cleanEmail) {
-          const snapEmail = await targetCoreDb.collection('personnel').where('email', '==', cleanEmail).limit(1).get();
-          if (!snapEmail.empty) {
-            docId = snapEmail.docs[0].id;
+          const snapEmail = await targetCoreDb.collection('personnel').where('email', '==', cleanEmail).get();
+          const matchEmail = snapEmail.docs.find(d => belongsToSchool(d.data() as any, schoolCode));
+          if (matchEmail) {
+            docId = matchEmail.id;
           }
         }
-        // Check existing by IC
+        // Check existing by IC within the SAME school
         if (!docId && cleanIc) {
-          const snapIc = await targetCoreDb.collection('personnel').where('ic', '==', cleanIc).limit(1).get();
-          if (!snapIc.empty) {
-            docId = snapIc.docs[0].id;
+          const snapIc = await targetCoreDb.collection('personnel').where('ic', '==', cleanIc).get();
+          const matchIc = snapIc.docs.find(d => belongsToSchool(d.data() as any, schoolCode));
+          if (matchIc) {
+            docId = matchIc.id;
           }
         }
-        // If still no docId, generate immutable permanent staff_<UUID>
+        // If still no docId, generate immutable permanent scoped staff_<UUID>
         if (!docId) {
-          docId = `staff_${crypto.randomUUID()}`;
+          docId = scopedDocId(schoolCode, `staff_${crypto.randomUUID()}`);
         }
       }
 
       const maskedIc = maskIcNumber(cleanIc);
       const personnelDocRef = targetCoreDb.doc(`personnel/${docId}`);
       const snap = await personnelDocRef.get();
+      if (snap.exists && !belongsToSchool(snap.data() as any, schoolCode)) {
+        return res.status(403).json({ error: 'Akses ditolak: Rekod staf ini milik sekolah lain.' });
+      }
 
       const payload: any = {
         id: docId,
+        schoolCode,
         name: String(name).trim().toUpperCase(),
         email: cleanEmail,
         maskedIc,
@@ -2409,6 +2646,7 @@ async function startServer() {
       // Mirror to teachers collection for backward compatibility
       await targetCoreDb.doc(`teachers/${docId}`).set({
         id: docId,
+        schoolCode,
         name: payload.name,
         email: cleanEmail,
         gender: payload.gender,
@@ -2421,49 +2659,41 @@ async function startServer() {
       // Write audit trail
       await targetCoreDb.collection('audit_trail').add({
         timestamp: new Date().toISOString(),
+        schoolCode,
         actor_id: caller.uid,
         actor_name: caller.email || 'Admin',
         actor_role: isSysAdmin ? 'admin' : 'principal',
         action_type: snap.exists ? 'UPDATE_PERSONNEL' : 'CREATE_PERSONNEL',
         layer: 'MASTER_DATA',
         entity_id: docId,
-        details: { docId, name: payload.name, targetInfo, isTargetCore },
+        details: { docId, schoolCode, name: payload.name, targetInfo, isTargetCore },
       });
 
-      // Mirror to Attendance users collection IN-PLACE (prevent duplicate users doc creation)
+      // Mirror to Attendance users collection (if not owned by another school)
       try {
-        const isPrincipal = payload.position.toUpperCase().includes('GURU BESAR') || payload.position.toUpperCase().includes('PENGETUA');
+        const isPrincipalUser = payload.position.toUpperCase().includes('GURU BESAR') || payload.position.toUpperCase().includes('PENGETUA');
         const isAkp = payload.category === 'AKP';
-        const staffCategory: StaffCategory = isPrincipal ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
-        const staffRole: UserRole = isPrincipal ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
-
-        let resolvedTarget = await resolveUserDocRef(docId, cleanEmail);
-        if (!resolvedTarget.snap.exists && cleanIc) {
-          const icSnap = await adminDb.collection('users').where('ic', '==', cleanIc).limit(1).get();
-          if (!icSnap.empty) {
-            resolvedTarget = { ref: icSnap.docs[0].ref, snap: icSnap.docs[0] };
-          }
+        const staffCategory: StaffCategory = isPrincipalUser ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
+        const staffRole: UserRole = isPrincipalUser ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
+        const existingUserSnap = await adminDb.doc(`users/${docId}`).get();
+        if (!existingUserSnap.exists || belongsToSchool(existingUserSnap.data() as any, schoolCode)) {
+          await adminDb.doc(`users/${docId}`).set(deepSanitizeFirestore({
+            uid: docId,
+            schoolCode,
+            name: payload.name,
+            email: cleanEmail,
+            category: staffCategory,
+            role: staffRole,
+            phone: payload.phone || '',
+            ic: cleanIc || '',
+            grade: payload.grade || '',
+            position: payload.position || '',
+            staffFileNo: payload.staffFileNo || '',
+            personnelId: docId,
+            active: true,
+            updatedAt: FieldValue.serverTimestamp(),
+          }), { merge: true });
         }
-        const existingData = resolvedTarget.snap.exists ? resolvedTarget.snap.data() : null;
-        const targetId = resolvedTarget.snap.exists ? resolvedTarget.snap.id : (cleanIc ? `staff_${cleanIc}` : `staff_${docId}`);
-
-        await adminDb.doc(`users/${targetId}`).set(deepSanitizeFirestore({
-          uid: existingData?.uid || targetId,
-          name: payload.name,
-          email: cleanEmail || existingData?.email || '',
-          category: existingData?.category || staffCategory,
-          role: existingData?.role || staffRole,
-          phone: payload.phone || existingData?.phone || '',
-          ic: cleanIc || existingData?.ic || '',
-          grade: payload.grade || existingData?.grade || '',
-          position: payload.position || existingData?.position || '',
-          staffFileNo: payload.staffFileNo || existingData?.staffFileNo || '',
-          personnelId: docId,
-          active: existingData ? existingData.active !== false : true,
-          isVerified: existingData ? Boolean(existingData.isVerified || existingData.isPreRegistered === false) : false,
-          isPreRegistered: existingData ? !(existingData.isVerified || existingData.isPreRegistered === false) : true,
-          updatedAt: FieldValue.serverTimestamp(),
-        }), { merge: true });
       } catch (userMirrorErr) {
         console.warn('Warning syncing personnel to users on single save:', userMirrorErr);
       }
@@ -2471,6 +2701,7 @@ async function startServer() {
       return res.json({
         success: true,
         id: docId,
+        schoolCode,
         personnel: payload,
       });
     } catch (err: any) {
@@ -2494,25 +2725,30 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     try {
-      const { db: targetCoreDb, isTargetCore, targetInfo } = await getCoreDbInstance();
+      const { db: targetCoreDb } = await getCoreDbInstance();
       const snap = await targetCoreDb.collection('personnel').get();
-      const roster = snap.docs.map(d => {
-        const data = d.data();
-        return {
-          id: d.id,
-          name: data.name || '',
-          gender: data.gender || 'L',
-          grade: data.grade || '',
-          position: data.position || '',
-          majorOption: data.majorOption || '',
-          minorOption: data.minorOption || '',
-          email: data.email || '',
-          teachingStatus: data.teachingStatus || 'Aktif',
-        };
-      });
+      const roster = snap.docs
+        .filter(d => belongsToSchool(d.data() as any, schoolCode))
+        .map(d => {
+          const data = d.data();
+          return {
+            id: d.id,
+            schoolCode: resolveRecordSchoolCode(data as any),
+            name: data.name || '',
+            gender: data.gender || 'L',
+            grade: data.grade || '',
+            position: data.position || '',
+            majorOption: data.majorOption || '',
+            minorOption: data.minorOption || '',
+            email: data.email || '',
+            teachingStatus: data.teachingStatus || 'Aktif',
+          };
+        });
       roster.sort((a, b) => a.name.localeCompare(b.name));
-      return res.json({ success: true, count: roster.length, roster });
+      return res.json({ success: true, schoolCode, count: roster.length, roster });
     } catch (err: any) {
       if (err?.code === 'CORE_DATABASE_UNAVAILABLE' || err?.message === 'CORE_DATABASE_UNAVAILABLE') {
         console.warn('[Core DB Standalone] Core database unavailable for roster.');
@@ -2534,9 +2770,11 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid, caller.claims),
-      isCallerPrincipal(caller.uid, caller.claims),
+      isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+      isCallerPrincipal(caller.uid, caller.claims, schoolCode),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
@@ -2625,7 +2863,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Lembaran kerja tidak mengandungi sebarang baris data.' });
       }
 
-      // Query current canonical personnel from authoritative Core target
+      // Query current canonical personnel from authoritative Core target (scoped to schoolCode)
       const { db: targetCoreDb, targetInfo, isTargetCore } = await getCoreDbInstance();
       const existingPersonnelSnap = await targetCoreDb.collection('personnel').get();
       const existingByEmail = new Map<string, { id: string; data: any }>();
@@ -2634,6 +2872,7 @@ async function startServer() {
 
       existingPersonnelSnap.forEach(d => {
         const data = d.data();
+        if (!belongsToSchool(data as any, schoolCode)) return;
         if (data.email) existingByEmail.set(data.email.toLowerCase().trim(), { id: d.id, data });
         if (data.ic) existingByIc.set(String(data.ic).replace(/[^0-9]/g, ''), { id: d.id, data });
         if (data.staffFileNo) existingByFileNo.set(String(data.staffFileNo).trim().toUpperCase(), { id: d.id, data });
@@ -2904,12 +3143,13 @@ async function startServer() {
           }));
           stagingOpCount++;
         } else {
-          // New Personnel: Generate permanent internal stable ID (collision-resistant UUID)
+          // New Personnel: Generate permanent internal stable ID (scoped to schoolCode)
           summary.new++;
-          const stableId = `staff_${crypto.randomUUID()}`;
+          const stableId = scopedDocId(schoolCode, `staff_${crypto.randomUUID()}`);
           const previewItem = {
             rowId,
             rowNumber,
+            schoolCode,
             name: normalized.name,
             maskedIc: normalized.maskedIc,
             staffFileNo: normalized.staffFileNo,
@@ -2930,6 +3170,7 @@ async function startServer() {
           stagingBatch.set(targetCoreDb.doc(`import_staging/${sessionId}/rows/${rowId}`), deepSanitizeFirestore({
             ...previewItem,
             sessionId,
+            schoolCode,
             normalized, // Full values stored strictly in server staging
             createdAt: new Date().toISOString(),
           }));
@@ -2950,6 +3191,7 @@ async function startServer() {
       // Save preview session record
       await targetCoreDb.doc(`import_sessions/${sessionId}`).set({
         id: sessionId,
+        schoolCode,
         timestamp: new Date().toISOString(),
         importType: 'personnel_google_sheet',
         status: 'PREVIEW',
@@ -2996,9 +3238,11 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid, caller.claims),
-      isCallerPrincipal(caller.uid, caller.claims),
+      isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+      isCallerPrincipal(caller.uid, caller.claims, schoolCode),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
@@ -3024,7 +3268,7 @@ async function startServer() {
         });
       }
 
-      // 1. Verify session exists on Core DB and is in PREVIEW status
+      // 1. Verify session exists on Core DB, belongs to schoolCode, and is in PREVIEW status
       const sessionRef = targetCoreDb.doc(`import_sessions/${sessionId}`);
       const sessionSnap = await sessionRef.get();
       if (!sessionSnap.exists) {
@@ -3032,6 +3276,9 @@ async function startServer() {
       }
 
       const sessionData = sessionSnap.data();
+      if (!belongsToSchool(sessionData as any, schoolCode)) {
+        return res.status(403).json({ error: 'Akses ditolak: Sesi import ini milik sekolah lain.' });
+      }
       if (sessionData?.status === 'COMMITTED') {
         return res.status(400).json({ error: 'Sesi import ini telah pun dikomit sebelum ini. Elakkan komit berulang.' });
       }
@@ -3081,6 +3328,7 @@ async function startServer() {
         const rollbackRef = targetCoreDb.doc(`rollback_records/${sessionId}_${personnelId}`);
         currentBatch.set(rollbackRef, {
           id: `${sessionId}_${personnelId}`,
+          schoolCode,
           sessionId,
           collection: 'personnel',
           docId: personnelId,
@@ -3095,6 +3343,7 @@ async function startServer() {
         // Commit to canonical personnel on Core DB
         const personnelPayload: any = {
           id: personnelId,
+          schoolCode,
           name: norm.name,
           gender: norm.gender,
           staffFileNo: norm.staffFileNo || '',
@@ -3138,6 +3387,7 @@ async function startServer() {
         if (norm.category === 'GURU') {
           currentBatch.set(teacherRef, {
             id: personnelId,
+            schoolCode,
             name: norm.name,
             email: norm.email || '',
             gender: norm.gender,
@@ -3173,6 +3423,7 @@ async function startServer() {
       // Audit trail entry
       await targetCoreDb.collection('audit_trail').add({
         timestamp: new Date().toISOString(),
+        schoolCode,
         actor_id: caller.uid,
         actor_name: caller.email || 'Admin',
         actor_role: isSysAdmin ? 'admin' : 'principal',
@@ -3180,6 +3431,7 @@ async function startServer() {
         layer: 'MASTER_DATA',
         entity_id: sessionId,
         details: {
+          schoolCode,
           sessionId,
           committedCount,
           source: sessionData?.sheetSource,
@@ -3187,10 +3439,10 @@ async function startServer() {
         },
       });
 
-      // Auto-sync newly committed personnel into Attendance Users collection
+      // Auto-sync newly committed personnel into Attendance Users collection (for this school)
       let syncResult: any = null;
       try {
-        syncResult = await syncPersonnelToUsers(caller.uid, caller.email || 'Admin');
+        syncResult = await syncPersonnelToUsers(caller.uid, caller.email || 'Admin', schoolCode);
       } catch (syncErr: any) {
         console.warn('Auto-sync personnel to users warning in guru-commit:', syncErr?.message);
       }
@@ -3228,9 +3480,11 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid, caller.claims),
-      isCallerPrincipal(caller.uid, caller.claims),
+      isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+      isCallerPrincipal(caller.uid, caller.claims, schoolCode),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
@@ -3246,7 +3500,6 @@ async function startServer() {
       const {
         db: targetCoreDb,
         isTargetCore,
-        targetInfo
       } = await getCoreDbInstance();
 
       if (!isTargetCore) {
@@ -3256,11 +3509,17 @@ async function startServer() {
         });
       }
 
+      const sessionSnap = await targetCoreDb.doc(`import_sessions/${sessionId}`).get();
+      if (sessionSnap.exists && !belongsToSchool(sessionSnap.data() as any, schoolCode)) {
+        return res.status(403).json({ error: 'Akses ditolak: Sesi import ini milik sekolah lain.' });
+      }
+
       const rollbackSnaps = await targetCoreDb.collection('rollback_records')
         .where('sessionId', '==', sessionId)
         .get();
 
-      if (rollbackSnaps.empty) {
+      const schoolRollbackDocs = rollbackSnaps.docs.filter(d => belongsToSchool(d.data() as any, schoolCode));
+      if (schoolRollbackDocs.length === 0) {
         return res.status(404).json({ error: 'Tiada rekod snapshot undur balik ditemui bagi sesi ini.' });
       }
 
@@ -3268,7 +3527,7 @@ async function startServer() {
       let batch = targetCoreDb.batch();
       let opCount = 0;
 
-      for (const rDoc of rollbackSnaps.docs) {
+      for (const rDoc of schoolRollbackDocs) {
         const rec = rDoc.data();
         const targetRef = targetCoreDb.doc(`${rec.collection}/${rec.docId}`);
         const teacherRef = targetCoreDb.doc(`teachers/${rec.docId}`);
@@ -3311,13 +3570,14 @@ async function startServer() {
 
       await targetCoreDb.collection('audit_trail').add({
         timestamp: new Date().toISOString(),
+        schoolCode,
         actor_id: caller.uid,
         actor_name: caller.email || 'Admin',
         actor_role: isSysAdmin ? 'admin' : 'principal',
         action_type: 'IMPORT_GURU_GOOGLE_SHEET_ROLLED_BACK',
         layer: 'MASTER_DATA',
         entity_id: sessionId,
-        details: { sessionId, revertedCount },
+        details: { schoolCode, sessionId, revertedCount },
       });
 
       return res.json({
@@ -3447,16 +3707,18 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid, caller.claims),
-      isCallerPrincipal(caller.uid, caller.claims),
+      isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+      isCallerPrincipal(caller.uid, caller.claims, schoolCode),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
       return res.status(403).json({ error: '禁止访问：只有校长或系统管理员可以执行学生数据导入。' });
     }
 
-    const { excelBase64, csvData, academicYear = '2026', fileName = 'YCC3404 Keseluruhan Murid.xlsx' } = req.body;
+    const { excelBase64, csvData, academicYear = '2026', fileName = `${schoolCode} Keseluruhan Murid.xlsx` } = req.body;
     let workbook: XLSX.WorkBook;
 
     try {
@@ -3514,14 +3776,15 @@ async function startServer() {
         return res.status(400).json({ error: 'Lembaran kerja tidak mengandungi sebarang baris rekod murid.' });
       }
 
-      // Query current canonical student_master from authoritative Core target
-      const { db: targetCoreDb, targetInfo, isTargetCore } = await getCoreDbInstance();
+      // Query current canonical student_master from authoritative Core target (scoped to schoolCode)
+      const { db: targetCoreDb } = await getCoreDbInstance();
       const existingMasterSnap = await targetCoreDb.collection('student_master').get();
       const existingByApdm = new Map<string, { id: string; data: any }>();
       const existingByIc = new Map<string, { id: string; data: any }>();
 
       existingMasterSnap.forEach(d => {
         const data = d.data();
+        if (!belongsToSchool(data as any, schoolCode)) return;
         if (data.apdmId) existingByApdm.set(String(data.apdmId).trim(), { id: d.id, data });
         if (data.student_id) existingByApdm.set(String(data.student_id).trim(), { id: d.id, data });
         if (data.icNumber) existingByIc.set(String(data.icNumber).replace(/[^0-9]/g, ''), { id: d.id, data });
@@ -3800,7 +4063,7 @@ async function startServer() {
         let matchReason = 'Rekod murid baharu. Akan didaftarkan ke Student Master dan Kelas.';
         let existingId: string | null = null;
         const diffs: string[] = [];
-        let proposedId = apdmId || cleanIc || `S_${crypto.randomUUID().slice(0, 8)}`;
+        let proposedId = scopedDocId(schoolCode, apdmId || cleanIc || `S_${crypto.randomUUID().slice(0, 8)}`);
 
         if (matchTarget) {
           existingId = matchTarget.id;
@@ -3912,6 +4175,7 @@ async function startServer() {
 
         stagingBatch.set(targetCoreDb.doc(`import_staging/${sessionId}/rows/${rowId}`), deepSanitizeFirestore({
           ...previewItem,
+          schoolCode,
           sessionId,
           createdAt: new Date().toISOString(),
         }));
@@ -3930,6 +4194,7 @@ async function startServer() {
       // Record session in import_sessions
       await targetCoreDb.doc(`import_sessions/${sessionId}`).set(deepSanitizeFirestore({
         id: sessionId,
+        schoolCode,
         timestamp: new Date().toISOString(),
         importType: 'student_apdm',
         status: 'PREVIEW',
@@ -3971,9 +4236,11 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+
     const [isSysAdmin, isPrincipal] = await Promise.all([
-      isCallerSystemAdmin(caller.uid, caller.claims),
-      isCallerPrincipal(caller.uid, caller.claims),
+      isCallerSystemAdmin(caller.uid, caller.claims, schoolCode),
+      isCallerPrincipal(caller.uid, caller.claims, schoolCode),
     ]);
 
     if (!isSysAdmin && !isPrincipal) {
@@ -3994,7 +4261,7 @@ async function startServer() {
         });
       }
 
-      // 1. Verify session exists and is PREVIEW
+      // 1. Verify session exists, belongs to schoolCode, and is PREVIEW
       const sessionRef = targetCoreDb.doc(`import_sessions/${sessionId}`);
       const sessionSnap = await sessionRef.get();
       if (!sessionSnap.exists) {
@@ -4002,6 +4269,9 @@ async function startServer() {
       }
 
       const sessionData = sessionSnap.data();
+      if (!belongsToSchool(sessionData as any, schoolCode)) {
+        return res.status(403).json({ error: 'Akses ditolak: Sesi import ini milik sekolah lain.' });
+      }
       if (sessionData?.status === 'COMMITTED') {
         return res.status(400).json({ error: 'Sesi import ini telah pun dikomit sebelum ini.' });
       }
@@ -4041,8 +4311,9 @@ async function startServer() {
       let opCount = 0;
 
       for (const row of eligibleRows) {
-        const studentId = row.proposedId || row.existingId;
-        if (!studentId) continue;
+        const rawStudentId = row.existingId || row.proposedId;
+        if (!rawStudentId) continue;
+        const studentId = row.existingId ? String(rawStudentId) : scopedDocId(schoolCode, String(rawStudentId));
 
         // Resolve 6-year-old class promotion decision
         let finalYear = row.suggestedYear;
@@ -4062,7 +4333,7 @@ async function startServer() {
         const masterRef = targetCoreDb.doc(`student_master/${studentId}`);
         const masterSnap = await masterRef.get();
 
-        const enrollId = `${studentId}_${academicYear.replace(/\//g, '-')}`;
+        const enrollId = scopedDocId(schoolCode, `${studentId}_${academicYear.replace(/\//g, '-')}`);
         const enrollRef = targetCoreDb.doc(`students/${enrollId}`);
         const enrollSnap = await enrollRef.get();
 
@@ -4070,6 +4341,7 @@ async function startServer() {
         const rollbackRef = targetCoreDb.doc(`rollback_records/${sessionId}_${studentId}`);
         batch.set(rollbackRef, deepSanitizeFirestore({
           id: `${sessionId}_${studentId}`,
+          schoolCode,
           sessionId,
           collection: 'student_master',
           docId: studentId,
@@ -4085,6 +4357,7 @@ async function startServer() {
         // Non-destructive upsert to student_master (Preserves custom notes, interventions, etc.)
         const masterPayload: any = {
           student_id: studentId,
+          schoolCode,
           apdmId: row.apdmId || '',
           name: row.name.toUpperCase(),
           icNumber: row.icNumber || '',
@@ -4121,6 +4394,7 @@ async function startServer() {
         // Non-destructive upsert to students collection (sessional enrollment)
         const enrollPayload: any = {
           id: enrollId,
+          schoolCode,
           student_id: studentId,
           apdmId: row.apdmId || '',
           name: row.name.toUpperCase(),
@@ -4170,6 +4444,7 @@ async function startServer() {
       // Audit trail entry
       await targetCoreDb.collection('audit_trail').add(deepSanitizeFirestore({
         timestamp: new Date().toISOString(),
+        schoolCode,
         actor_id: caller.uid,
         actor_name: caller.email || 'Admin',
         actor_role: isSysAdmin ? 'admin' : 'principal',
@@ -4177,6 +4452,7 @@ async function startServer() {
         layer: 'MASTER_DATA',
         entity_id: sessionId,
         details: {
+          schoolCode,
           sessionId,
           committedCount,
           targetInfo: `${CORE_PROJECT_ID}/${CORE_DATABASE_ID}`,
@@ -4186,7 +4462,8 @@ async function startServer() {
 
       return res.json({
         success: true,
-        message: `Berjaya mengimport ${committedCount} profil murid ke dalam Student Master dan Penempatan Kelas Sesi ${academicYear}.`,
+        schoolCode,
+        message: `Berjaya mengimport ${committedCount} profil murid (${schoolCode}) ke dalam Student Master dan Penempatan Kelas Sesi ${academicYear}.`,
         sessionId,
         committedCount,
         target: `${CORE_PROJECT_ID}/${CORE_DATABASE_ID}`,
@@ -4203,60 +4480,85 @@ async function startServer() {
     }
   });
 
-  // 3. Complete Student Profile Endpoint (Reads from SSOT, PBD, UASA, Kokurikulum)
+  // 3. Complete Student Profile Endpoint (Reads from SSOT, PBD, UASA, Kokurikulum — school-scoped)
   app.get('/api/student-profile/:studentId', async (req: Request, res: Response) => {
     const caller = await verifyCallerAuth(req);
     if (!caller) {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
     const { studentId } = req.params;
     const academicYear = (req.query.academicYear as string) || '2026';
+    const yearSlug = academicYear.replace(/\//g, '-');
 
     try {
       const { db: targetCoreDb } = await getCoreDbInstance();
 
-      // Fetch student_master
+      // Fetch student_master (scoped ID first, then direct ID if same school, then apdmId query)
       let masterData: any = null;
-      const masterDoc = await targetCoreDb.doc(`student_master/${studentId}`).get();
-      if (masterDoc.exists) {
-        masterData = { student_id: masterDoc.id, ...masterDoc.data() };
+      const scopedMasterId = scopedDocId(schoolCode, studentId);
+      const scopedMasterDoc = await targetCoreDb.doc(`student_master/${scopedMasterId}`).get();
+      if (scopedMasterDoc.exists && belongsToSchool(scopedMasterDoc.data() as any, schoolCode)) {
+        masterData = { student_id: scopedMasterDoc.id, ...scopedMasterDoc.data() };
       } else {
-        // Query by apdmId
-        const apdmSnap = await targetCoreDb.collection('student_master').where('apdmId', '==', studentId).limit(1).get();
-        if (!apdmSnap.empty) {
-          masterData = { student_id: apdmSnap.docs[0].id, ...apdmSnap.docs[0].data() };
+        const masterDoc = await targetCoreDb.doc(`student_master/${studentId}`).get();
+        if (masterDoc.exists && belongsToSchool(masterDoc.data() as any, schoolCode)) {
+          masterData = { student_id: masterDoc.id, ...masterDoc.data() };
+        } else {
+          const apdmSnap = await targetCoreDb.collection('student_master').where('apdmId', '==', studentId).get();
+          const matched = apdmSnap.docs.find(d => belongsToSchool(d.data() as any, schoolCode));
+          if (matched) {
+            masterData = { student_id: matched.id, ...matched.data() };
+          }
         }
       }
 
+      const canonicalStudentId = masterData?.student_id || studentId;
+
       // Fetch sessional enrollment
-      const enrollId = `${studentId}_${academicYear.replace(/\//g, '-')}`;
-      const enrollDoc = await targetCoreDb.doc(`students/${enrollId}`).get();
-      const enrollment = enrollDoc.exists ? { id: enrollDoc.id, ...enrollDoc.data() } : null;
+      let enrollment: any = null;
+      const scopedEnrollId = scopedDocId(schoolCode, `${canonicalStudentId}_${yearSlug}`);
+      const scopedEnrollDoc = await targetCoreDb.doc(`students/${scopedEnrollId}`).get();
+      if (scopedEnrollDoc.exists && belongsToSchool(scopedEnrollDoc.data() as any, schoolCode)) {
+        enrollment = { id: scopedEnrollDoc.id, ...scopedEnrollDoc.data() };
+      } else {
+        const legacyEnrollDoc = await targetCoreDb.doc(`students/${studentId}_${yearSlug}`).get();
+        if (legacyEnrollDoc.exists && belongsToSchool(legacyEnrollDoc.data() as any, schoolCode)) {
+          enrollment = { id: legacyEnrollDoc.id, ...legacyEnrollDoc.data() };
+        }
+      }
 
-      // Fetch PBD Results
+      // Fetch PBD Results (filtered by schoolCode)
       const pbdSnap = await targetCoreDb.collection('pbd_results')
-        .where('student_id', '==', studentId)
+        .where('student_id', '==', canonicalStudentId)
         .where('academic_year', '==', academicYear)
         .get();
-      const pbdResults = pbdSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const pbdResults = pbdSnap.docs
+        .filter(d => belongsToSchool(d.data() as any, schoolCode))
+        .map(d => ({ id: d.id, ...d.data() }));
 
-      // Fetch UASA Results
+      // Fetch UASA Results (filtered by schoolCode)
       const uasaSnap = await targetCoreDb.collection('uasa_results')
-        .where('student_id', '==', studentId)
+        .where('student_id', '==', canonicalStudentId)
         .where('academic_year', '==', academicYear)
         .get();
-      const uasaResults = uasaSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const uasaResults = uasaSnap.docs
+        .filter(d => belongsToSchool(d.data() as any, schoolCode))
+        .map(d => ({ id: d.id, ...d.data() }));
 
-      // Fetch Kokurikulum Memberships
+      // Fetch Kokurikulum Memberships (filtered by schoolCode)
       const kokoSnap = await targetCoreDb.collection('koko_memberships')
-        .where('student_id', '==', studentId)
+        .where('student_id', '==', canonicalStudentId)
         .where('academicYear', '==', academicYear)
         .get();
-      const kokoMemberships = kokoSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const kokoMemberships = kokoSnap.docs
+        .filter(d => belongsToSchool(d.data() as any, schoolCode))
+        .map(d => ({ id: d.id, ...d.data() }));
 
       return res.json({
         success: true,
+        schoolCode,
         studentMaster: masterData,
         enrollment,
         pbdResults,
@@ -4322,7 +4624,8 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
-    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims, schoolCode);
     if (!isPrincipal) {
       return res.status(403).json({ error: '禁止访问：只有校长可以批量开通员工账号' });
     }
@@ -4350,36 +4653,35 @@ async function startServer() {
         continue;
       }
 
-      let newlyCreatedUid: string | null = null;
+      const newlyCreatedUid: string | null = null;
       try {
         const category = (email.toLowerCase().startsWith('g-') || email.toLowerCase().startsWith('g.')) ? 'GURU' : 'AKP';
         const uidToUse = await createOrUpdateAuthUserResilient(email, password, name);
 
-        // Merge & clean up any existing pre-registered doc for this email before saving canonical /users/{uid}
-        let existingPreData: Record<string, any> = {};
-        const preSnap = await adminDb.collection('users').where('email', '==', email).get();
-        for (const d of preSnap.docs) {
-          if (d.id !== uidToUse) {
-            existingPreData = { ...existingPreData, ...d.data() };
-            await d.ref.delete().catch(() => {});
-          }
+        const existingUserSnap = await adminDb.doc(`users/${uidToUse}`).get();
+        if (existingUserSnap.exists && !belongsToSchool(existingUserSnap.data() as any, schoolCode)) {
+          results.push({
+            name,
+            email,
+            success: false,
+            message: '该邮箱账号已绑定其他学校，禁止跨校覆盖',
+          });
+          continue;
         }
 
-        // Save merged profile in /users/{uid} (No initialPassword in Firestore)
-        await adminDb.doc(`users/${uidToUse}`).set(deepSanitizeFirestore({
-          ...existingPreData,
+        // Save profile in /users/{uid} (No initialPassword in Firestore)
+        await adminDb.doc(`users/${uidToUse}`).set({
           uid: uidToUse,
-          name: existingPreData.name || name,
+          schoolCode,
+          name,
           email,
-          category: existingPreData.category || category,
-          role: hasClerkAccess ? 'CLERK' : (existingPreData.role || category),
-          hasClerkAccess: hasClerkAccess || Boolean(existingPreData.hasClerkAccess),
+          category,
+          role: hasClerkAccess ? 'CLERK' : category,
+          hasClerkAccess,
           active: true,
-          isVerified: true,
-          isPreRegistered: false,
-          createdAt: existingPreData.createdAt || FieldValue.serverTimestamp(),
+          ...(existingUserSnap.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
           updatedAt: FieldValue.serverTimestamp(),
-        }), { merge: true });
+        }, { merge: true });
 
         results.push({
           name,
@@ -4422,7 +4724,8 @@ async function startServer() {
       return res.status(401).json({ error: '未授权：请先登录' });
     }
 
-    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims, schoolCode);
     if (!isPrincipal) {
       return res.status(403).json({ error: '禁止访问：只有校长可以开通员工账号' });
     }
@@ -4435,37 +4738,30 @@ async function startServer() {
       return res.status(400).json({ error: '请完整填写员工信息，密码最少 6 位。' });
     }
 
-    let newlyCreatedUid: string | null = null;
+    const newlyCreatedUid: string | null = null;
     try {
       const category = (cleanEmail.startsWith('g-') || cleanEmail.startsWith('g.')) ? 'GURU' : 'AKP';
       const uidToUse = await createOrUpdateAuthUserResilient(cleanEmail, password, cleanName);
 
-      // Merge & clean up any existing pre-registered doc for this email
-      let existingPreData: Record<string, any> = {};
-      const preSnap = await adminDb.collection('users').where('email', '==', cleanEmail).get();
-      for (const d of preSnap.docs) {
-        if (d.id !== uidToUse) {
-          existingPreData = { ...existingPreData, ...d.data() };
-          await d.ref.delete().catch(() => {});
-        }
+      const existingUserSnap = await adminDb.doc(`users/${uidToUse}`).get();
+      if (existingUserSnap.exists && !belongsToSchool(existingUserSnap.data() as any, schoolCode)) {
+        return res.status(403).json({ error: '该邮箱账号已绑定其他学校，禁止跨校覆盖。' });
       }
 
-      await adminDb.doc(`users/${uidToUse}`).set(deepSanitizeFirestore({
-        ...existingPreData,
+      await adminDb.doc(`users/${uidToUse}`).set({
         uid: uidToUse,
-        name: existingPreData.name || cleanName,
+        schoolCode,
+        name: cleanName,
         email: cleanEmail,
-        category: existingPreData.category || category,
-        role: hasClerkAccess ? 'CLERK' : (existingPreData.role || category),
-        hasClerkAccess: !!hasClerkAccess || Boolean(existingPreData.hasClerkAccess),
+        category,
+        role: hasClerkAccess ? 'CLERK' : category,
+        hasClerkAccess: !!hasClerkAccess,
         active: true,
-        isVerified: true,
-        isPreRegistered: false,
-        createdAt: existingPreData.createdAt || FieldValue.serverTimestamp(),
+        ...(existingUserSnap.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
         updatedAt: FieldValue.serverTimestamp(),
-      }), { merge: true });
+      }, { merge: true });
 
-      return res.json({ success: true, uid: uidToUse, password });
+      return res.json({ success: true, uid: uidToUse, schoolCode, password });
     } catch (err: any) {
       if (newlyCreatedUid) {
         try {
@@ -4498,10 +4794,10 @@ async function startServer() {
 
     return withUserLock(caller.uid, async () => {
       try {
-        const { ref: resolvedUserRef } = await resolveUserDocRef(caller.uid, caller.email);
         const result = await adminDb.runTransaction(async (transaction) => {
           // 1. Verify user profile exists and active === true (missing active also rejected)
-          const userDoc = await transaction.get(resolvedUserRef);
+          const userRef = adminDb.doc(`users/${caller.uid}`);
+          const userDoc = await transaction.get(userRef);
           if (!userDoc.exists) {
             throw new Error('UNAUTHORIZED: 您的账号未获校方授权建档，无法打卡。');
           }
@@ -4546,10 +4842,12 @@ async function startServer() {
           }
 
           const geoRef = adminDb.doc(`attendance_geo/${recordId}`);
+          const userSchoolCode = resolveRecordSchoolCode(userData as any);
 
-          // 6. Atomic Write: Attendance + Isolated Geo + User State
+          // 6. Atomic Write: Attendance + Isolated Geo + User State (stamped with schoolCode)
           transaction.set(recordRef, {
             id: recordId,
+            schoolCode: userSchoolCode,
             userId: caller.uid,
             userName: userData.name || '',
             userEmail: userData.email || caller.email || '',
@@ -4564,6 +4862,7 @@ async function startServer() {
 
           transaction.set(geoRef, {
             recordId,
+            schoolCode: userSchoolCode,
             userId: caller.uid,
             date: todayStr,
             slot: newSlot,
@@ -4576,6 +4875,7 @@ async function startServer() {
           transaction.set(
             stateRef,
             {
+              schoolCode: userSchoolCode,
               activeSessionId: recordId,
               activeSessionDate: todayStr,
               activeSessionSlot: newSlot,
@@ -4617,10 +4917,10 @@ async function startServer() {
 
     return withUserLock(caller.uid, async () => {
       try {
-        const { ref: resolvedUserRef } = await resolveUserDocRef(caller.uid, caller.email);
         const result = await adminDb.runTransaction(async (transaction) => {
           // 1. Verify user profile exists and active === true (missing active also rejected)
-          const userDoc = await transaction.get(resolvedUserRef);
+          const userRef = adminDb.doc(`users/${caller.uid}`);
+          const userDoc = await transaction.get(userRef);
           const userData = userDoc.data();
           if (!userDoc.exists || !userData || userData.active !== true) {
             throw new Error('DEACTIVATED: 账号已被停用或无打卡权限（要求 active === true）。');
@@ -4697,17 +4997,24 @@ async function startServer() {
   app.post('/api/staff/update-status', async (req: Request, res: Response) => {
     const caller = await verifyCallerAuth(req);
     if (!caller) return res.status(401).json({ error: '未授权：请先登录' });
-    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
+
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims, schoolCode);
     if (!isPrincipal) return res.status(403).json({ error: '禁止访问：只有校长可以修改员工档案状态' });
 
-    const { targetUid, active, hasClerkAccess, email } = req.body;
+    const { targetUid, active, hasClerkAccess } = req.body;
     if (!targetUid) return res.status(400).json({ error: '缺少 targetUid' });
 
     try {
-      const { ref: targetRef, snap: userDoc } = await resolveUserDocRef(targetUid, email);
+      const userDocRef = adminDb.doc(`users/${targetUid}`);
+      const userDoc = await userDocRef.get();
       if (!userDoc.exists) {
-        return res.status(404).json({ error: '未找到员工档案' });
+        return res.status(404).json({ error: '未找到该员工档案' });
       }
+      if (!belongsToSchool(userDoc.data() as any, schoolCode)) {
+        return res.status(403).json({ error: '禁止跨校修改其他学校员工档案' });
+      }
+
       const updates: any = { updatedAt: FieldValue.serverTimestamp() };
       if (typeof active === 'boolean') updates.active = active;
       if (typeof hasClerkAccess === 'boolean') {
@@ -4715,81 +5022,107 @@ async function startServer() {
         const cat = userDoc.data()?.category || 'GURU';
         updates.role = hasClerkAccess ? 'CLERK' : cat;
       }
-      await targetRef.update(updates);
+      await userDocRef.update(updates);
       return res.json({ success: true });
     } catch (err: any) {
-      const msg = String(err?.message || '');
-      if (msg.includes('PERMISSION_DENIED') || msg.includes('Missing or insufficient permissions') || err?.code === 7) {
-        return res.json({ success: false, sandboxFallback: true, error: msg });
-      }
-      return res.status(500).json({ error: msg || '更新失败' });
+      return res.status(500).json({ error: err.message || '更新失败' });
     }
   });
 
   app.post('/api/staff/delete', async (req: Request, res: Response) => {
     const caller = await verifyCallerAuth(req);
     if (!caller) return res.status(401).json({ error: '未授权：请先登录' });
-    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
+
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims, schoolCode);
     if (!isPrincipal) return res.status(403).json({ error: '禁止访问：只有校长可以删除员工档案' });
 
-    const { targetUid, email, personnelId } = req.body;
+    const { targetUid } = req.body;
     if (!targetUid) return res.status(400).json({ error: '缺少 targetUid' });
     if (targetUid === caller.uid) return res.status(400).json({ error: '不能删除校长自身档案' });
 
-    let adminDeleted = false;
-    let authUidToDelete = String(targetUid);
-
     try {
-      const { ref: targetRef, snap: targetSnap } = await resolveUserDocRef(targetUid, email);
-      if (targetSnap.exists) {
-        authUidToDelete = targetSnap.data()?.uid || targetUid;
-        if (authUidToDelete === caller.uid) return res.status(400).json({ error: '不能删除校长自身档案' });
-        await targetRef.delete();
-        adminDeleted = true;
-      } else {
-        // Attempt direct doc delete in case doc ID differs from uid query
-        await adminDb.doc(`users/${targetUid}`).delete().catch(() => {});
+      const userDocRef = adminDb.doc(`users/${targetUid}`);
+      const userDoc = await userDocRef.get();
+      if (userDoc.exists && !belongsToSchool(userDoc.data() as any, schoolCode)) {
+        return res.status(403).json({ error: '禁止跨校删除其他学校员工档案' });
       }
 
-      if (personnelId) {
-        await adminDb.doc(`personnel/${personnelId}`).delete().catch(() => {});
-      }
-    } catch (dbErr: any) {
-      console.warn('Admin DB staff delete notice (client Firestore cleanup will run):', dbErr?.message || dbErr);
-    }
-
-    if (authUidToDelete && !String(authUidToDelete).startsWith('staff_') && authUidToDelete !== caller.uid) {
+      await userDocRef.delete();
       try {
-        await adminAuth.deleteUser(authUidToDelete);
+        await adminAuth.deleteUser(targetUid);
       } catch (authErr) {
         console.warn('Auth user delete cleanup notice:', authErr);
       }
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || '删除失败' });
     }
-
-    return res.json({ success: true, adminDeleted });
   });
 
   app.post('/api/school-settings/update', async (req: Request, res: Response) => {
     const caller = await verifyCallerAuth(req);
     if (!caller) return res.status(401).json({ error: '未授权：请先登录' });
-    const isPrincipal = await isCallerPrincipal(caller.uid, caller.claims);
-    if (!isPrincipal) return res.status(403).json({ error: '禁止访问：只有校长可以更改学校设定' });
 
-    const { schoolName, schoolCode } = req.body;
+    const callerSchoolCode = await resolveCallerSchoolCode(req, caller);
+    const { schoolName, schoolCode, activeSchoolCode, slogan, logoUrl, adminEmails } = req.body;
+    const targetCode = sanitizeSchoolCodeInput(activeSchoolCode || schoolCode) || callerSchoolCode;
+
+    if (!isSuperAdminEmail(caller.email) && targetCode !== callerSchoolCode) {
+      return res.status(403).json({ error: '禁止跨校修改学校设定' });
+    }
+
+    const [isPrincipal, isSysAdmin] = await Promise.all([
+      isCallerPrincipal(caller.uid, caller.claims, targetCode),
+      isCallerSystemAdmin(caller.uid, caller.claims, targetCode),
+    ]);
+    if (!isPrincipal && !isSysAdmin) {
+      return res.status(403).json({ error: '禁止访问：只有校长或系统管理员可以更改学校设定' });
+    }
+
     if (!schoolName || !schoolName.trim()) {
       return res.status(400).json({ error: '学校全称不能为空' });
     }
 
     try {
-      await adminDb.doc('school_settings/general').set(
-        {
-          schoolName: schoolName.trim(),
-          schoolCode: (schoolCode || '').trim().toUpperCase(),
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-      return res.json({ success: true });
+      const cleanName = schoolName.trim();
+      const settingsDocId = scopedDocId(targetCode, 'general');
+      const configDocId = scopedDocId(targetCode, 'default');
+      const profileUpdate: Record<string, any> = {
+        schoolCode: targetCode,
+        schoolName: cleanName,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (typeof slogan === 'string') profileUpdate.slogan = slogan.trim();
+      if (typeof logoUrl === 'string') profileUpdate.logoUrl = logoUrl.trim();
+      if (Array.isArray(adminEmails)) {
+        profileUpdate.adminEmails = adminEmails.map((e: any) => String(e || '').toLowerCase().trim()).filter(Boolean);
+      }
+
+      await Promise.all([
+        adminDb.doc(`schools/${targetCode}`).set(profileUpdate, { merge: true }),
+        adminDb.doc(`school_settings/${settingsDocId}`).set(
+          {
+            ...profileUpdate,
+            ...(typeof logoUrl === 'string' ? { schoolLogo: logoUrl.trim() } : {}),
+          },
+          { merge: true }
+        ),
+        adminDb.doc(`school_config/${configDocId}`).set(
+          {
+            id: configDocId,
+            schoolCode: targetCode,
+            schoolName: cleanName,
+            ...(typeof slogan === 'string' ? { slogan: slogan.trim() } : {}),
+            ...(typeof logoUrl === 'string' ? { schoolLogo: logoUrl.trim() } : {}),
+            ...(Array.isArray(adminEmails) ? { adminEmails: profileUpdate.adminEmails } : {}),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        ),
+      ]);
+
+      return res.json({ success: true, schoolCode: targetCode });
     } catch (err: any) {
       return res.status(500).json({ error: err.message || '保存设定失败' });
     }
@@ -4803,7 +5136,7 @@ async function startServer() {
     }
 
     try {
-      const { snap: userDoc } = await resolveUserDocRef(caller.uid, caller.email);
+      const userDoc = await adminDb.doc(`users/${caller.uid}`).get();
       if (!userDoc.exists || userDoc.data()?.active !== true) {
         return res.status(403).json({ error: '账号未获授权或已被停用' });
       }
@@ -4818,8 +5151,13 @@ async function startServer() {
 
   // Mount Vite middleware for SPA in development
   if (process.env.NODE_ENV !== 'production') {
+    const hmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: !hmrDisabled,
+        ...(hmrDisabled ? { ws: false as const, watch: null } : {}),
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -4830,11 +5168,33 @@ async function startServer() {
     });
   }
 
-  // App server port: respects Cloud Run PORT environment variable, defaults to 3000
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-  app.listen(PORT, '0.0.0.0', () => {
+  // Resolve port: respect CLI --port flag (e.g. `npm run dev --port 3000`), then PORT env var, default 3000
+  const portArgIndex = process.argv.findIndex((arg) => arg === '--port' || arg.startsWith('--port='));
+  let cliPort: number | undefined;
+  if (portArgIndex !== -1) {
+    const raw = process.argv[portArgIndex].includes('=')
+      ? process.argv[portArgIndex].split('=')[1]
+      : process.argv[portArgIndex + 1];
+    const parsed = parseInt(raw || '', 10);
+    if (!Number.isNaN(parsed) && parsed > 0) {
+      cliPort = parsed;
+    }
+  }
+
+  const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
+  const PORT = cliPort || (!Number.isNaN(envPort as number) && envPort ? envPort : 3000);
+
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Sistem Kehadiran Sekolah (Admin SDK) server running on port ${PORT}`);
+  });
+
+  server.on('error', (err) => {
+    console.error(`Failed to bind dev server on port ${PORT}:`, err);
+    process.exit(1);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('Fatal error during server startup:', err);
+  process.exit(1);
+});

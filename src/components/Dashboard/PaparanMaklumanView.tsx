@@ -44,6 +44,8 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from '../../lib/firebase';
 import { UserProfile, SchoolSettings, PersonnelProfile } from '../../types';
 import { filterStaffBirthdays, StaffBirthdayInfo } from '../../utils/birthdayUtils';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 
 export type MaklumanDomain = 'KURIKULUM' | 'HEM' | 'KOKURIKULUM' | 'PENTADBIRAN' | 'CUTI';
 
@@ -101,6 +103,7 @@ export interface MaklumanTaskItem {
   createdByTeacherId: string;
   createdByName: string;
   createdAt: string;
+  schoolCode?: string;
 }
 
 export interface TeacherProfile {
@@ -236,6 +239,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
   isPrincipalOrAdmin = false,
   addToast: propAddToast,
 }) => {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName, isLegacySchool } = useSchoolTenant();
   const [items, setItems] = useState<MaklumanTaskItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [uploadingTakwim, setUploadingTakwim] = useState<boolean>(false);
@@ -271,8 +275,9 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       if (user) {
         try {
           const snap = await getDocs(collection(db, 'personnel'));
-          if (!snap.empty) {
-            const list: TeacherProfile[] = snap.docs.map((docSnap) => {
+          const scopedPersonnel = snap.docs.filter((docSnap) => belongsToSchool(docSnap.data(), activeSchoolCode));
+          if (scopedPersonnel.length > 0) {
+            const list: TeacherProfile[] = scopedPersonnel.map((docSnap) => {
               const d = docSnap.data();
               return {
                 teacherId: docSnap.id,
@@ -287,6 +292,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
           } else {
             const usersSnap = await getDocs(collection(db, 'users'));
             const list: TeacherProfile[] = usersSnap.docs
+              .filter((docSnap) => belongsToSchool(docSnap.data(), activeSchoolCode))
               .map((docSnap) => {
                 const d = docSnap.data();
                 return {
@@ -308,7 +314,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
     });
 
     return () => unsubAuth();
-  }, [propTeachers]);
+  }, [propTeachers, activeSchoolCode]);
 
   const [viewMode, setViewMode] = useState<'PEMBANTU_SAYA' | 'PEMANTAUAN_GB'>('PEMBANTU_SAYA');
   const [timeHorizon, setTimeHorizon] = useState<TimeHorizonFilter>('BULAN_INI');
@@ -347,14 +353,14 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       (propCurrentTeacher as any)?.fullName ||
       (propCurrentTeacher as any)?.name ||
       authUser?.displayName ||
-      (email.includes('sjkcchb2026') ? 'TEO YANG MING' : 'Guru');
+      (isLegacySchool && email.includes('sjkcchb2026') ? 'TEO YANG MING' : 'Guru');
 
     const subRole =
       (propCurrentTeacher as any)?.subRole ||
       (propCurrentTeacher as any)?.primaryRoleCode ||
       (propCurrentTeacher as any)?.leadershipRole ||
       (propCurrentTeacher as any)?.akpRole ||
-      (fullName.toUpperCase().includes('TEO YANG MING') || email.includes('sjkcchb2026') ? 'GB' : '');
+      (isLegacySchool && (fullName.toUpperCase().includes('TEO YANG MING') || email.includes('sjkcchb2026')) ? 'GB' : '');
 
     return {
       teacherId:
@@ -372,7 +378,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       category: (propCurrentTeacher as any)?.category || (['PT', 'PO', 'PPM'].includes(subRole) ? 'AKP' : 'GURU'),
       position: (propCurrentTeacher as any)?.position || (subRole === 'GB' ? 'Guru Besar' : ''),
     };
-  }, [propCurrentTeacher]);
+  }, [propCurrentTeacher, isLegacySchool]);
 
   const myTeacherId = resolvedCurrentTeacher.teacherId;
   const activeTeachers = useMemo(
@@ -389,9 +395,12 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       (snap) => {
         if (!isMounted) return;
         const loaded: MaklumanTaskItem[] = [];
-        snap.forEach((d) =>
-          loaded.push({ id: d.id, ...(d.data() as Omit<MaklumanTaskItem, 'id'>) })
-        );
+        snap.forEach((d) => {
+          const data = d.data() as Omit<MaklumanTaskItem, 'id'>;
+          if (belongsToSchool(data, activeSchoolCode)) {
+            loaded.push({ id: d.id, ...data });
+          }
+        });
         setItems(loaded);
         setLoading(false);
       },
@@ -404,7 +413,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       isMounted = false;
       unsub();
     };
-  }, []);
+  }, [activeSchoolCode]);
 
   // 2. Parse & Import `TAKWIM 2027.xlsx` uploaded by Principal or PK
   const handleTakwimExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -499,9 +508,13 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                 .map((l) => l.trim())
                 .filter(Boolean)
                 .join(' ');
-              const docId = `takwim_${dateStr}_${cleanHoliday.replace(/[^A-Z0-9]/gi, '_').slice(0, 35)}`;
+              const docId = scopedDocId(
+                activeSchoolCode,
+                `takwim_${dateStr}_${cleanHoliday.replace(/[^A-Z0-9]/gi, '_').slice(0, 35)}`
+              );
               extractedMap.set(docId, {
                 id: docId,
+                schoolCode: activeSchoolCode,
                 title: cleanHoliday,
                 description: `Cuti Takwim Sekolah (${sheetName})`,
                 domain: 'CUTI',
@@ -562,9 +575,13 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                     cat = 'PERTANDINGAN';
                   }
 
-                  const docId = `takwim_${dateStr}_${line.replace(/[^A-Z0-9]/gi, '_').slice(0, 35)}`;
+                  const docId = scopedDocId(
+                    activeSchoolCode,
+                    `takwim_${dateStr}_${line.replace(/[^A-Z0-9]/gi, '_').slice(0, 35)}`
+                  );
                   extractedMap.set(docId, {
                     id: docId,
+                    schoolCode: activeSchoolCode,
                     title: line,
                     description: tindakanCol && tindakanCol !== cellText ? `Tindakan: ${tindakanCol}` : `Aktiviti Takwim ${actualYear}`,
                     domain: dom,
@@ -654,8 +671,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       mySubRole === 'GB' ||
       resolvedCurrentTeacher.role === 'PRINCIPAL' ||
       myName.includes('GURU BESAR') ||
-      myName.includes('TEO YANG MING') ||
-      myEmail.includes('sjkcchb2026');
+      (isLegacySchool && (myName.includes('TEO YANG MING') || myEmail.includes('sjkcchb2026')));
 
     // 2. Guru Besar (GB) has universal oversight: sees all makluman across all domains
     if (isPrincipalUser) {
@@ -858,7 +874,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       return;
     }
 
-    const schoolName = schoolProfile?.schoolName || 'SJK(C) CHUNG HUA BALINGIAN';
+    const schoolName = schoolProfile?.schoolName || tenantSchoolName;
     const domLabel = DOMAIN_META[item.domain || 'KURIKULUM'].label;
     const catLabel = CATEGORY_META[item.category].label;
     const lateDays = Math.max(0, diffDays(todayStr, item.dueDate));
@@ -935,7 +951,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       addToast(`Tiada nombor telefon bagi ${directWaTeacher.fullName}.`, 'warning');
       return;
     }
-    const schoolName = schoolProfile?.schoolName || 'SJK(C) CHUNG HUA BALINGIAN';
+    const schoolName = schoolProfile?.schoolName || tenantSchoolName;
     const fullText = [
       directWaMessage.trim(),
       ``,
@@ -955,9 +971,10 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
     if (!formTitle.trim()) return;
 
     try {
-      const newId = `adhoc_${Date.now()}`;
+      const newId = scopedDocId(activeSchoolCode, `adhoc_${Date.now()}`);
       const payload: MaklumanTaskItem = {
         id: newId,
+        schoolCode: activeSchoolCode,
         title: formTitle.trim(),
         description: formDesc.trim(),
         domain: formDomain,
@@ -1051,7 +1068,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       addToast(`Tiada nombor telefon bagi ${bday.fullName}. Sila kemas kini di Profil Guru.`, 'warning');
       return;
     }
-    const schoolName = schoolProfile?.schoolName || 'SJK(C) CHUNG HUA BALINGIAN';
+    const schoolName = schoolProfile?.schoolName || tenantSchoolName;
     const text = `*[UCAPAN HARI LAHIR — ${schoolName}]*\n\nSelamat Hari Lahir Cikgu *${bday.fullName}*! 🎂🎉\n\nSemoga dipanjangkan umur, dimurahkan rezeki, dikurniakan kesihatan yang berpanjangan dan sentiasa ceria bersama keluarga serta seluruh warga sekolah.\n\nIkhlas daripada Guru Besar & Warga ${schoolName}.`;
     window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
   };

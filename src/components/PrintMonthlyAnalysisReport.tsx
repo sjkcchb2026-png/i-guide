@@ -2,6 +2,7 @@ import React from 'react';
 import { SchoolSettings } from '../types';
 import { MonthlyAnalysisOverall } from '../types';
 import { Printer, X } from 'lucide-react';
+import { useSchoolTenant } from '../contexts/SchoolTenantContext';
 
 interface PrintMonthlyAnalysisReportProps {
   schoolSettings: SchoolSettings | null;
@@ -16,6 +17,9 @@ export const PrintMonthlyAnalysisReport: React.FC<PrintMonthlyAnalysisReportProp
   filterCategory,
   onClose,
 }) => {
+  const tenant = useSchoolTenant();
+  const activeSchoolName = schoolSettings?.schoolName || tenant.schoolName;
+  const activeSchoolCode = schoolSettings?.schoolCode || tenant.schoolCode;
   const handlePrint = () => {
     window.print();
   };
@@ -59,11 +63,11 @@ export const PrintMonthlyAnalysisReport: React.FC<PrintMonthlyAnalysisReportProp
         {/* School Header */}
         <div className="text-center border-b-2 border-slate-900 pb-4 mb-6">
           <h2 className="text-xl sm:text-2xl font-bold uppercase tracking-wider text-slate-900 font-serif">
-            {schoolSettings?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN'}
+            {activeSchoolName}
           </h2>
-          {schoolSettings?.schoolCode && (
+          {activeSchoolCode && (
             <p className="text-xs text-slate-600 font-mono mt-0.5">
-              KOD SEKOLAH: {schoolSettings.schoolCode}
+              KOD SEKOLAH: {activeSchoolCode}
             </p>
           )}
           <h3 className="text-base sm:text-lg font-bold mt-2 text-slate-900 uppercase tracking-wide">
@@ -302,9 +306,9 @@ export const PrintMonthlyAnalysisReport: React.FC<PrintMonthlyAnalysisReportProp
             <p className="font-semibold text-slate-900">Disahkan Oleh (核准人 / 校长 Guru Besar):</p>
             <div className="mt-16 border-b border-slate-600 w-full mx-auto"></div>
             <p className="mt-1 text-[11px] font-bold text-slate-900">
-              {schoolSettings?.principalEmail ? 'TEO YANG MING' : 'Guru Besar'}
+              {tenant.isLegacySchool && schoolSettings?.principalEmail ? 'TEO YANG MING' : 'Guru Besar'}
             </p>
-            <p className="text-[10px] text-slate-600">Guru Besar, {schoolSettings?.schoolName || 'SJK (C) CHUNG HUA BALINGIAN'}</p>
+            <p className="text-[10px] text-slate-600">Guru Besar, {activeSchoolName}</p>
             <p className="text-[10px] text-slate-500 font-mono mt-0.5">Tarikh / 日期: {overall.monthStr}-30</p>
             <p className="text-[10px] text-slate-500 mt-1">Cop Rasmi Sekolah (校印):</p>
           </div>

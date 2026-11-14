@@ -19,10 +19,66 @@ service cloud.firestore {
       );
     }
 
+    function userExists() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userSchoolCode() {
+      return userExists() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAny(['schoolCode']) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolCode is string &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolCode != ''
+          ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolCode
+          : (userExists() &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAny(['schoolId']) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId is string &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId != ''
+              ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
+              : 'YCC3404');
+    }
+
+    function docSchoolCode(data) {
+      return data != null && data.keys().hasAny(['schoolCode']) && data.schoolCode is string && data.schoolCode != ''
+        ? data.schoolCode
+        : (data != null && data.keys().hasAny(['schoolId']) && data.schoolId is string && data.schoolId != ''
+            ? data.schoolId
+            : 'YCC3404');
+    }
+
+    function belongsToCallerSchool(data) {
+      return isSuperAdmin() || docSchoolCode(data) == userSchoolCode();
+    }
+
+    function isSchoolAdmin(sc) {
+      return isSuperAdmin() || (
+        isSignedIn() && (
+          (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+           docSchoolCode(get(/databases/$(database)/documents/admins/$(request.auth.uid)).data) == sc) ||
+          (userExists() &&
+           userSchoolCode() == sc &&
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true &&
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['PRINCIPAL', 'principal', 'ADMIN', 'admin', 'SYSTEM_ADMIN']) ||
+          (exists(/databases/$(database)/documents/schools/$(sc)) && (
+            get(/databases/$(database)/documents/schools/$(sc)).data.principalUid == request.auth.uid ||
+            (get(/databases/$(database)/documents/schools/$(sc)).data.keys().hasAny(['adminEmails']) &&
+             request.auth.token.email in get(/databases/$(database)/documents/schools/$(sc)).data.adminEmails)
+          ))
+        )
+      );
+    }
+
     function isAdmin() {
       return isSignedIn() && (
         isSuperAdmin() ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (userExists() &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['PRINCIPAL', 'principal', 'ADMIN', 'admin', 'SYSTEM_ADMIN']) ||
+        (exists(/databases/$(database)/documents/schools/$(userSchoolCode())) && (
+          get(/databases/$(database)/documents/schools/$(userSchoolCode())).data.principalUid == request.auth.uid ||
+          (get(/databases/$(database)/documents/schools/$(userSchoolCode())).data.keys().hasAny(['adminEmails']) &&
+           request.auth.token.email in get(/databases/$(database)/documents/schools/$(userSchoolCode())).data.adminEmails)
+        ))
       );
     }
 
@@ -38,224 +94,405 @@ service cloud.firestore {
       allow read: if true;
     }
 
+    // Multi-tenant Schools Registry: Publicly readable for branding & join checks
+    match /schools/{schoolCode} {
+      allow read: if true;
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isAdmin() && userSchoolCode() == schoolCode) ||
+        (schoolCode != 'YCC3404' && (
+          request.resource.data.principalUid == request.auth.uid ||
+          (request.resource.data.keys().hasAny(['adminEmails']) &&
+           request.auth.token.email in request.resource.data.adminEmails)
+        ))
+      );
+      allow update: if isSignedIn() && isSchoolAdmin(schoolCode);
+      allow delete: if isSuperAdmin();
+    }
+
     // Admins registry: Readable by authenticated users; Client writes restricted to SuperAdmin
     match /admins/{userId} {
       allow read: if isSignedIn();
       allow write: if isSuperAdmin();
     }
 
-    // School Settings: Publicly readable for school branding; Admin write
+    // School Settings: Publicly readable for school branding; School Admin write
     match /school_settings/{settingId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        isSchoolAdmin(docSchoolCode(request.resource.data)) ||
+        (isAdmin() && belongsToCallerSchool(request.resource.data))
+      );
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isSchoolAdmin(docSchoolCode(resource.data)) && docSchoolCode(request.resource.data) == docSchoolCode(resource.data)) ||
+        (isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data))
+      );
+      allow delete: if isSuperAdmin() || (isAdmin() && belongsToCallerSchool(resource.data));
     }
 
     // Institutional Configuration (Sessions, scale config, master locks)
     match /school_config/{configId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && (
+        isSuperAdmin() ||
+        isSchoolAdmin(docSchoolCode(request.resource.data)) ||
+        (isAdmin() && belongsToCallerSchool(request.resource.data))
+      );
+      allow update: if isSignedIn() && (
+        isSuperAdmin() ||
+        (isSchoolAdmin(docSchoolCode(resource.data)) && docSchoolCode(request.resource.data) == docSchoolCode(resource.data)) ||
+        (isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data))
+      );
+      allow delete: if isSuperAdmin() || (isAdmin() && belongsToCallerSchool(resource.data));
     }
 
     // School Governance & Security Configuration
     match /school_governance/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
-    // Staff accounts: Staff can read their own profile or find by verified email; Principal / Admin can list all
+    // Staff accounts: Owner/email match allowed across schools for login & onboarding; Admin operations scoped by schoolCode
     match /users/{userId} {
-      allow get: if isSignedIn() && (isOwner(userId) || isAdmin() || resource.data.email == request.auth.token.email);
-      allow list: if isSignedIn() && (isAdmin() || resource.data.email == request.auth.token.email);
-      allow write: if isAdmin() || isOwner(userId) || (isSignedIn() && request.resource.data.email == request.auth.token.email);
+      allow get: if isSignedIn() && (
+        isOwner(userId) ||
+        resource.data.email == request.auth.token.email ||
+        (isAdmin() && belongsToCallerSchool(resource.data))
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.email == request.auth.token.email
+      );
+      allow create: if isSuperAdmin() ||
+        isOwner(userId) ||
+        (isSignedIn() && request.resource.data.email == request.auth.token.email) ||
+        (isAdmin() && belongsToCallerSchool(request.resource.data));
+      allow update: if isSuperAdmin() ||
+        (isOwner(userId) && belongsToCallerSchool(resource.data)) ||
+        (isSignedIn() && resource.data.email == request.auth.token.email) ||
+        (isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data));
+      allow delete: if isSuperAdmin() || (isAdmin() && belongsToCallerSchool(resource.data));
     }
 
-    // Master Data: Personnel SSOT
+    // Master Data: Personnel SSOT (Allow self email match for onboarding)
     match /personnel/{personnelId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && (
+        belongsToCallerSchool(resource.data) ||
+        (resource.data.keys().hasAny(['email']) && resource.data.email == request.auth.token.email)
+      );
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
-    // Academic Teachers
+    // Academic Teachers (Allow self email match for onboarding)
     match /teachers/{teacherId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && (
+        belongsToCallerSchool(resource.data) ||
+        (resource.data.keys().hasAny(['email']) && resource.data.email == request.auth.token.email)
+      );
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     // Academic Years
     match /academic_years/{yearId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     // Classes / Cohorts
     match /classes/{classId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     // Subject Teacher Allocations
     match /subject_allocations/{allocId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     // School Timetable Matrix and Schedule Grids
     match /school_timetables/{docId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     // Governance & Portfolios
     match /governance_assignments/{gaId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     // Permanent Student Master Record
     match /student_master/{studentId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     // Active Year Student Class Enrollment
     match /students/{enrollmentId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     // Import Audit Sessions & Rollback Records
     match /import_sessions/{sessionId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin();
+      allow get: if isAdmin() && belongsToCallerSchool(resource.data);
+      allow list: if isAdmin();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     match /rollback_records/{recordId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin();
+      allow get: if isAdmin() && belongsToCallerSchool(resource.data);
+      allow list: if isAdmin();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
-    // Audit Trail: Appendable by signed-in actors; readable by Admin
+    // Audit Trail: Appendable by signed-in actors within same school; readable by Admin
     match /audit_trail/{logId} {
-      allow read: if isAdmin();
-      allow create: if isSignedIn();
+      allow get: if isAdmin() && belongsToCallerSchool(resource.data);
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
       allow update, delete: if false;
     }
 
-    // Academic PBD Results: Readable by signed-in staff; Updatable by staff / Admin
+    // Academic PBD Results
     match /pbd_results/{resultId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
-    // Academic UASA Results: Readable by signed-in staff; Updatable by staff / Admin
+    // Academic UASA Results
     match /uasa_results/{resultId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     // Academic OPR Reports (One Page Reporting - Aktiviti Panitia & PLC)
     match /academic_opr_reports/{reportId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     // Makluman Tasks, Checklists & WhatsApp Evidence
     match /makluman_tasks/{taskId} {
-      allow read, write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     // Kokurikulum Entities
     match /koko_memberships/{memberId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     match /koko_groups/{groupId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     match /koko_attendance/{attId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     match /koko_committees/{commId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     match /koko_settings/{settingId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     match /koko_activities/{actId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     match /bulletins/{bulletinId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
-    // Attendance Records: Staff can read their own records; Admin can read all
+    // Attendance Records: Staff can read their own records; Admin can read all in school
     match /attendance/{recordId} {
-      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || (isAdmin() && belongsToCallerSchool(resource.data)));
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow write: if isAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+      allow create: if (isAdmin() && belongsToCallerSchool(request.resource.data)) ||
+        (isSignedIn() && request.resource.data.userId == request.auth.uid && belongsToCallerSchool(request.resource.data));
+      allow update: if (isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data)) ||
+        (isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data));
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     match /attendance_records/{recordId} {
-      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || (isAdmin() && belongsToCallerSchool(resource.data)));
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow write: if isAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+      allow create: if (isAdmin() && belongsToCallerSchool(request.resource.data)) ||
+        (isSignedIn() && request.resource.data.userId == request.auth.uid && belongsToCallerSchool(request.resource.data));
+      allow update: if (isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data)) ||
+        (isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data));
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
-    // Isolated GPS Coordinates: Readable by Admin; Writable by Admin or user punch
+    // Isolated GPS Coordinates: Readable by Admin; Writable by Admin or user punch within same school
     match /attendance_geo/{recordId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+      allow get: if isAdmin() && belongsToCallerSchool(resource.data);
+      allow list: if isAdmin();
+      allow create: if (isAdmin() && belongsToCallerSchool(request.resource.data)) ||
+        (isSignedIn() && request.resource.data.userId == request.auth.uid && belongsToCallerSchool(request.resource.data));
+      allow update: if (isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data)) ||
+        (isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data));
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     // User Attendance State
     match /user_attendance_state/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || userId.matches('^' + request.auth.uid + '.*') || (resource != null && resource.data.userId == request.auth.uid) || isAdmin());
-      allow write: if isSignedIn() && (request.auth.uid == userId || userId.matches('^' + request.auth.uid + '.*') || (request.resource != null && request.resource.data.userId == request.auth.uid) || isAdmin());
+      allow get: if isSignedIn() && (
+        request.auth.uid == userId ||
+        userId.matches('^' + request.auth.uid + '.*') ||
+        (resource != null && resource.data.userId == request.auth.uid && belongsToCallerSchool(resource.data)) ||
+        (isAdmin() && belongsToCallerSchool(resource.data))
+      );
+      allow list: if isSignedIn() && (
+        request.auth.uid == userId ||
+        userId.matches('^' + request.auth.uid + '.*') ||
+        (resource != null && resource.data.userId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow write: if isSignedIn() && (
+        ((request.auth.uid == userId || userId.matches('^' + request.auth.uid + '.*') || (request.resource != null && request.resource.data.userId == request.auth.uid)) &&
+          (request.resource == null || belongsToCallerSchool(request.resource.data))) ||
+        (isAdmin() && (resource == null || belongsToCallerSchool(resource.data)) && (request.resource == null || belongsToCallerSchool(request.resource.data)))
+      );
     }
 
     // School Calendar & Holidays
     match /school_calendar/{calId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
+      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
     }
 
     // Absence / Leave / Official Duty Records
     match /absence_records/{recordId} {
-      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || (isAdmin() && belongsToCallerSchool(resource.data)));
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow write: if isAdmin() || (isSignedIn() && request.resource.data.userId == request.auth.uid);
+      allow create: if (isAdmin() && belongsToCallerSchool(request.resource.data)) ||
+        (isSignedIn() && request.resource.data.userId == request.auth.uid && belongsToCallerSchool(request.resource.data));
+      allow update: if (isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data)) ||
+        (isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data));
+      allow delete: if (isAdmin() && belongsToCallerSchool(resource.data)) ||
+        (isSignedIn() && resource.data.userId == request.auth.uid && belongsToCallerSchool(resource.data));
     }
 
     // Surat Masuk (Incoming Letters by Pembantu Operasi / Clerk / Admin)
     match /surat_masuk_records/{suratId} {
-      allow read, write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     // Staff Unavailability (Auto-generated by Surat Masuk for Kursus / Urusan Rasmi)
     match /staff_unavailability/{unavailId} {
-      allow read, write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     // Relief Alerts (Auto-generated by Surat Masuk for absent teachers needing substitute teachers)
     match /relief_alerts_from_surat/{alertId} {
-      allow read, write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     // Relief Schedules (Assigned substitute teachers per period)
     match /relief_schedules/{scheduleId} {
-      allow read, write: if isSignedIn();
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
   }
 }

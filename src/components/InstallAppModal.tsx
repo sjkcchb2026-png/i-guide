@@ -13,6 +13,7 @@ import {
   Sparkles,
   Layers
 } from 'lucide-react';
+import { useSchoolTenant } from '../contexts/SchoolTenantContext';
 
 interface InstallAppModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ interface InstallAppModalProps {
 }
 
 export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClose }) => {
+  const tenant = useSchoolTenant();
   const [activeTab, setActiveTab] = useState<'install' | 'apple' | 'apk'>('install');
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstalled, setIsInstalled] = useState<boolean>(false);
@@ -265,7 +267,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
         {/* Footer */}
         <div className="p-4 border-t border-slate-800 bg-slate-950 flex items-center justify-between">
           <div className="text-xs text-slate-400">
-            SJK (C) CHUNG HUA BALINGIAN
+            {tenant.schoolName} ({tenant.schoolCode})
           </div>
           <button
             onClick={onClose}

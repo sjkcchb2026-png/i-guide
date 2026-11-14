@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { UserProfile, SchoolSettings, AttendanceRecord, AttendanceGeo, StaffCategory, UserRole, SchoolCalendarDay, StaffAbsenceRecord } from '../types';
 import { auth, db } from '../firebase';
 import { 
@@ -7,24 +7,12 @@ import {
   where, 
   onSnapshot,
   getDocs,
-  getDoc,
   doc,
   setDoc,
-  updateDoc,
-  deleteDoc,
   writeBatch,
   serverTimestamp
 } from 'firebase/firestore';
 import { deepSanitizeFirestore } from '../utils/sanitizeFirestore';
-import {
-  deduplicateStaffRecords,
-  deduplicateUsersSnapshotInFirestore,
-  groupAndDeduplicateStaffRecords,
-  isPhantomStaffRecord,
-  isRealAuthUid,
-  normalizeStaffEmail,
-  normalizeStaffIc,
-} from '../utils/staffNormalizer';
 import { getTodayDateString, formatTimeFromTimestamp, calculateDuration } from '../utils/date';
 import { calculateDailyWorkTime } from '../utils/checkoutRules';
 import { formatCoordinates, getGoogleMapsUrl } from '../utils/geo';
@@ -32,6 +20,8 @@ import { BatchAccountModal } from './BatchAccountModal';
 import { PrintReportView } from './PrintReportView';
 import { MonthlyAnalysisView } from './MonthlyAnalysisView';
 import { StaffRoleCell } from './Dashboard/StaffRoleCell';
+import { useSchoolTenant } from '../contexts/SchoolTenantContext';
+import { belongsToSchool, isLegacyDefaultSchool, normalizeActiveSchoolCode } from '../utils/schoolTenant';
 import { 
   Users, 
   UserPlus, 
@@ -64,6 +54,12 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
   schoolSettings,
   onUpdateSchoolSettings,
 }) => {
+  const tenant = useSchoolTenant();
+  const activeSchoolCode = normalizeActiveSchoolCode(
+    schoolSettings?.schoolCode || currentUser?.schoolCode || tenant.schoolCode
+  );
+  const isLegacySchool = isLegacyDefaultSchool(activeSchoolCode);
+
   const [activeTab, setActiveTab] = useState<'attendance' | 'analysis' | 'staff' | 'settings'>('attendance');
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());
   
@@ -92,8 +88,6 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
   const [showSingleUserModal, setShowSingleUserModal] = useState<boolean>(false);
   const [temporaryCreatedAccount, setTemporaryCreatedAccount] = useState<{ name: string; email: string; password: string } | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [staffPendingDelete, setStaffPendingDelete] = useState<(UserProfile & Record<string, any>) | null>(null);
-  const [deletingStaff, setDeletingStaff] = useState<boolean>(false);
 
   // Single User Form state
   const [newName, setNewName] = useState('');
@@ -104,63 +98,51 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
   const [syncingPersonnel, setSyncingPersonnel] = useState(false);
 
   // School Settings form
-  const [editingSchoolName, setEditingSchoolName] = useState(schoolSettings?.schoolName || '');
-  const [editingSchoolCode, setEditingSchoolCode] = useState(schoolSettings?.schoolCode || '');
+  const [editingSchoolName, setEditingSchoolName] = useState(schoolSettings?.schoolName || tenant.schoolName || '');
+  const [editingSchoolCode, setEditingSchoolCode] = useState(schoolSettings?.schoolCode || activeSchoolCode || '');
   const [savingSettings, setSavingSettings] = useState(false);
 
-  const autoDedupRunningRef = useRef<boolean>(false);
+  useEffect(() => {
+    setEditingSchoolName(schoolSettings?.schoolName || tenant.schoolName || '');
+    setEditingSchoolCode(schoolSettings?.schoolCode || activeSchoolCode || '');
+  }, [schoolSettings?.schoolName, schoolSettings?.schoolCode, tenant.schoolName, activeSchoolCode]);
 
-  // 1. Subscribe to Staff List (/users) and automatically deduplicate & merge with Master Data Personnel
+  // 1. Subscribe to Staff List (/users) and seamlessly merge with Master Data Personnel
   useEffect(() => {
     let isMounted = true;
     const q = query(collection(db, 'users'));
     const unsubscribe = onSnapshot(
       q,
       async (snapshot) => {
-        const rawSnapshotUsers: Array<UserProfile & Record<string, any>> = [];
+        const users: UserProfile[] = [];
+        const seenEmails = new Set<string>();
+        const seenIcs = new Set<string>();
 
         snapshot.forEach((d) => {
-          const data = d.data() as UserProfile & Record<string, any>;
-          const rawName = String(data.name || data.displayName || data.nama || '').trim();
-          const emailPrefix = data.email ? String(data.email).split('@')[0] : '';
-          rawSnapshotUsers.push({
-            ...data,
-            _docId: d.id,
-            uid: data.uid || d.id,
-            name: (rawName || emailPrefix).trim(),
-          });
+          const u = d.data() as UserProfile;
+          if (!belongsToSchool(u, activeSchoolCode)) return;
+          if (!u.uid) {
+            u.uid = d.id;
+          }
+          if (!u.name) {
+            u.name = String((u as any).displayName || (u as any).nama || u.email?.split('@')[0] || 'STAF').trim();
+          }
+          users.push(u);
+          if (u.email) seenEmails.add(u.email.toLowerCase().trim());
+          if ((u as any).ic) seenIcs.add(String((u as any).ic).replace(/[^0-9]/g, ''));
         });
 
-        // Automatically merge duplicates & purge phantom empty docs in Firestore `users`
-        const groupedSnapshot = groupAndDeduplicateStaffRecords(rawSnapshotUsers);
-        const hasFirestoreDuplicates = groupedSnapshot.some((g) => g.duplicateDocIds.length > 0);
-        const hasPhantomDocs = rawSnapshotUsers.some((u) => isPhantomStaffRecord(u));
-        if ((hasFirestoreDuplicates || hasPhantomDocs) && !autoDedupRunningRef.current) {
-          autoDedupRunningRef.current = true;
-          const canDeleteDupes =
-            currentUser?.role === 'PRINCIPAL' ||
-            String(currentUser?.role || '').toUpperCase() === 'ADMIN' ||
-            String(currentUser?.role || '').toUpperCase() === 'SYSTEM_ADMIN';
-          deduplicateUsersSnapshotInFirestore(db, rawSnapshotUsers, canDeleteDupes)
-            .catch((err) => console.warn('Auto Firestore deduplication notice:', err))
-            .finally(() => {
-              setTimeout(() => {
-                autoDedupRunningRef.current = false;
-              }, 2000);
-            });
-        }
-
-        const dedupedSnapshotUsers = groupedSnapshot.map((g) => g.merged);
-
-        // Merge with Master Data / official roster so every staff row has full metadata and zero duplicates
-        const extraRosterMapped: Array<UserProfile & Record<string, any>> = [];
+        // Merge any teachers or AKP from Master Data / official roster (legacy YCC3404 only) not yet in users
         try {
           let extraRoster: any[] = [];
           const pSnap = await getDocs(collection(db, 'personnel')).catch(() => null);
           if (pSnap && !pSnap.empty) {
-            extraRoster = pSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          } else {
-            const res = await fetch('/api/personnel/official-roster').catch(() => null);
+            extraRoster = pSnap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(p => belongsToSchool(p, activeSchoolCode));
+          }
+          if (extraRoster.length === 0 && isLegacySchool) {
+            const res = await fetch(`/api/personnel/official-roster?schoolCode=${encodeURIComponent(activeSchoolCode)}`).catch(() => null);
             if (res && res.ok) {
               const rData = await res.json();
               extraRoster = rData.roster || [];
@@ -168,41 +150,23 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
           }
 
           for (const p of extraRoster) {
-            if (isPhantomStaffRecord(p)) continue;
-            const pEmail = normalizeStaffEmail((p as any).email);
-            const pIc = normalizeStaffIc((p as any).ic);
-            const pName = String((p as any).name || (p as any).nama || pEmail.split('@')[0] || '')
-              .trim()
-              .toUpperCase();
-            if (!pName && !pEmail && !pIc) continue;
-
+            const pEmail = String((p as any).email || '').toLowerCase().trim();
+            const pIc = String((p as any).ic || '').replace(/[^0-9]/g, '');
+            if ((pEmail && seenEmails.has(pEmail)) || (pIc && seenIcs.has(pIc))) {
+              continue;
+            }
             const posUpper = String((p as any).position || (p as any).jawatan || '').toUpperCase();
             const isGb = posUpper.includes('GURU BESAR') || posUpper === 'GB';
             const catUpper = String((p as any).category || '').toUpperCase();
-            const isAkp =
-              catUpper === 'AKP' ||
-              posUpper.includes('PKA') ||
-              posUpper.includes('PPM') ||
-              posUpper.includes('PT') ||
-              posUpper.includes('PEMBANTU') ||
-              posUpper.includes('KERANI') ||
-              posUpper.includes('OPERASI');
+            const isAkp = catUpper === 'AKP' || posUpper.includes('PKA') || posUpper.includes('PPM') || posUpper.includes('PT') || posUpper.includes('PEMBANTU') || posUpper.includes('KERANI') || posUpper.includes('OPERASI');
 
-            const rawPId = String(p.id || '').trim();
-            const prefixedPId = rawPId
-              ? rawPId.startsWith('staff_')
-                ? rawPId
-                : `staff_${rawPId}`
-              : '';
-            const synthDocId = pIc ? `staff_${pIc}` : prefixedPId || `staff_${pEmail}`;
-
-            extraRosterMapped.push({
-              _docId: synthDocId,
-              uid: synthDocId,
-              name: pName,
+            users.push({
+              uid: `staff_${pIc || p.id}`,
+              schoolCode: activeSchoolCode,
+              name: String((p as any).name || (p as any).nama || pEmail.split('@')[0] || 'STAF').trim().toUpperCase(),
               email: pEmail,
-              category: isGb ? 'PRINCIPAL' : isAkp ? 'AKP' : 'GURU',
-              role: isGb ? 'PRINCIPAL' : isAkp ? 'AKP' : 'GURU',
+              category: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
+              role: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
               ic: pIc,
               phone: String((p as any).phone || (p as any).noTel || '').trim(),
               grade: String((p as any).grade || (p as any).gred || '').trim(),
@@ -210,21 +174,14 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
               staffFileNo: String((p as any).staffFileNo || (p as any).noFail || '').trim(),
               personnelId: p.id,
               active: true,
-              isVerified: false,
               isPreRegistered: true,
-              subRole: (p as any).subRole || (p as any).primaryRoleCode,
-              leadershipRole: (p as any).leadershipRole,
-              akpRole: (p as any).akpRole,
             });
+            if (pEmail) seenEmails.add(pEmail);
+            if (pIc) seenIcs.add(pIc);
           }
         } catch (rosterErr) {
           console.warn('Error fetching extra roster for staff list:', rosterErr);
         }
-
-        // Strict deduplication & phantom filter guard before setting state
-        const users = deduplicateStaffRecords([...dedupedSnapshotUsers, ...extraRosterMapped]).filter(
-          (u) => !isPhantomStaffRecord(u)
-        );
 
         users.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), 'zh'));
         if (isMounted) {
@@ -241,7 +198,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       isMounted = false;
       unsubscribe();
     };
-  }, [currentUser?.role]);
+  }, [activeSchoolCode, isLegacySchool]);
 
   // 2. Subscribe to All Attendance Records (Used for both daily attendance & monthly analysis)
   useEffect(() => {
@@ -251,7 +208,10 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       (snapshot) => {
         const list: AttendanceRecord[] = [];
         snapshot.forEach((d) => {
-          list.push(d.data() as AttendanceRecord);
+          const data = d.data() as AttendanceRecord;
+          if (belongsToSchool(data, activeSchoolCode)) {
+            list.push(data);
+          }
         });
         setAllAttendanceRecords(list);
       },
@@ -261,7 +221,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [activeSchoolCode]);
 
   // 3. Subscribe to School Calendar Days
   useEffect(() => {
@@ -271,7 +231,10 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       (snapshot) => {
         const list: SchoolCalendarDay[] = [];
         snapshot.forEach((d) => {
-          list.push(d.data() as SchoolCalendarDay);
+          const data = d.data() as SchoolCalendarDay;
+          if (belongsToSchool(data, activeSchoolCode)) {
+            list.push(data);
+          }
         });
         setCalendarDays(list);
       },
@@ -281,7 +244,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [activeSchoolCode]);
 
   // 4. Subscribe to Absence & Leave Records
   useEffect(() => {
@@ -291,7 +254,10 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       (snapshot) => {
         const list: StaffAbsenceRecord[] = [];
         snapshot.forEach((d) => {
-          list.push(d.data() as StaffAbsenceRecord);
+          const data = d.data() as StaffAbsenceRecord;
+          if (belongsToSchool(data, activeSchoolCode)) {
+            list.push(data);
+          }
         });
         setAbsenceRecords(list);
       },
@@ -301,7 +267,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [activeSchoolCode]);
 
   // 5. Subscribe to Staff Unavailability from Surat Masuk (Kursus / Urusan Rasmi)
   useEffect(() => {
@@ -311,7 +277,10 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       (snapshot) => {
         const list: any[] = [];
         snapshot.forEach((d) => {
-          list.push({ id: d.id, ...d.data() });
+          const data = d.data();
+          if (belongsToSchool(data, activeSchoolCode)) {
+            list.push({ id: d.id, ...data });
+          }
         });
         setUnavailabilityList(list);
       },
@@ -320,7 +289,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       }
     );
     return () => unsub();
-  }, []);
+  }, [activeSchoolCode]);
 
   // 3. Subscribe to Isolated AttendanceGeo Records (Readable only by Principal)
   useEffect(() => {
@@ -335,7 +304,10 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       (snapshot) => {
         const gMap = new Map<string, AttendanceGeo>();
         snapshot.forEach((d) => {
-          gMap.set(d.id, d.data() as AttendanceGeo);
+          const data = d.data() as AttendanceGeo;
+          if (belongsToSchool(data, activeSchoolCode)) {
+            gMap.set(d.id, data);
+          }
         });
         setAttendanceGeoMap(gMap);
       },
@@ -345,7 +317,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
     );
 
     return () => unsubscribe();
-  }, [selectedDate]);
+  }, [selectedDate, activeSchoolCode]);
 
   // Group attendance records by userId
   const attendanceMap = new Map<string, AttendanceRecord[]>();
@@ -416,6 +388,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
           email: cleanEmail,
           password: newPassword,
           hasClerkAccess: newHasClerk,
+          schoolCode: activeSchoolCode,
         }),
       });
 
@@ -452,63 +425,25 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
   // Toggle user active status
   const handleToggleUserActive = async (user: UserProfile) => {
     try {
-      const nextActive = !user.active;
-      const targetDocId = (user as any)._docId || user.uid;
-      let updatedOnServer = false;
-
-      try {
-        const idToken = await auth.currentUser?.getIdToken();
-        if (idToken) {
-          const res = await fetch('/api/staff/update-status', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${idToken}`,
-            },
-            body: JSON.stringify({
-              targetUid: targetDocId,
-              email: user.email || '',
-              active: nextActive,
-            }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.success) {
-            updatedOnServer = true;
-          }
-        }
-      } catch {
-        // Fallback to direct client Firestore update below
-      }
-
-      if (!updatedOnServer && targetDocId) {
-        const userRef = doc(db, 'users', targetDocId);
-        const snap = await getDoc(userRef).catch(() => null);
-        if (snap && snap.exists()) {
-          await updateDoc(userRef, { active: nextActive, updatedAt: serverTimestamp() });
-        } else if (user.name || user.email) {
-          await setDoc(
-            userRef,
-            deepSanitizeFirestore({
-              uid: user.uid || targetDocId,
-              name: user.name,
-              email: user.email || '',
-              category: user.category || 'GURU',
-              role: user.role || user.category || 'GURU',
-              active: nextActive,
-              updatedAt: serverTimestamp(),
-            }),
-            { merge: true }
-          );
-        }
-      }
-
-      setStaffList((prev) =>
-        prev.map((s) => (((s as any)._docId || s.uid) === targetDocId ? { ...s, active: nextActive } : s))
-      );
+      const idToken = await auth.currentUser?.getIdToken();
+      if (!idToken) throw new Error('未检测到管理员凭证');
+      const res = await fetch('/api/staff/update-status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          targetUid: user.uid,
+          active: !user.active,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '更新失败');
 
       setActionFeedback({
         type: 'success',
-        message: `已${user.active ? '停用' : '启用'}员工账号：${user.name || user.email || targetDocId}`,
+        message: `已${user.active ? '停用' : '启用'}员工账号：${user.name}`,
       });
     } catch (err: any) {
       console.error('Failed to update user status:', err);
@@ -520,66 +455,21 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
   const handleToggleClerkAccess = async (user: UserProfile) => {
     try {
       const nextAccess = !user.hasClerkAccess;
-      const targetDocId = (user as any)._docId || user.uid;
-      let updatedOnServer = false;
-
-      try {
-        const idToken = await auth.currentUser?.getIdToken();
-        if (idToken) {
-          const res = await fetch('/api/staff/update-status', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${idToken}`,
-            },
-            body: JSON.stringify({
-              targetUid: targetDocId,
-              email: user.email || '',
-              hasClerkAccess: nextAccess,
-            }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.success) {
-            updatedOnServer = true;
-          }
-        }
-      } catch {
-        // Fallback to direct client Firestore update below
-      }
-
-      if (!updatedOnServer && targetDocId) {
-        const userRef = doc(db, 'users', targetDocId);
-        const snap = await getDoc(userRef).catch(() => null);
-        const nextRole = nextAccess ? 'CLERK' : user.category || 'GURU';
-        if (snap && snap.exists()) {
-          await updateDoc(userRef, {
-            hasClerkAccess: nextAccess,
-            role: nextRole,
-            updatedAt: serverTimestamp(),
-          });
-        } else if (user.name || user.email) {
-          await setDoc(
-            userRef,
-            deepSanitizeFirestore({
-              uid: user.uid || targetDocId,
-              name: user.name,
-              email: user.email || '',
-              category: user.category || 'GURU',
-              role: nextRole,
-              hasClerkAccess: nextAccess,
-              active: user.active !== false,
-              updatedAt: serverTimestamp(),
-            }),
-            { merge: true }
-          );
-        }
-      }
-
-      setStaffList((prev) =>
-        prev.map((s) =>
-          ((s as any)._docId || s.uid) === targetDocId ? { ...s, hasClerkAccess: nextAccess } : s
-        )
-      );
+      const idToken = await auth.currentUser?.getIdToken();
+      if (!idToken) throw new Error('未检测到管理员凭证');
+      const res = await fetch('/api/staff/update-status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          targetUid: user.uid,
+          hasClerkAccess: nextAccess,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '授权失败');
 
       setActionFeedback({
         type: 'success',
@@ -591,138 +481,29 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
     }
   };
 
-  // Open in-app confirmation modal before deleting (avoids iframe-blocked window.confirm)
-  const handleDeleteStaff = (user: UserProfile) => {
-    setStaffPendingDelete(user as UserProfile & Record<string, any>);
-  };
-
-  // Confirm & execute staff profile removal across server Auth + Firestore users & phantom records
-  const confirmDeleteStaff = async () => {
-    const user = staffPendingDelete;
-    if (!user) return;
-
-    setDeletingStaff(true);
-    setActionFeedback(null);
-
+  // Delete staff profile
+  const handleDeleteStaff = async (user: UserProfile) => {
+    if (!window.confirm(`确定要从系统中移除员工档案 “${user.name} (${user.email})” 吗？`)) {
+      return;
+    }
     try {
-      const targetDocId = String((user as any)._docId || user.uid || '').trim();
-      const personnelId = String((user as any).personnelId || '').trim();
-      const userEmail = normalizeStaffEmail(user.email);
-      const userIc = normalizeStaffIc((user as any).ic);
-      const isPhantom = isPhantomStaffRecord(user);
-
-      // 1. Trigger server endpoint for Auth user deletion + Admin DB cleanup (non-blocking if sandbox IAM restricts adminDb)
-      let serverErrorMsg = '';
-      try {
-        const idToken = await auth.currentUser?.getIdToken();
-        if (idToken && targetDocId) {
-          const res = await fetch('/api/staff/delete', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${idToken}`,
-            },
-            body: JSON.stringify({
-              targetUid: targetDocId,
-              email: userEmail,
-              personnelId,
-            }),
-          });
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            serverErrorMsg = data.error || '';
-          }
-        }
-      } catch (apiErr: any) {
-        serverErrorMsg = apiErr?.message || '';
-      }
-
-      // 2. Directly delete candidate docs in Firestore Client SDK (`users` & `personnel` if orphaned/phantom)
-      const candidateUserIds = Array.from(
-        new Set(
-          [targetDocId, String(user.uid || '').trim(), userIc ? `staff_${userIc}` : ''].filter(
-            (id) => Boolean(id) && id !== currentUser.uid
-          )
-        )
-      );
-
-      let clientDeletedAny = false;
-      for (const cid of candidateUserIds) {
-        try {
-          await deleteDoc(doc(db, 'users', cid));
-          clientDeletedAny = true;
-        } catch (delErr) {
-          console.warn(`Client delete users/${cid} notice:`, delErr);
-        }
-      }
-
-      // If matching email still has extra docs in `users`, remove those too
-      if (userEmail) {
-        try {
-          const qByEmail = query(collection(db, 'users'), where('email', '==', userEmail));
-          const snapByEmail = await getDocs(qByEmail);
-          for (const d of snapByEmail.docs) {
-            if (d.id !== currentUser.uid) {
-              await deleteDoc(doc(db, 'users', d.id));
-              clientDeletedAny = true;
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      // If this row was a phantom/ghost record (e.g. "STAF" with no email) or pre-registered Master Data doc, clean matching phantom docs
-      if (isPhantom || String(user.name || '').trim().toUpperCase() === 'STAF') {
-        try {
-          const usersSnap = await getDocs(collection(db, 'users'));
-          for (const d of usersSnap.docs) {
-            const candidate = { ...d.data(), _docId: d.id };
-            if (isPhantomStaffRecord(candidate)) {
-              await deleteDoc(doc(db, 'users', d.id)).catch(() => {});
-              clientDeletedAny = true;
-            }
-          }
-          const personnelSnap = await getDocs(collection(db, 'personnel'));
-          for (const d of personnelSnap.docs) {
-            const candidate = { ...d.data(), id: d.id };
-            if (isPhantomStaffRecord(candidate) || d.id === personnelId || d.id === targetDocId) {
-              await deleteDoc(doc(db, 'personnel', d.id)).catch(() => {});
-              clientDeletedAny = true;
-            }
-          }
-        } catch {
-          // ignore
-        }
-      } else if (personnelId && user.isPreRegistered) {
-        // Also remove Master-Data-only pre-registered record so it doesn't immediately reappear as a zombie row
-        await deleteDoc(doc(db, 'personnel', personnelId)).catch(() => {});
-      }
-
-      if (!clientDeletedAny && serverErrorMsg) {
-        throw new Error(serverErrorMsg);
-      }
-
-      setStaffList((prev) =>
-        prev.filter((s) => {
-          const sid = String((s as any)._docId || s.uid || '').trim();
-          if (candidateUserIds.includes(sid)) return false;
-          if (isPhantomStaffRecord(s)) return false;
-          return true;
-        })
-      );
-
-      setStaffPendingDelete(null);
-      setActionFeedback({
-        type: 'success',
-        message: `已移除员工档案：${user.name || userEmail || targetDocId}`,
+      const idToken = await auth.currentUser?.getIdToken();
+      if (!idToken) throw new Error('未检测到管理员凭证');
+      const res = await fetch('/api/staff/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ targetUid: user.uid }),
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '删除失败');
+
+      setActionFeedback({ type: 'success', message: `已移除员工档案：${user.name}` });
     } catch (err: any) {
       console.error('Failed to delete staff:', err);
       setActionFeedback({ type: 'error', message: `删除失败: ${err.message}` });
-      setStaffPendingDelete(null);
-    } finally {
-      setDeletingStaff(false);
     }
   };
 
@@ -736,15 +517,17 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       try {
         const pSnap = await getDocs(collection(db, 'personnel'));
         if (!pSnap.empty) {
-          roster = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          roster = pSnap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(p => belongsToSchool(p, activeSchoolCode));
         }
       } catch (e) {
         console.warn('Personnel collection read notice:', e);
       }
 
-      if (roster.length === 0) {
+      if (roster.length === 0 && isLegacySchool) {
         try {
-          const res = await fetch('/api/personnel/official-roster');
+          const res = await fetch(`/api/personnel/official-roster?schoolCode=${encodeURIComponent(activeSchoolCode)}`);
           if (res.ok) {
             const data = await res.json();
             if (data.roster && data.roster.length > 0) {
@@ -756,35 +539,28 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
         }
       }
 
-      // 2. Fetch current users collection & clean any existing duplicates first
+      // 2. Fetch current users collection (scoped to school)
       const usersSnap = await getDocs(collection(db, 'users'));
-      const rawExistingUsers = usersSnap.docs.map((d) => ({ ...d.data(), _docId: d.id }));
-      const cleanedResult = await deduplicateUsersSnapshotInFirestore(db, rawExistingUsers, true);
-
       const existingUsersByEmail = new Map<string, any>();
       const existingUsersByIc = new Map<string, any>();
-      const existingUsersByPersonnelId = new Map<string, any>();
       const existingUsersById = new Map<string, any>();
-      cleanedResult.dedupedUsers.forEach((u: any) => {
-        const docId = u._docId || u.uid;
-        existingUsersById.set(docId, u);
-        if (u.personnelId) existingUsersByPersonnelId.set(String(u.personnelId).trim(), u);
-        const em = normalizeStaffEmail(u.email);
-        if (em) existingUsersByEmail.set(em, u);
-        const ic = normalizeStaffIc(u.ic);
-        if (ic) existingUsersByIc.set(ic, u);
+      usersSnap.forEach(d => {
+        const u = d.data() as UserProfile;
+        if (!belongsToSchool(u, activeSchoolCode)) return;
+        existingUsersById.set(d.id, { ...u, _docId: d.id });
+        if (u.email) existingUsersByEmail.set(u.email.toLowerCase().trim(), { ...u, _docId: d.id });
+        if ((u as any).ic) existingUsersByIc.set(String((u as any).ic).replace(/[^0-9]/g, ''), { ...u, _docId: d.id });
       });
 
-      // 3. Batch sync into users collection IN-PLACE (zero duplicate creation)
+      // 3. Batch sync into users collection
       const batch = writeBatch(db);
       let syncCount = 0;
 
       for (const p of roster) {
-        if (isPhantomStaffRecord(p)) continue;
         const pName = String((p as any).name || (p as any).nama || '').trim().toUpperCase();
-        const pEmail = normalizeStaffEmail((p as any).email);
-        const pIc = normalizeStaffIc((p as any).ic);
-        if (!pName && !pEmail && !pIc) continue;
+        if (!pName) continue;
+        const pEmail = String((p as any).email || '').toLowerCase().trim();
+        const pIc = String((p as any).ic || '').replace(/[^0-9]/g, '');
         const pPosition = String((p as any).position || (p as any).jawatan || '').trim();
         const pCategory = String((p as any).category || '').toUpperCase().trim();
         const posUpper = pPosition.toUpperCase();
@@ -793,47 +569,29 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
         const resolvedRole: UserRole = isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
         const resolvedCat: StaffCategory = isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
 
-        const matched =
-          (pEmail && existingUsersByEmail.get(pEmail)) ||
-          (pIc && existingUsersByIc.get(pIc)) ||
-          (p.id && existingUsersByPersonnelId.get(String(p.id).trim())) ||
-          existingUsersById.get(p.id);
+        const matched = (pEmail && existingUsersByEmail.get(pEmail)) ||
+                        (pIc && existingUsersByIc.get(pIc)) ||
+                        existingUsersById.get(p.id);
 
-        const cleanPId = p.id
-          ? String(p.id).startsWith('staff_')
-            ? String(p.id)
-            : `staff_${p.id}`
-          : '';
-        const targetDocId = matched
-          ? String(matched._docId || matched.uid)
-          : pIc
-          ? `staff_${pIc}`
-          : cleanPId || `staff_${Date.now()}_${syncCount}`;
+        const staffPrefix = isLegacySchool ? 'staff_' : `staff_${activeSchoolCode}_`;
+        const targetDocId = matched ? matched._docId : (pIc ? `${staffPrefix}${pIc}` : (p.id ? `${staffPrefix}${p.id}` : `${staffPrefix}${Date.now()}_${syncCount}`));
         const userRef = doc(db, 'users', targetDocId);
-
-        const matchedVerified = Boolean(
-          matched && (matched.isVerified === true || matched.isPreRegistered === false || isRealAuthUid(matched.uid))
-        );
 
         const userPayload: any = {
           uid: matched ? (matched.uid || targetDocId) : targetDocId,
+          schoolCode: activeSchoolCode,
           name: pName,
-          email: pEmail || matched?.email || '',
+          email: pEmail,
           category: matched?.category || resolvedCat,
           role: matched?.role || resolvedRole,
-          ic: pIc || matched?.ic || '',
-          phone: String((p as any).phone || (p as any).noTel || matched?.phone || '').trim(),
-          grade: String((p as any).grade || (p as any).gred || matched?.grade || '').trim(),
-          position: pPosition || matched?.position || '',
-          staffFileNo: String((p as any).staffFileNo || (p as any).noFail || matched?.staffFileNo || '').trim(),
-          personnelId: p.id || matched?.personnelId || '',
-          subRole: (p as any).subRole || (p as any).primaryRoleCode || matched?.subRole,
-          primaryRoleCode: (p as any).primaryRoleCode || (p as any).subRole || matched?.primaryRoleCode,
-          leadershipRole: (p as any).leadershipRole || matched?.leadershipRole,
-          akpRole: (p as any).akpRole || matched?.akpRole,
-          active: matched ? matched.active !== false : true,
-          isVerified: matchedVerified,
-          isPreRegistered: !matchedVerified,
+          ic: pIc,
+          phone: String((p as any).phone || (p as any).noTel || '').trim(),
+          grade: String((p as any).grade || (p as any).gred || '').trim(),
+          position: pPosition,
+          staffFileNo: String((p as any).staffFileNo || (p as any).noFail || '').trim(),
+          personnelId: p.id,
+          active: true,
+          isPreRegistered: matched ? (matched.isPreRegistered ?? (typeof matched.uid === 'string' && matched.uid.startsWith('staff_'))) : true,
           updatedAt: serverTimestamp(),
         };
 
@@ -853,6 +611,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
               'Content-Type': 'application/json',
               Authorization: `Bearer ${idToken}`,
             },
+            body: JSON.stringify({ schoolCode: activeSchoolCode }),
           });
         }
       } catch {
@@ -861,7 +620,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
 
       setActionFeedback({
         type: 'success',
-        message: `Berjaya menyelaraskan ${syncCount} rekod personel (serta menggabungkan ${cleanedResult.deletedCount} rekod pendua) dari Master Data ke Pengurusan Akaun Staf!`,
+        message: `Berjaya menyelaraskan ${syncCount} rekod personel dari Master Data ke Pengurusan Akaun Staf!`,
       });
     } catch (err: any) {
       console.error('Failed to sync personnel to users:', err);
@@ -880,6 +639,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       setSavingSettings(true);
       const idToken = await auth.currentUser?.getIdToken();
       if (!idToken) throw new Error('未检测到管理员凭证');
+      const targetCode = normalizeActiveSchoolCode(editingSchoolCode.trim() || activeSchoolCode);
       const res = await fetch('/api/school-settings/update', {
         method: 'POST',
         headers: {
@@ -888,7 +648,8 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
         },
         body: JSON.stringify({
           schoolName: editingSchoolName.trim(),
-          schoolCode: editingSchoolCode.trim().toUpperCase(),
+          schoolCode: targetCode,
+          activeSchoolCode,
         }),
       });
       const data = await res.json();
@@ -896,7 +657,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
 
       onUpdateSchoolSettings({
         schoolName: editingSchoolName.trim(),
-        schoolCode: editingSchoolCode.trim().toUpperCase(),
+        schoolCode: targetCode,
         principalEmail: currentUser.email,
         principalUid: currentUser.uid,
       });
@@ -1061,7 +822,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                 navigator.clipboard.writeText(
                   `姓名: ${temporaryCreatedAccount.name}\n登录账号: ${temporaryCreatedAccount.email}\n系统初始密码: ${temporaryCreatedAccount.password}\n请及时登录本校出勤系统并妥善保管密码。`
                 );
-                setActionFeedback({ type: 'success', message: '已复制该员工的登录凭据！' });
+                alert('已复制该员工的登录凭据！');
               }}
               className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-medium flex items-center gap-1 shadow"
             >
@@ -1484,14 +1245,8 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                 </thead>
                 <tbody className="divide-y divide-slate-800 font-mono">
                   {staffList.map((staff, idx) => {
-                    const isVerified = Boolean(
-                      (staff as any).isVerified ||
-                        (staff.isPreRegistered === false && isRealAuthUid(staff.uid)) ||
-                        isRealAuthUid(staff.uid)
-                    );
-                    const isStaffPreReg = !isVerified;
-                    const docOrUid = (staff as any)._docId || staff.uid;
-                    const rowKey = docOrUid || (staff as any).id || (staff as any).ic || staff.email || `staff_row_${idx}`;
+                    const isStaffPreReg = Boolean(staff.isPreRegistered || (typeof staff.uid === 'string' && staff.uid.startsWith('staff_')));
+                    const rowKey = staff.uid || (staff as any).id || (staff as any).ic || staff.email || `staff_row_${idx}`;
                     return (
                     <tr key={rowKey} className="hover:bg-slate-800/40 transition">
                       
@@ -1525,20 +1280,20 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                           </span>
                         ) : (
                           <StaffRoleCell
-                            userId={docOrUid || rowKey}
+                            userId={staff.uid || rowKey}
+                            schoolCode={activeSchoolCode}
                             currentCategory={staff.category || 'GURU'}
                             currentSubRole={(staff as any).subRole || (staff as any).primaryRoleCode}
                             currentRole={staff.category || 'GURU'}
                             userEmail={staff.email || ''}
-                            userName={staff.name || ''}
                             onUpdated={(newCat, newSub) => {
                               setStaffList((prev) =>
-                                prev.map((s) => (((s as any)._docId || s.uid || (s as any).id) === (docOrUid || rowKey) ? { ...s, category: newCat, subRole: newSub } : s))
+                                prev.map((s) => ((s.uid || (s as any).id) === (staff.uid || rowKey) ? { ...s, category: newCat, subRole: newSub } : s))
                               );
                             }}
                             onRoleUpdated={(newRole) => {
                               setStaffList((prev) =>
-                                prev.map((s) => (((s as any)._docId || s.uid || (s as any).id) === (docOrUid || rowKey) ? { ...s, category: newRole } : s))
+                                prev.map((s) => ((s.uid || (s as any).id) === (staff.uid || rowKey) ? { ...s, category: newRole } : s))
                               );
                             }}
                           />
@@ -1815,50 +1570,6 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
           unavailabilityList={unavailabilityList}
           onClose={() => setShowPrintView(false)}
         />
-      )}
-
-      {/* Delete Staff Confirmation Modal (Replaces iframe-blocked window.confirm) */}
-      {staffPendingDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
-          <div className="bg-slate-900 border border-rose-500/40 rounded-3xl max-w-md w-full p-6 text-slate-100 shadow-2xl space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
-                <Trash2 className="w-5 h-5" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="text-base font-bold text-white">确认移除员工档案</h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  确定要从系统中永久移除员工档案{' '}
-                  <span className="font-bold text-white">
-                    “{staffPendingDelete.name || '未命名档案'}
-                    {staffPendingDelete.email ? ` (${staffPendingDelete.email})` : ''}”
-                  </span>{' '}
-                  吗？
-                </p>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
-              <button
-                type="button"
-                disabled={deletingStaff}
-                onClick={() => setStaffPendingDelete(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-xl text-xs font-medium cursor-pointer"
-              >
-                取消 (Batal)
-              </button>
-              <button
-                type="button"
-                disabled={deletingStaff}
-                onClick={confirmDeleteStaff}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>{deletingStaff ? '正在删除...' : '确认移除 (Padam)'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
     </div>

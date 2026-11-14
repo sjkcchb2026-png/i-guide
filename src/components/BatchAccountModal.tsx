@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { auth } from '../firebase';
 import { StaffCategory } from '../types';
+import { useSchoolTenant } from '../contexts/SchoolTenantContext';
 import { 
   Users, 
   X, 
@@ -34,6 +35,7 @@ export const BatchAccountModal: React.FC<BatchAccountModalProps> = ({
   onClose,
   onSuccess,
 }) => {
+  const { schoolCode: activeSchoolCode } = useSchoolTenant();
   const [rawText, setRawText] = useState('');
   const [parsedRows, setParsedRows] = useState<ParsedStaffRow[]>([]);
   const [step, setStep] = useState<'input' | 'preview' | 'creating' | 'completed'>('input');
@@ -114,6 +116,7 @@ export const BatchAccountModal: React.FC<BatchAccountModalProps> = ({
           Authorization: `Bearer ${idToken}`,
         },
         body: JSON.stringify({
+          schoolCode: activeSchoolCode,
           staffList: validRows.map((r) => ({
             name: r.name,
             email: r.email,

@@ -12,13 +12,16 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { doc, setDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import SchoolLogo from './SchoolLogo';
+import { useSchoolTenant } from '../contexts/SchoolTenantContext';
+import { normalizeActiveSchoolCode, scopedDocId } from '../utils/schoolTenant';
 
 interface SchoolLogoModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentLogoUrl?: string;
+  schoolCode?: string;
   onLogoUpdated?: (newLogo: string) => void;
 }
 
@@ -26,8 +29,11 @@ export const SchoolLogoModal: React.FC<SchoolLogoModalProps> = ({
   isOpen,
   onClose,
   currentLogoUrl = '',
+  schoolCode: propSchoolCode,
   onLogoUpdated,
 }) => {
+  const tenant = useSchoolTenant();
+  const activeCode = normalizeActiveSchoolCode(propSchoolCode || tenant.schoolCode);
   const [activeTab, setActiveTab] = useState<'upload' | 'url'>('upload');
   const [previewLogo, setPreviewLogo] = useState<string>(currentLogoUrl);
   const [urlInput, setUrlInput] = useState<string>('');
@@ -147,44 +153,70 @@ export const SchoolLogoModal: React.FC<SchoolLogoModalProps> = ({
     }
   };
 
-  // 3. Save Logo to Firestore (both school_settings and school_config)
+  // 3. Save Logo to Firestore (schools/{code}, scoped school_settings and school_config)
   const handleSaveLogo = async () => {
     setIsSaving(true);
     try {
       const finalLogo = previewLogo.trim();
+      const nowIso = new Date().toISOString();
 
-      // 1. Update Firestore directly
-      await setDoc(doc(db, 'school_settings', 'general'), {
-        schoolLogo: finalLogo,
-        updatedAt: new Date().toISOString(),
-      }, { merge: true });
+      await setDoc(
+        doc(db, 'schools', activeCode),
+        {
+          schoolCode: activeCode,
+          logoUrl: finalLogo,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+      await setDoc(
+        doc(db, 'school_settings', scopedDocId(activeCode, 'general')),
+        {
+          schoolCode: activeCode,
+          schoolLogo: finalLogo,
+          logoUrl: finalLogo,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
 
       try {
-        await setDoc(doc(db, 'school_config', 'default'), {
-          schoolLogo: finalLogo,
-          updatedAt: new Date().toISOString(),
-        }, { merge: true });
+        await setDoc(
+          doc(db, 'school_config', scopedDocId(activeCode, 'default')),
+          {
+            schoolCode: activeCode,
+            schoolLogo: finalLogo,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        );
       } catch (e) {
         // Safe ignore
       }
 
       // 2. Call backend proxy endpoint
       try {
+        const idToken = await auth.currentUser?.getIdToken().catch(() => null);
         await fetch('/api/update-school-logo', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ schoolLogo: finalLogo }),
+          headers: {
+            'Content-Type': 'application/json',
+            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+          },
+          body: JSON.stringify({ schoolLogo: finalLogo, schoolCode: activeCode }),
         });
       } catch (e) {
         // Safe ignore
       }
 
-      // 3. Update localStorage cache for instant zero-latency load
+      // 3. Update namespaced localStorage cache for instant zero-latency load
       if (typeof window !== 'undefined') {
+        const storageKey = `isepadu_school_logo_${activeCode}`;
         if (finalLogo) {
-          localStorage.setItem('isepadu_school_logo', finalLogo);
+          localStorage.setItem(storageKey, finalLogo);
         } else {
-          localStorage.removeItem('isepadu_school_logo');
+          localStorage.removeItem(storageKey);
         }
       }
 
@@ -367,7 +399,7 @@ export const SchoolLogoModal: React.FC<SchoolLogoModalProps> = ({
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col items-center justify-center text-center">
               <span className="text-[10px] text-slate-500 uppercase font-bold mb-2">Tema Gelap (Navigasi)</span>
               <div className="w-20 h-20 flex items-center justify-center p-1">
-                <SchoolLogo src={previewLogo} className="w-16 h-16" />
+                <SchoolLogo src={previewLogo} schoolCode={activeCode} className="w-16 h-16" />
               </div>
             </div>
 
@@ -375,7 +407,7 @@ export const SchoolLogoModal: React.FC<SchoolLogoModalProps> = ({
             <div className="bg-slate-100 border border-slate-200 rounded-xl p-4 flex flex-col items-center justify-center text-center">
               <span className="text-[10px] text-slate-500 uppercase font-bold mb-2">Tema Cerah (Cetak/Laporan)</span>
               <div className="w-20 h-20 flex items-center justify-center p-1">
-                <SchoolLogo src={previewLogo} className="w-16 h-16" />
+                <SchoolLogo src={previewLogo} schoolCode={activeCode} className="w-16 h-16" />
               </div>
             </div>
           </div>

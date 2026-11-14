@@ -2,10 +2,31 @@ export type StaffCategory = 'GURU' | 'AKP' | 'PRINCIPAL';
 
 export type UserRole = 'PRINCIPAL' | 'GURU' | 'AKP' | 'CLERK' | 'subject_teacher' | 'class_teacher' | 'head_department' | 'admin' | 'student' | 'secretary' | 'principal' | 'visitor';
 
+export interface SchoolProfile {
+  schoolCode: string;
+  schoolName: string;
+  logoUrl?: string;
+  slogan?: string;
+  adminEmails?: string[];
+  principalEmail?: string;
+  principalUid?: string;
+  schoolType?: 'SK' | 'SJKC' | 'SJKT';
+  schoolCategory?: 'SKM' | 'Non-SKM';
+  hasPreschool?: boolean;
+  hasPPKI?: boolean;
+  academicSession?: string;
+  createdByUid?: string;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
 export interface SchoolSettings {
   schoolName: string;
   schoolCode?: string;
   schoolLogo?: string;
+  logoUrl?: string;
+  slogan?: string;
+  adminEmails?: string[];
   principalEmail: string;
   principalUid: string;
   createdAt?: any;
@@ -16,6 +37,7 @@ export interface UserProfile {
   uid: string;
   name: string;
   email: string;
+  schoolCode?: string;
   category?: StaffCategory;
   role: UserRole;
   hasClerkAccess?: boolean; // 书记假期管理权限 (Kuasa Kerani Cuti)
@@ -44,6 +66,7 @@ export interface UserProfile {
 // Attendance Record visible to staff and reports (coordinates strictly excluded)
 export interface AttendanceRecord {
   id: string;
+  schoolCode?: string;
   userId: string;
   userName: string;
   userEmail: string;
@@ -63,6 +86,7 @@ export interface AttendanceRecord {
 // Sensitive GPS coordinates & accuracy isolated in separate collection readable only by Principal
 export interface AttendanceGeo {
   recordId: string;
+  schoolCode?: string;
   userId: string;
   date: string;
   slot: number;
@@ -109,6 +133,7 @@ export type AbsenceCategoryType =
 
 export interface StaffAbsenceRecord {
   id: string;
+  schoolCode?: string;
   userId: string;
   userName: string;
   userEmail: string;
@@ -125,6 +150,7 @@ export interface StaffAbsenceRecord {
 
 export interface SchoolCalendarDay {
   date: string; // YYYY-MM-DD
+  schoolCode?: string;
   name: string; // e.g. "Hari Malaysia", "Cuti Pertengahan Penggal 2"
   isSchoolDay: boolean; // false = holiday/weekend; true = official special duty day
   type: 'PUBLIC_HOLIDAY' | 'SCHOOL_HOLIDAY' | 'WEEKEND' | 'SPECIAL_DUTY';

@@ -14,6 +14,8 @@ import {
 } from 'firebase/firestore';
 import { Student, UserProfile } from '../../types';
 import * as XLSX from 'xlsx';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 
 interface Props {
   profile: UserProfile;
@@ -43,6 +45,7 @@ const DEFAULT_CLUBS = ['Stem', 'PALS', 'Kelab Bahasa', 'Kelab Tarian', 'Kelab SP
 const DEFAULT_SPORTS = ['Bola Tampar', 'Bola Keranjang', 'Olahraga', 'Catur', 'Wushu'];
 
 export default function KokoMembershipView({ profile, role }: Props) {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName } = useSchoolTenant();
   const [subTab, setSubTab] = useState<'overview' | 'groups' | 'enrollment' | 'import-excel' | 'committee'>('groups');
   const [students, setStudents] = useState<Student[]>([]);
   const [groups, setGroups] = useState<KokoGroup[]>([]);
@@ -247,69 +250,82 @@ export default function KokoMembershipView({ profile, role }: Props) {
     try {
       // 1. Fetch Students
       const studentSnap = await getDocs(collection(db, 'students'));
-      const studentList = studentSnap.docs.map(d => {
-        const data = d.data();
-        let sClass = data.class ? String(data.class).trim() : '';
-        const norm = sClass.toLowerCase();
-        if (!sClass || norm === 'tiada' || norm === 'tiada kelas' || norm === 'none') {
-          sClass = 'Amanah';
-        }
-        return {
-          id: d.id,
-          ...data,
-          class: sClass
-        };
-      }) as Student[];
+      const studentList = studentSnap.docs
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .map(d => {
+          const data = d.data();
+          let sClass = data.class ? String(data.class).trim() : '';
+          const norm = sClass.toLowerCase();
+          if (!sClass || norm === 'tiada' || norm === 'tiada kelas' || norm === 'none') {
+            sClass = 'Amanah';
+          }
+          return {
+            id: d.id,
+            ...data,
+            class: sClass
+          };
+        }) as Student[];
       setStudents(studentList);
 
       // 2. Fetch Groups
       const groupSnap = await getDocs(collection(db, 'koko_groups'));
-      let groupList = groupSnap.docs.map(d => ({
-        id: d.id,
-        ...d.data()
-      })) as KokoGroup[];
+      const groupList = groupSnap.docs
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .map(d => ({
+          id: d.id,
+          ...d.data()
+        })) as KokoGroup[];
       
       setGroups(groupList);
 
       // 3. Fetch Memberships
       const membershipSnap = await getDocs(collection(db, 'koko_memberships'));
-      const membershipList = membershipSnap.docs.map(d => {
-        const data = d.data();
-        let mClass = data.class ? String(data.class).trim() : '';
-        const norm = mClass.toLowerCase();
-        if (!mClass || norm === 'tiada' || norm === 'tiada kelas' || norm === 'none') {
-          mClass = 'Amanah';
-        }
-        return {
-          id: d.id,
-          ...data,
-          class: mClass
-        };
-      }) as KokoMembership[];
+      const membershipList = membershipSnap.docs
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .map(d => {
+          const data = d.data();
+          let mClass = data.class ? String(data.class).trim() : '';
+          const norm = mClass.toLowerCase();
+          if (!mClass || norm === 'tiada' || norm === 'tiada kelas' || norm === 'none') {
+            mClass = 'Amanah';
+          }
+          return {
+            id: d.id,
+            ...data,
+            class: mClass
+          };
+        }) as KokoMembership[];
       setMemberships(membershipList);
 
       // 4. Fetch Teachers
       const teacherSnap = await getDocs(collection(db, 'teachers'));
-      const teacherList = teacherSnap.docs.map(d => ({
-        id: d.id,
-        ...d.data()
-      }));
+      const teacherList = teacherSnap.docs
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .map(d => ({
+          id: d.id,
+          ...d.data()
+        }));
       setTeachers(teacherList);
 
       // 5. Fetch Committees
       const committeeSnap = await getDocs(collection(db, 'koko_committees'));
       const committeeMap: Record<string, any> = {};
-      committeeSnap.docs.forEach(d => {
-        committeeMap[d.id] = d.data();
-      });
+      committeeSnap.docs
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .forEach(d => {
+          committeeMap[d.id] = d.data();
+        });
       setCommittees(committeeMap);
 
       // 6. Fetch Settings
+      const settingsDocId = scopedDocId(activeSchoolCode, 'global');
       const settingsSnap = await getDocs(collection(db, 'koko_settings'));
       if (!settingsSnap.empty) {
-        const globalDoc = settingsSnap.docs.find(d => d.id === 'global');
+        const globalDoc = settingsSnap.docs.find(d => d.id === settingsDocId);
         if (globalDoc) {
           setSettings(globalDoc.data());
+        } else {
+          setSettings({ schoolLogo: '', kpmLogo: '', ts25Logo: '', schoolName: '' });
         }
       }
 
@@ -322,16 +338,19 @@ export default function KokoMembershipView({ profile, role }: Props) {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [activeSchoolCode]);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'koko_settings', 'global'), (docSnap) => {
+    const settingsDocId = scopedDocId(activeSchoolCode, 'global');
+    const unsub = onSnapshot(doc(db, 'koko_settings', settingsDocId), (docSnap) => {
       if (docSnap.exists()) {
         setSettings(docSnap.data());
+      } else {
+        setSettings({ schoolLogo: '', kpmLogo: '', ts25Logo: '', schoolName: '' });
       }
     });
     return () => unsub();
-  }, []);
+  }, [activeSchoolCode]);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -423,13 +442,13 @@ export default function KokoMembershipView({ profile, role }: Props) {
       
       const groupPromises: Promise<any>[] = [];
       newUniforms.forEach(name => {
-        groupPromises.push(addDoc(collection(db, 'koko_groups'), { name: name.trim(), category: 'uniform' }));
+        groupPromises.push(addDoc(collection(db, 'koko_groups'), { name: name.trim(), category: 'uniform', schoolCode: activeSchoolCode }));
       });
       newClubs.forEach(name => {
-        groupPromises.push(addDoc(collection(db, 'koko_groups'), { name: name.trim(), category: 'club' }));
+        groupPromises.push(addDoc(collection(db, 'koko_groups'), { name: name.trim(), category: 'club', schoolCode: activeSchoolCode }));
       });
       newSports.forEach(name => {
-        groupPromises.push(addDoc(collection(db, 'koko_groups'), { name: name.trim(), category: 'sport' }));
+        groupPromises.push(addDoc(collection(db, 'koko_groups'), { name: name.trim(), category: 'sport', schoolCode: activeSchoolCode }));
       });
       
       if (groupPromises.length > 0) {
@@ -474,7 +493,8 @@ export default function KokoMembershipView({ profile, role }: Props) {
             class: rawClass,
             gender: pStud.gender || 'L',
             year: rawYear,
-            academic_year: academicYear
+            academic_year: academicYear,
+            schoolCode: activeSchoolCode
           };
           studentPromises.push(addDoc(collection(db, 'students'), newStudentData));
         }
@@ -487,10 +507,11 @@ export default function KokoMembershipView({ profile, role }: Props) {
           uniform: pStud.uniform || '',
           club: pStud.club || '',
           sport: pStud.sport || '',
-          academic_year: academicYear
+          academic_year: academicYear,
+          schoolCode: activeSchoolCode
         };
         
-        studentPromises.push(setDoc(doc(db, 'koko_memberships', finalId), membershipModel));
+        studentPromises.push(setDoc(doc(db, 'koko_memberships', scopedDocId(activeSchoolCode, finalId)), membershipModel));
       }
       
       setCommitStatus(`Mengimport ${activeParsed.length} pendaftaran murid...`);
@@ -539,7 +560,8 @@ export default function KokoMembershipView({ profile, role }: Props) {
           return addDoc(collection(db, 'teachers'), {
             name: uppercaseName,
             email: `${uppercaseName.toLowerCase().replace(/[^a-z0-9]/g, '')}@moe-dl.edu.my`,
-            ic: '-'
+            ic: '-',
+            schoolCode: activeSchoolCode
           });
         }
       });
@@ -556,10 +578,6 @@ export default function KokoMembershipView({ profile, role }: Props) {
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   // Initialize selected default groups
   const initializeDefaultGroups = async () => {
     setInitializing(true);
@@ -571,21 +589,21 @@ export default function KokoMembershipView({ profile, role }: Props) {
       selectedInitUniforms.forEach(name => {
         const cleanName = name.trim();
         if (!existingNames.has(cleanName.toLowerCase())) {
-          promises.push(addDoc(collection(db, 'koko_groups'), { name: cleanName, category: 'uniform' }));
+          promises.push(addDoc(collection(db, 'koko_groups'), { name: cleanName, category: 'uniform', schoolCode: activeSchoolCode }));
         }
       });
 
       selectedInitClubs.forEach(name => {
         const cleanName = name.trim();
         if (!existingNames.has(cleanName.toLowerCase())) {
-          promises.push(addDoc(collection(db, 'koko_groups'), { name: cleanName, category: 'club' }));
+          promises.push(addDoc(collection(db, 'koko_groups'), { name: cleanName, category: 'club', schoolCode: activeSchoolCode }));
         }
       });
 
       selectedInitSports.forEach(name => {
         const cleanName = name.trim();
         if (!existingNames.has(cleanName.toLowerCase())) {
-          promises.push(addDoc(collection(db, 'koko_groups'), { name: cleanName, category: 'sport' }));
+          promises.push(addDoc(collection(db, 'koko_groups'), { name: cleanName, category: 'sport', schoolCode: activeSchoolCode }));
         }
       });
 
@@ -634,7 +652,8 @@ export default function KokoMembershipView({ profile, role }: Props) {
     try {
       await addDoc(collection(db, 'koko_groups'), {
         name: newGroupName.trim(),
-        category: newGroupCat
+        category: newGroupCat,
+        schoolCode: activeSchoolCode
       });
       setNewGroupName('');
       await loadData();
@@ -657,7 +676,7 @@ export default function KokoMembershipView({ profile, role }: Props) {
   const handleSingleAssign = async (student: Student, field: 'uniform' | 'club' | 'sport', val: string) => {
     const existingMember = memberships.find(m => m.student_id === student.student_id);
     const updatedModel = existingMember 
-      ? { ...existingMember, [field]: val }
+      ? { ...existingMember, [field]: val, schoolCode: activeSchoolCode }
       : {
           student_id: student.student_id,
           name: student.name,
@@ -666,12 +685,13 @@ export default function KokoMembershipView({ profile, role }: Props) {
           uniform: field === 'uniform' ? val : '',
           club: field === 'club' ? val : '',
           sport: field === 'sport' ? val : '',
-          academic_year: academicYear
+          academic_year: academicYear,
+          schoolCode: activeSchoolCode
         };
 
     try {
-      // Use student_id as doc name for fast lookups/upsert
-      await setDoc(doc(db, 'koko_memberships', student.student_id), updatedModel);
+      const targetDocId = existingMember?.id || scopedDocId(activeSchoolCode, student.student_id);
+      await setDoc(doc(db, 'koko_memberships', targetDocId), updatedModel);
       
       // Update local state instanly
       setMemberships(prev => {
@@ -826,7 +846,8 @@ export default function KokoMembershipView({ profile, role }: Props) {
 
   const currentCommittee = useMemo(() => {
     if (!selectedCommGroupId) return null;
-    return committees[selectedCommGroupId] || {
+    const scopedCommId = scopedDocId(activeSchoolCode, selectedCommGroupId);
+    return committees[scopedCommId] || committees[selectedCommGroupId] || {
       teachers: [],
       pengerusi: '',
       naib_pengerusi: '',
@@ -838,21 +859,23 @@ export default function KokoMembershipView({ profile, role }: Props) {
       ajk_tahun5: '',
       ajk_tahun6: ''
     };
-  }, [selectedCommGroupId, committees]);
+  }, [selectedCommGroupId, committees, activeSchoolCode]);
 
   const handleUpdateCommitteeField = async (field: string, val: any) => {
     if (!selectedCommGroupId) return;
     try {
+      const scopedCommId = scopedDocId(activeSchoolCode, selectedCommGroupId);
       const updated = {
         ...currentCommittee,
-        [field]: val
+        [field]: val,
+        schoolCode: activeSchoolCode
       };
       
-      await setDoc(doc(db, 'koko_committees', selectedCommGroupId), updated);
+      await setDoc(doc(db, 'koko_committees', scopedCommId), updated);
       
       setCommittees(prev => ({
         ...prev,
-        [selectedCommGroupId]: updated
+        [scopedCommId]: updated
       }));
     } catch (err) {
       console.error("Gagal mengemas kini jawatankuasa:", err);
@@ -1108,7 +1131,7 @@ export default function KokoMembershipView({ profile, role }: Props) {
                 <div>
                   <div className="bg-slate-900 text-white py-4 px-6 rounded-t-3xl border-b-2 border-orange-500 flex justify-between items-center">
                     <div>
-                      <h4 className="font-black tracking-widest text-sm uppercase">KOKURIKULUM SJK (C) EK HUA TAHUN {academicYear.substring(0,4)}</h4>
+                      <h4 className="font-black tracking-widest text-sm uppercase">KOKURIKULUM {settings.schoolName ? settings.schoolName.toUpperCase() : tenantSchoolName} TAHUN {academicYear.substring(0,4)}</h4>
                       <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">SENARAI NAMA AHLI BADAN BERUNIFORM</p>
                     </div>
                     <span className="bg-orange-500 text-[10px] font-black tracking-widest px-3 py-1 rounded-full uppercase">Unit Beruniform</span>
@@ -1167,7 +1190,7 @@ export default function KokoMembershipView({ profile, role }: Props) {
                 <div>
                   <div className="bg-slate-900 text-white py-4 px-6 rounded-t-3xl border-b-2 border-blue-500 flex justify-between items-center">
                     <div>
-                      <h4 className="font-black tracking-widest text-sm uppercase">KOKURIKULUM SJK (C) EK HUA TAHUN {academicYear.substring(0,4)}</h4>
+                      <h4 className="font-black tracking-widest text-sm uppercase">KOKURIKULUM {settings.schoolName ? settings.schoolName.toUpperCase() : tenantSchoolName} TAHUN {academicYear.substring(0,4)}</h4>
                       <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">SENARAI NAMA AHLI KELAB / PERSATUAN</p>
                     </div>
                     <span className="bg-blue-600 text-[10px] font-black tracking-widest px-3 py-1 rounded-full uppercase">Kelab & Persatuan</span>
@@ -1226,7 +1249,7 @@ export default function KokoMembershipView({ profile, role }: Props) {
                 <div>
                   <div className="bg-slate-900 text-white py-4 px-6 rounded-t-3xl border-b-2 border-emerald-500 flex justify-between items-center">
                     <div>
-                      <h4 className="font-black tracking-widest text-sm uppercase">KOKURIKULUM SJK (C) EK HUA TAHUN {academicYear.substring(0,4)}</h4>
+                      <h4 className="font-black tracking-widest text-sm uppercase">KOKURIKULUM {settings.schoolName ? settings.schoolName.toUpperCase() : tenantSchoolName} TAHUN {academicYear.substring(0,4)}</h4>
                       <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">SENARAI NAMA AHLI SUKAN / PERMAINAN</p>
                     </div>
                     <span className="bg-emerald-600 text-[10px] font-black tracking-widest px-3 py-1 rounded-full uppercase">Sukan & Permainan</span>
@@ -2496,7 +2519,7 @@ export default function KokoMembershipView({ profile, role }: Props) {
                       
                       <div className="text-center flex-1">
                         <h1 className="text-sm sm:text-lg font-black text-slate-900 tracking-tight leading-snug">
-                          {settings.schoolName ? settings.schoolName.toUpperCase() : "SJK (C) EK HUA"}
+                          {settings.schoolName ? settings.schoolName.toUpperCase() : tenantSchoolName}
                         </h1>
                         <h2 className="text-[10px] sm:text-xs font-bold text-slate-500 tracking-wide uppercase mt-1 leading-tight">
                           JAWATANKUASA {

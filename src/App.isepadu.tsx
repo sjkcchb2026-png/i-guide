@@ -7,7 +7,9 @@ import { doc, getDoc, setDoc, collection, query, where, getDocs } from 'firebase
 import { Role, UserProfile } from './types';
 import { LayoutDashboard, GraduationCap, BookOpen, Users, LogOut, Settings, BarChart3, AlertCircle, Home, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CLASSES, SCHOOL_NAME_MS } from './constants';
+import { CLASSES } from './constants';
+import { useSchoolTenant } from './contexts/SchoolTenantContext';
+import { belongsToSchool } from './utils/schoolTenant';
 import SchoolLogo from './components/SchoolLogo';
 import LandingView from './components/Landing/LandingView';
 import EscosStartPortal from './components/Landing/EscosStartPortal';
@@ -26,6 +28,7 @@ import PrincipalDashboard from './components/Dashboard/PrincipalDashboard';
 import DailySchoolExperience from './components/Dashboard/DailySchoolExperience';
 
 export default function App() {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName } = useSchoolTenant();
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,37 +95,9 @@ export default function App() {
         }
 
         const docRef = doc(db, 'users', currentUser.uid);
-        let resolvedSnap = await getDoc(docRef);
-
-        if (!resolvedSnap.exists()) {
-          try {
-            const qUid = query(collection(db, 'users'), where('uid', '==', currentUser.uid));
-            const uidSnap = await getDocs(qUid);
-            if (!uidSnap.empty) resolvedSnap = uidSnap.docs[0];
-          } catch {}
-        }
-
-        if (!resolvedSnap.exists() && currentUser.email) {
-          try {
-            const cleanEmail = currentUser.email.toLowerCase().trim();
-            const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
-            const uSnap = await getDocs(qUsers);
-            if (!uSnap.empty) {
-              const targetDoc = uSnap.docs[0];
-              await setDoc(targetDoc.ref, {
-                uid: currentUser.uid,
-                email: cleanEmail,
-                isVerified: true,
-                isPreRegistered: false,
-                active: targetDoc.data()?.active !== false,
-              }, { merge: true });
-              resolvedSnap = await getDoc(targetDoc.ref);
-            }
-          } catch {}
-        }
-
-        if (resolvedSnap.exists()) {
-          setProfile(resolvedSnap.data() as UserProfile);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setProfile(docSnap.data() as UserProfile);
         } else {
           // Try to auto-match registered student email
           let autoMatched = false;
@@ -130,12 +105,14 @@ export default function App() {
             try {
               const qS = query(collection(db, 'students'), where('email', '==', currentUser.email.toLowerCase().trim()));
               const snapshotS = await getDocs(qS);
-              if (!snapshotS.empty) {
-                const matchedStudent = snapshotS.docs[0].data();
+              const matchedDoc = snapshotS.docs.find((d) => belongsToSchool(d.data(), activeSchoolCode));
+              if (matchedDoc) {
+                const matchedStudent = matchedDoc.data();
                 const newProfile: UserProfile = {
                   uid: currentUser.uid,
                   name: matchedStudent.name,
                   email: currentUser.email.toLowerCase().trim(),
+                  schoolCode: activeSchoolCode,
                   role: 'student',
                   class_assigned: matchedStudent.class,
                   year_assigned: Number(matchedStudent.year),
@@ -228,25 +205,15 @@ export default function App() {
       }
     }
 
-    const nameToUse = customTeacherName || user.displayName || 'Guru SJK(C) Chung Hua Balingian';
-    const cleanEmail = (user.email || 'staff@chbalingian.edu.my').toLowerCase().trim();
+    const nameToUse = customTeacherName || user.displayName || 'Guru Sekolah';
     const newProfile: UserProfile = {
       uid: user.uid,
       name: nameToUse.toUpperCase(),
-      email: cleanEmail,
+      email: user.email || '',
+      schoolCode: activeSchoolCode,
       role: targetRole,
-      isVerified: true,
-      isPreRegistered: false,
     };
-    let targetRef = doc(db, 'users', user.uid);
-    try {
-      const qExisting = query(collection(db, 'users'), where('email', '==', cleanEmail));
-      const exSnap = await getDocs(qExisting);
-      if (!exSnap.empty) {
-        targetRef = exSnap.docs[0].ref;
-      }
-    } catch {}
-    await setDoc(targetRef, newProfile, { merge: true });
+    await setDoc(doc(db, 'users', user.uid), newProfile, { merge: true });
     setProfile(newProfile);
     setShowRoleSelection(false);
   };
@@ -364,7 +331,7 @@ export default function App() {
              <div className="absolute -top-10 -left-10 w-32 h-32 bg-blue-600 opacity-5 rounded-full blur-2xl"></div>
              <SchoolLogo className="w-32 h-32 mx-auto relative z-10" p="p-4" />
           </div>
-          <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">{SCHOOL_NAME_MS}</h1>
+          <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">{tenantSchoolName}</h1>
           <p className="text-slate-500 mt-2 text-sm font-medium uppercase tracking-[0.2em] mb-12">Digital Management Portal — {selectedModule}</p>
           
           <button 
@@ -405,7 +372,8 @@ export default function App() {
                     const newProfile: UserProfile = {
                       uid: visitorUid,
                       name: 'PELAWAT LUAR / PIBG',
-                      email: 'visitor@chbalingian.edu.my',
+                      email: '',
+                      schoolCode: activeSchoolCode,
                       role: 'visitor',
                       academic_year: '2026'
                     };
@@ -570,7 +538,7 @@ export default function App() {
           <div className="text-center mb-8">
             <SchoolLogo className="w-20 h-20 mx-auto mb-4 bg-white/5 p-1 rounded-2xl" />
             <span className="text-[10px] font-mono font-black text-blue-400 tracking-[0.25em] uppercase block mb-1">
-              {DEFAULT_SCHOOL_NAME} ({userClaims.schoolId || DEFAULT_SCHOOL_CODE})
+              {tenantSchoolName} ({userClaims.schoolId || activeSchoolCode})
             </span>
             <h2 className="text-3xl font-black italic uppercase tracking-tighter text-white mb-2">
               Pusat Pertukaran Ruang Kerja Berautoriti
@@ -752,7 +720,7 @@ export default function App() {
           <div className="flex items-center gap-3 mb-8">
             <SchoolLogo className="w-10 h-10" />
             <div className="flex flex-col">
-              <span className="font-black text-sm tracking-tight leading-none">{SCHOOL_NAME_MS}</span>
+              <span className="font-black text-sm tracking-tight leading-none">{tenantSchoolName}</span>
             </div>
           </div>
           
@@ -799,7 +767,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <SchoolLogo className="w-8 h-8" />
             <div className="flex flex-col">
-              <span className="font-black text-xs leading-none">{SCHOOL_NAME_MS}</span>
+              <span className="font-black text-xs leading-none">{tenantSchoolName}</span>
             </div>
           </div>
           <div className="flex items-center gap-3">

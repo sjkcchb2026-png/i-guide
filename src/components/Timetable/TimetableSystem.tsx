@@ -4,7 +4,6 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
 import { PersonnelProfile } from '../../types';
 import { isTeacherForTimetable } from '../../utils/checkoutRules';
-import { deduplicateStaffRecords } from '../../utils/staffNormalizer';
 import { SchoolTimetableMatrix, SubjectAllocationRow } from './SchoolTimetableMatrix';
 import { JKeyinGrid } from './JKeyinGrid';
 import { JUtamaView } from './JUtamaView';
@@ -13,12 +12,26 @@ import { BilikGuruReliefView } from './BilikGuruReliefView';
 import { TeacherTimetableView } from './TeacherTimetableView';
 import { ReliefSchedulingView } from '../ReliefSchedulingView';
 import { OFFICIAL_TEACHERS, generateTeacherShortCode } from '../../constants/officialRoster';
-import { buildDefaultCurriculumMatrix, getDefaultClassTeachers } from '../../constants/defaultCurriculumMatrix';
+import {
+  buildDefaultCurriculumMatrix,
+  getDefaultClassTeachers,
+  hasAnyTeacherAssigned,
+  hydrateMatrixTeachers,
+} from '../../constants/defaultCurriculumMatrix';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import {
+  belongsToSchool,
+  isLegacyDefaultSchool,
+  normalizeActiveSchoolCode,
+  scopedDocId,
+} from '../../utils/schoolTenant';
 import { 
   ScheduleGrid, 
+  DAYS_OF_WEEK,
   TimetableClash 
 } from './types';
 import { 
+  autoPairPKARInGrid,
   createEmptyScheduleGrid, 
   detectScheduleClashes, 
   generateAutoSchedule 
@@ -54,19 +67,32 @@ interface TimetableSystemProps {
   activeAcademicYear?: string;
   defaultTeacherCode?: string;
   initialTab?: TimetableTab;
+  schoolCode?: string;
+  schoolName?: string;
 }
 
 export const TimetableSystem: React.FC<TimetableSystemProps> = ({
   activeAcademicYear = '2027',
   defaultTeacherCode,
   initialTab = 'AGIHAN',
+  schoolCode: propSchoolCode,
+  schoolName: propSchoolName,
 }) => {
+  const tenant = useSchoolTenant();
+  const activeSchoolCode = normalizeActiveSchoolCode(propSchoolCode || tenant.schoolCode);
+  const activeSchoolName = propSchoolName || tenant.schoolName;
+  const isLegacySchool = isLegacyDefaultSchool(activeSchoolCode);
+
   const [activeTab, setActiveTab] = useState<TimetableTab>(initialTab);
   const [selectedYear, setSelectedYear] = useState<string>(activeAcademicYear || '2027');
   const [displayMode, setDisplayMode] = useState<'NUMBER' | 'CODE'>('CODE');
   const [personnelList, setPersonnelList] = useState<PersonnelProfile[]>([]);
-  const [matrixData, setMatrixData] = useState<SubjectAllocationRow[]>(() => buildDefaultCurriculumMatrix(activeAcademicYear || '2027'));
-  const [classTeachers, setClassTeachers] = useState<Record<number, string>>(() => getDefaultClassTeachers());
+  const [matrixData, setMatrixData] = useState<SubjectAllocationRow[]>(() =>
+    buildDefaultCurriculumMatrix(activeAcademicYear || '2027', { includeLegacyTeachers: isLegacySchool })
+  );
+  const [classTeachers, setClassTeachers] = useState<Record<number, string>>(() =>
+    getDefaultClassTeachers(isLegacySchool)
+  );
 
   const [schedule, setSchedule] = useState<ScheduleGrid>(createEmptyScheduleGrid());
   const [clashes, setClashes] = useState<TimetableClash[]>([]);
@@ -84,64 +110,130 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     let isMounted = true;
     async function loadData() {
       try {
-        // 1. Load Personnel (Strictly teachers; exclude AKP)
+        // 1. Load Personnel (Strictly teachers in active school; exclude AKP)
         const pSnap = await getDocs(collection(db, 'personnel')).catch(() => null);
         const teachers: PersonnelProfile[] = [];
         if (pSnap && !pSnap.empty) {
           pSnap.forEach((d) => {
             const data = d.data();
-            if (isTeacherForTimetable(data)) {
-              teachers.push({ id: d.id, _docId: d.id, ...data } as any);
+            if (belongsToSchool(data, activeSchoolCode) && isTeacherForTimetable(data)) {
+              teachers.push({ id: d.id, ...data } as PersonnelProfile);
             }
           });
         }
 
-        // Merge official teachers if any are missing (ensures Muhammad Fahim Amar & all 14 teachers are present)
-        OFFICIAL_TEACHERS.forEach((ot) => {
-          const exists = teachers.some(
-            (p) =>
-              (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
-              (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
-          );
-          if (!exists) {
-            teachers.push(ot as any);
-          }
+        // Only merge Balingian official teachers for legacy YCC3404
+        if (isLegacySchool) {
+          OFFICIAL_TEACHERS.forEach((ot) => {
+            const exists = teachers.some(
+              (p) =>
+                (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
+                (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
+            );
+            if (!exists) {
+              teachers.push(ot as any);
+            }
+          });
+        }
+
+        if (isMounted) setPersonnelList(teachers);
+
+        // 2. Load Matrix Data (Fallback/hydrate official teachers ONLY for YCC3404)
+        const matrixDocRef = doc(db, 'school_timetables', scopedDocId(activeSchoolCode, `matrix_${selectedYear}`));
+        const matrixSnap = await getDoc(matrixDocRef);
+        let resolvedMatrix: SubjectAllocationRow[] = buildDefaultCurriculumMatrix(selectedYear, {
+          includeLegacyTeachers: isLegacySchool,
         });
 
-        // Deduplicate by email/IC/uid before storing in state
-        const dedupedTeachers = deduplicateStaffRecords(teachers as any[]) as PersonnelProfile[];
-        if (isMounted) setPersonnelList(dedupedTeachers);
-
-        // 2. Load Matrix Data (Fallback to official default curriculum allocation if not yet saved)
-        const matrixDocRef = doc(db, 'school_timetables', `matrix_${selectedYear}`);
-        const matrixSnap = await getDoc(matrixDocRef);
         if (matrixSnap.exists()) {
           const mData = matrixSnap.data();
-          if (Array.isArray(mData.matrixData) && mData.matrixData.length > 0 && isMounted) {
-            setMatrixData(mData.matrixData);
-          } else if (isMounted) {
-            setMatrixData(buildDefaultCurriculumMatrix(selectedYear));
+          if (Array.isArray(mData.matrixData) && mData.matrixData.length > 0) {
+            resolvedMatrix =
+              hasAnyTeacherAssigned(mData.matrixData) || !isLegacySchool
+                ? mData.matrixData
+                : hydrateMatrixTeachers(mData.matrixData, selectedYear, true);
           }
+          if (isMounted) setMatrixData(resolvedMatrix);
+
           if (mData.classTeachers && Object.values(mData.classTeachers).filter(Boolean).length > 0 && isMounted) {
             setClassTeachers(mData.classTeachers);
           } else if (isMounted) {
-            setClassTeachers(getDefaultClassTeachers());
+            setClassTeachers(getDefaultClassTeachers(isLegacySchool));
           }
         } else if (isMounted) {
-          setMatrixData(buildDefaultCurriculumMatrix(selectedYear));
-          setClassTeachers(getDefaultClassTeachers());
+          setMatrixData(resolvedMatrix);
+          setClassTeachers(getDefaultClassTeachers(isLegacySchool));
         }
 
-        // 3. Load Schedule Grid
-        const scheduleDocRef = doc(db, 'school_timetables', `schedule_${selectedYear}`);
+        // 3. Load Schedule Grid (and repair legacy 0-teacher schedules automatically from resolvedMatrix)
+        const scheduleDocRef = doc(db, 'school_timetables', scopedDocId(activeSchoolCode, `schedule_${selectedYear}`));
         const scheduleSnap = await getDoc(scheduleDocRef);
         if (scheduleSnap.exists()) {
           const sData = scheduleSnap.data();
           if (sData.schedule && isMounted) {
-            setSchedule(sData.schedule);
-            const foundClashes = detectScheduleClashes(sData.schedule);
+            let loadedGrid: ScheduleGrid = sData.schedule;
+
+            let regularCellsCount = 0;
+            let assignedTeacherCellsCount = 0;
+            [1, 2, 3, 4, 5, 6].forEach((grade) => {
+              DAYS_OF_WEEK.forEach((day) => {
+                const dayObj = loadedGrid[grade]?.[day];
+                if (!dayObj) return;
+                Object.entries(dayObj).forEach(([slotId, cell]) => {
+                  if (!cell || slotId === 'PKAR' || slotId === 'MEMBACA' || slotId === 'TASMIK' || slotId === 'REHAT') return;
+                  if (cell.subjectCode === 'PN') return;
+                  regularCellsCount++;
+                  const cleanedT = (cell.teacherCode || '').replace(/\//g, '').trim();
+                  if (cleanedT) assignedTeacherCellsCount++;
+                });
+              });
+            });
+
+            if (regularCellsCount >= 6 && assignedTeacherCellsCount === 0 && hasAnyTeacherAssigned(resolvedMatrix)) {
+              const repairedGrid: ScheduleGrid = JSON.parse(JSON.stringify(loadedGrid));
+              const pmRow = resolvedMatrix.find((r) => r.subjectCode.toUpperCase() === 'PM');
+              const paiRow = resolvedMatrix.find((r) => r.subjectCode.toUpperCase() === 'PAI');
+              const amRow = resolvedMatrix.find((r) => r.subjectCode.toUpperCase() === 'AM');
+
+              [1, 2, 3, 4, 5, 6].forEach((grade) => {
+                DAYS_OF_WEEK.forEach((day) => {
+                  const dayObj = repairedGrid[grade]?.[day];
+                  if (!dayObj) return;
+                  Object.entries(dayObj).forEach(([slotId, cell]) => {
+                    if (!cell || slotId === 'PKAR' || slotId === 'MEMBACA' || slotId === 'TASMIK' || slotId === 'REHAT') return;
+                    const code = (cell.subjectCode || '').toUpperCase();
+                    if (!code || code === 'PN') return;
+                    if (code === 'PM/PAI') {
+                      cell.teacherCode = [pmRow?.teachers?.[grade] || '', paiRow?.teachers?.[grade] || '']
+                        .map((t) => t.trim())
+                        .filter(Boolean)
+                        .join('/');
+                    } else if (code === 'AM') {
+                      const t1 = amRow?.teachers?.[grade]?.trim() || '';
+                      const t2 = amRow?.secondaryTeachers?.[grade]?.trim() || '';
+                      cell.teacherCode = [t1, t2].filter(Boolean).join('/');
+                      cell.isCoTeaching = Boolean(t2);
+                    } else {
+                      const matched = resolvedMatrix.find((r) => r.subjectCode.toUpperCase() === code);
+                      if (matched?.teachers?.[grade]) {
+                        cell.teacherCode = matched.teachers[grade].trim();
+                      }
+                    }
+                  });
+                });
+              });
+
+              autoPairPKARInGrid(repairedGrid);
+              loadedGrid = repairedGrid;
+            }
+
+            setSchedule(loadedGrid);
+            const foundClashes = detectScheduleClashes(loadedGrid);
             setClashes(foundClashes);
           }
+        } else if (isMounted) {
+          setSchedule(createEmptyScheduleGrid());
+          setClashes([]);
         }
       } catch (err) {
         console.warn('Could not load Timetable data:', err);
@@ -158,38 +250,42 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
       isMounted = false;
       unsub();
     };
-  }, [selectedYear]);
+  }, [selectedYear, activeSchoolCode, isLegacySchool]);
 
   // Teacher Mapping for code & num resolution
   const teacherMapping = useMemo(() => {
     const sourceList: PersonnelProfile[] = [...personnelList];
 
-    // Ensure all 14 official teachers exist in the list
-    OFFICIAL_TEACHERS.forEach((ot) => {
-      const exists = sourceList.some(
-        (p) =>
-          (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
-          (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
-      );
-      if (!exists) {
-        sourceList.push({
-          id: ot.id,
-          name: ot.name,
-          email: ot.email,
-          category: ot.category,
-          role: ot.role,
-          position: ot.position,
-        } as any);
-      }
-    });
+    // Ensure all 14 official teachers exist in the list ONLY for YCC3404
+    if (isLegacySchool) {
+      OFFICIAL_TEACHERS.forEach((ot) => {
+        const exists = sourceList.some(
+          (p) =>
+            (p.email && p.email.toLowerCase().trim() === ot.email.toLowerCase().trim()) ||
+            (p.name && (p.name.toUpperCase().includes(ot.name.toUpperCase()) || ot.name.toUpperCase().includes(p.name.toUpperCase())))
+        );
+        if (!exists) {
+          sourceList.push({
+            id: ot.id,
+            name: ot.name,
+            email: ot.email,
+            category: ot.category,
+            role: ot.role,
+            position: ot.position,
+          } as any);
+        }
+      });
+    }
 
     const list = sourceList.slice(0, 50).map((t, idx) => {
       const num = idx + 1;
       let cleanName = (t.name || '').replace(/\s+/g, ' ').trim();
-      if (cleanName.toUpperCase().includes('FAHIM') && cleanName.toUpperCase().includes('AMAR')) {
-        cleanName = 'MUHAMMAD FAHIM AMAR';
-      } else if (cleanName.toUpperCase().includes('STEPHANIE') && cleanName.toUpperCase().includes('WONG')) {
-        cleanName = 'STEPHANIE WONG ENG HEE';
+      if (isLegacySchool) {
+        if (cleanName.toUpperCase().includes('FAHIM') && cleanName.toUpperCase().includes('AMAR')) {
+          cleanName = 'MUHAMMAD FAHIM AMAR';
+        } else if (cleanName.toUpperCase().includes('STEPHANIE') && cleanName.toUpperCase().includes('WONG')) {
+          cleanName = 'STEPHANIE WONG ENG HEE';
+        }
       }
 
       // Generate short form (rule: 4 words -> 2 initials, e.g. Stephanie Wong Eng Hee -> SW)
@@ -204,7 +300,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     });
 
     return { list };
-  }, [personnelList]);
+  }, [personnelList, isLegacySchool]);
 
   // Update schedule handler
   const handleUpdateSchedule = (newSchedule: ScheduleGrid) => {
@@ -213,18 +309,21 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     setClashes(foundClashes);
   };
 
-  // Auto Schedule Generation (Self-healing with official curriculum fallback)
+  // Auto Schedule Generation (Self-healing with official curriculum fallback for legacy school)
   const handleRunAutoScheduler = () => {
     let currentMatrix = matrixData;
     let currentClassTeachers = classTeachers;
 
     if (!currentMatrix || currentMatrix.length === 0) {
-      currentMatrix = buildDefaultCurriculumMatrix(selectedYear);
+      currentMatrix = buildDefaultCurriculumMatrix(selectedYear, { includeLegacyTeachers: isLegacySchool });
+      setMatrixData(currentMatrix);
+    } else if (!hasAnyTeacherAssigned(currentMatrix) && isLegacySchool) {
+      currentMatrix = hydrateMatrixTeachers(currentMatrix, selectedYear, true);
       setMatrixData(currentMatrix);
     }
 
-    if (!currentClassTeachers || Object.values(currentClassTeachers).filter(Boolean).length === 0) {
-      currentClassTeachers = getDefaultClassTeachers();
+    if ((!currentClassTeachers || Object.values(currentClassTeachers).filter(Boolean).length === 0) && isLegacySchool) {
+      currentClassTeachers = getDefaultClassTeachers(true);
       setClassTeachers(currentClassTeachers);
     }
 
@@ -241,10 +340,11 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
       setSchedule(grid);
       setClashes(newClashes);
 
-      // Persist generated schedule to Firestore
-      const scheduleDocRef = doc(db, 'school_timetables', `schedule_${selectedYear}`);
+      // Persist generated schedule to Firestore (tenant scoped)
+      const scheduleDocRef = doc(db, 'school_timetables', scopedDocId(activeSchoolCode, `schedule_${selectedYear}`));
       const payload = JSON.parse(
         JSON.stringify({
+          schoolCode: activeSchoolCode,
           academicYear: selectedYear,
           schedule: grid,
           classTeachers: currentClassTeachers,
@@ -272,9 +372,10 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
   const handleSaveSchedule = async () => {
     try {
       setSaveStatus('Menyimpan jadual ke pangkalan data...');
-      const scheduleDocRef = doc(db, 'school_timetables', `schedule_${selectedYear}`);
+      const scheduleDocRef = doc(db, 'school_timetables', scopedDocId(activeSchoolCode, `schedule_${selectedYear}`));
       const payload = JSON.parse(
         JSON.stringify({
+          schoolCode: activeSchoolCode,
           academicYear: selectedYear,
           schedule,
           classTeachers,
@@ -454,7 +555,20 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
       {/* Main Tab View Rendering */}
       <div>
         {activeTab === 'AGIHAN' && (
-          <SchoolTimetableMatrix activeAcademicYear={selectedYear} />
+          <SchoolTimetableMatrix
+            activeAcademicYear={selectedYear}
+            schoolCode={activeSchoolCode}
+            onMatrixSaved={(rows, teachersMap, yr) => {
+              if (yr === selectedYear) {
+                setMatrixData(
+                  hasAnyTeacherAssigned(rows) || !isLegacySchool
+                    ? rows
+                    : hydrateMatrixTeachers(rows, yr, true)
+                );
+                setClassTeachers(teachersMap);
+              }
+            }}
+          />
         )}
 
         {activeTab === 'JKEYIN' && (
@@ -476,6 +590,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           <JUtamaView
             schedule={schedule}
             academicYear={selectedYear}
+            schoolName={activeSchoolName}
+            schoolCode={activeSchoolCode}
             classTeachers={classTeachers}
             displayMode={displayMode}
             teacherMapping={teacherMapping}
@@ -487,6 +603,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           <JUtamaView
             schedule={schedule}
             academicYear={selectedYear}
+            schoolName={activeSchoolName}
+            schoolCode={activeSchoolCode}
             classTeachers={classTeachers}
             displayMode={displayMode}
             teacherMapping={teacherMapping}
@@ -498,6 +616,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           <ClassTimetableView
             schedule={schedule}
             academicYear={selectedYear}
+            schoolName={activeSchoolName}
+            schoolCode={activeSchoolCode}
             classTeachers={classTeachers}
             matrixData={matrixData}
             displayMode={displayMode}
@@ -523,6 +643,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           <TeacherTimetableView
             schedule={schedule}
             academicYear={selectedYear}
+            schoolName={activeSchoolName}
+            schoolCode={activeSchoolCode}
             teacherMapping={teacherMapping}
             displayMode={displayMode}
             defaultTeacherCode={defaultTeacherCode}

@@ -6,6 +6,7 @@ import {
   getGradeDaySlots 
 } from './types';
 import { Printer, Layout, RotateCw } from 'lucide-react';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 
 interface JUtamaViewProps {
   schedule: ScheduleGrid;
@@ -21,13 +22,16 @@ interface JUtamaViewProps {
 export const JUtamaView: React.FC<JUtamaViewProps> = ({
   schedule,
   academicYear,
-  schoolName = 'SJK (C) CHUNG HUA BALINGIAN',
-  schoolCode = 'YCC3404',
+  schoolName: propSchoolName,
+  schoolCode: propSchoolCode,
   classTeachers,
   displayMode,
   teacherMapping,
   initialOrientation = 'LANDSCAPE',
 }) => {
+  const tenant = useSchoolTenant();
+  const schoolName = propSchoolName || tenant.schoolName;
+  const schoolCode = propSchoolCode || tenant.schoolCode;
   const [orientation, setOrientation] = useState<'PORTRAIT' | 'LANDSCAPE'>(initialOrientation);
 
   const handlePrint = () => {

@@ -11,6 +11,8 @@ import {
 } from 'firebase/firestore';
 import { Student, UserProfile } from '../../types';
 import { StudentProfileModal } from '../Student/StudentProfileModal';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool } from '../../utils/schoolTenant';
 
 enum OperationType {
   CREATE = 'create',
@@ -87,6 +89,7 @@ interface KokoAttendanceSession {
 }
 
 export default function KokoAttendanceView({ profile, role }: Props) {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName } = useSchoolTenant();
   const [loading, setLoading] = useState(true);
   const [students, setStudents] = useState<Student[]>([]);
   const [profileStudentId, setProfileStudentId] = useState<string | null>(null);
@@ -126,25 +129,33 @@ export default function KokoAttendanceView({ profile, role }: Props) {
 
       // Subscribe to students
       unsubStudents = onSnapshot(collection(db, 'students'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Student));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as Student));
         setStudents(list);
       }, (err) => handleFirestoreError(err, OperationType.GET, 'students'));
 
       // Subscribe to groups
       unsubGroups = onSnapshot(collection(db, 'koko_groups'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoGroup));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as KokoGroup));
         setGroups(list);
       }, (err) => handleFirestoreError(err, OperationType.GET, 'koko_groups'));
 
       // Subscribe to memberships
       unsubMemberships = onSnapshot(collection(db, 'koko_memberships'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoMembership));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as KokoMembership));
         setMemberships(list);
       }, (err) => handleFirestoreError(err, OperationType.GET, 'koko_memberships'));
 
       // Subscribe to attendance sessions
       unsubAttendance = onSnapshot(collection(db, 'koko_attendance'), (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as KokoAttendanceSession));
+        const list = snap.docs
+          .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as KokoAttendanceSession));
         setAttendanceSessions(list);
         setLoading(false);
       }, (err) => handleFirestoreError(err, OperationType.GET, 'koko_attendance'));
@@ -160,7 +171,7 @@ export default function KokoAttendanceView({ profile, role }: Props) {
       if (unsubMemberships) unsubMemberships();
       if (unsubAttendance) unsubAttendance();
     };
-  }, []);
+  }, [activeSchoolCode]);
 
   // Filter groups based on selected category
   const filteredGroups = groups.filter(g => g.category === selectedCategory);
@@ -235,12 +246,13 @@ export default function KokoAttendanceView({ profile, role }: Props) {
         defaultAttendanceMap[st.student_id] = '1';
       });
 
-      const payload: KokoAttendanceSession = {
+      const payload: KokoAttendanceSession & { schoolCode?: string } = {
         groupId: selectedGroupId || currentGroupName,
         category: selectedCategory,
         date: newMeetingDate,
         academicYear,
         attendance: defaultAttendanceMap,
+        schoolCode: activeSchoolCode,
         createdAt: new Date().toISOString(),
         createdBy: profile.uid
       };
@@ -632,7 +644,7 @@ export default function KokoAttendanceView({ profile, role }: Props) {
               <div className="absolute right-4 top-4 border border-slate-300 rounded-lg p-2 font-mono text-[9px] uppercase font-black">
                 TS25
               </div>
-              <h2 className="text-xl font-bold tracking-tight uppercase">SJK (C) EK HUA</h2>
+              <h2 className="text-xl font-bold tracking-tight uppercase">{tenantSchoolName}</h2>
               <p className="text-xs font-black uppercase tracking-widest mt-1 text-slate-500">LAPORAN REKOD KEHADIRAN AKTIVITI KOKURIKULUM</p>
               <div className="mt-4 grid grid-cols-3 text-left border-y border-dashed border-slate-300 py-3 text-[10px] font-bold">
                 <div>KATEGORI: <span className="font-black uppercase">{selectedCategory === 'uniform' ? 'Badan Beruniform' : selectedCategory === 'club' ? 'Kelab/Persatuan' : 'Sukan/Permainan'}</span></div>

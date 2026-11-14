@@ -27,22 +27,27 @@ import {
   GovernanceAssignment,
   AuditTrailEntry,
   ImportSession,
-  RollbackRecord
+  RollbackRecord,
+  SchoolSettings,
+  SchoolProfile,
+  UserProfile
 } from '../../types';
 import { GuruImportRow, GuruImportPreviewResponse, ApdmStudentImportRow, ApdmStudentImportPreviewResponse } from '../../types/isepadu';
 import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
-import {
-  deduplicateAndCleanUsersInFirestore,
-  deduplicateUsersSnapshotInFirestore,
-  isRealAuthUid,
-  normalizeStaffEmail,
-  normalizeStaffIc,
-} from '../../utils/staffNormalizer';
 import { StudentProfileModal } from '../Student/StudentProfileModal';
 import { TimetableSystem } from '../Timetable/TimetableSystem';
 import { StaffRoleCell } from './StaffRoleCell';
 import { SchoolLogo } from '../SchoolLogo';
 import { SchoolLogoModal } from '../SchoolLogoModal';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import {
+  belongsToSchool,
+  DEFAULT_SCHOOL_NAME,
+  DEFAULT_SCHOOL_SLOGAN,
+  isLegacyDefaultSchool,
+  normalizeActiveSchoolCode,
+  scopedDocId,
+} from '../../utils/schoolTenant';
 import { 
   Settings, 
   Calendar, 
@@ -136,7 +141,23 @@ async function parseResponseSafely(res: Response, defaultError: string): Promise
 
 type MDSubTab = 'config' | 'academic_years' | 'personnel' | 'classes' | 'subject_allocations' | 'students' | 'import' | 'history' | 'audit';
 
-export default function MasterDataDashboard() {
+interface MasterDataDashboardProps {
+  schoolCode?: string;
+  schoolSettings?: SchoolSettings | null;
+  currentUser?: UserProfile | null;
+  onUpdateSchoolSettings?: (updated: SchoolSettings) => void;
+}
+
+export default function MasterDataDashboard({
+  schoolCode: propSchoolCode,
+  schoolSettings,
+  currentUser,
+  onUpdateSchoolSettings,
+}: MasterDataDashboardProps = {}) {
+  const tenant = useSchoolTenant();
+  const activeSchoolCode = normalizeActiveSchoolCode(propSchoolCode || schoolSettings?.schoolCode || tenant.schoolCode);
+  const displaySchoolName =
+    schoolSettings?.schoolName || tenant.schoolName || (isLegacyDefaultSchool(activeSchoolCode) ? DEFAULT_SCHOOL_NAME : activeSchoolCode);
   const [activeSubTab, setActiveSubTab] = useState<MDSubTab>('config');
   const [loading, setLoading] = useState(false);
 
@@ -156,6 +177,8 @@ export default function MasterDataDashboard() {
   const [auditTrail, setAuditTrail] = useState<AuditTrailEntry[]>([]);
   const [portfolioInput, setPortfolioInput] = useState('');
   const [committeeInput, setCommitteeInput] = useState('');
+  const [adminEmailInput, setAdminEmailInput] = useState('');
+  const [profileSaveMsg, setProfileSaveMsg] = useState<string | null>(null);
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [overrideJustification, setOverrideJustification] = useState('');
   const [pendingAllocation, setPendingAllocation] = useState<any>(null);
@@ -164,14 +187,14 @@ export default function MasterDataDashboard() {
   // Selection state for filters
   const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('');
 
-  // Initial Fetching
+  // Initial Fetching scoped to activeSchoolCode
   useEffect(() => {
     fetchSchoolConfig();
     fetchAcademicYears();
     fetchPersonnel();
     fetchImportSessions();
     fetchAuditTrail();
-  }, []);
+  }, [activeSchoolCode]);
 
   useEffect(() => {
     if (selectedAcademicYear) {
@@ -180,7 +203,7 @@ export default function MasterDataDashboard() {
       fetchEnrollments(selectedAcademicYear);
       fetchGovernanceAssignments(selectedAcademicYear);
     }
-  }, [selectedAcademicYear]);
+  }, [selectedAcademicYear, activeSchoolCode]);
 
   useEffect(() => {
     if (activeSubTab === 'audit') {
@@ -188,7 +211,7 @@ export default function MasterDataDashboard() {
     } else if (activeSubTab === 'history') {
       fetchImportSessions();
     }
-  }, [activeSubTab]);
+  }, [activeSubTab, activeSchoolCode]);
 
   // Audit trail writer helper
   const logAuditTrail = async (
@@ -199,6 +222,7 @@ export default function MasterDataDashboard() {
   ) => {
     try {
       const entry: AuditTrailEntry = {
+        schoolCode: activeSchoolCode,
         timestamp: new Date().toISOString(),
         actor_id: auth.currentUser?.uid || 'admin-user',
         actor_name: auth.currentUser?.displayName || auth.currentUser?.email || 'Pentadbir Utama',
@@ -218,7 +242,11 @@ export default function MasterDataDashboard() {
     try {
       const q = query(collection(db, 'governance_assignments'), where('academicYear', '==', ay));
       const snap = await getDocs(q);
-      setGovernanceAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() } as GovernanceAssignment)));
+      setGovernanceAssignments(
+        snap.docs
+          .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as GovernanceAssignment))
+      );
     } catch (e) {
       handleFirestoreError(e, OperationType.LIST, 'governance_assignments');
     }
@@ -227,7 +255,9 @@ export default function MasterDataDashboard() {
   const fetchImportSessions = async () => {
     try {
       const snap = await getDocs(collection(db, 'import_sessions'));
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ImportSession));
+      const list = snap.docs
+        .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+        .map(d => ({ id: d.id, ...d.data() } as ImportSession));
       list.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
       setImportSessions(list);
     } catch (e) {
@@ -238,25 +268,28 @@ export default function MasterDataDashboard() {
   const fetchAuditTrail = async () => {
     try {
       const snap = await getDocs(collection(db, 'audit_trail'));
-      const list = snap.docs.map(d => {
-        const data = d.data();
-        const rawDetails = data.details;
-        const detailsString = typeof rawDetails === 'object' && rawDetails !== null
-          ? (rawDetails.message || rawDetails.description || JSON.stringify(rawDetails))
-          : String(rawDetails || '');
+      const list = snap.docs
+        .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+        .map(d => {
+          const data = d.data();
+          const rawDetails = data.details;
+          const detailsString = typeof rawDetails === 'object' && rawDetails !== null
+            ? (rawDetails.message || rawDetails.description || JSON.stringify(rawDetails))
+            : String(rawDetails || '');
 
-        return {
-          id: d.id,
-          timestamp: data.timestamp || new Date().toISOString(),
-          actor_id: data.actor_id || '',
-          actor_name: data.actor_name || 'Pentadbir',
-          actor_role: data.actor_role || 'admin',
-          action_type: data.action_type || 'UPDATE',
-          layer: data.layer || 1,
-          entity_id: data.entity_id || '',
-          details: detailsString
-        } as AuditTrailEntry;
-      });
+          return {
+            id: d.id,
+            schoolCode: data.schoolCode || activeSchoolCode,
+            timestamp: data.timestamp || new Date().toISOString(),
+            actor_id: data.actor_id || '',
+            actor_name: data.actor_name || 'Pentadbir',
+            actor_role: data.actor_role || 'admin',
+            action_type: data.action_type || 'UPDATE',
+            layer: data.layer || 1,
+            entity_id: data.entity_id || '',
+            details: detailsString
+          } as AuditTrailEntry;
+        });
       list.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
       setAuditTrail(list);
     } catch (e) {
@@ -264,51 +297,72 @@ export default function MasterDataDashboard() {
     }
   };
 
-  // Fetch functions with robust error tracking
+  // Fetch functions scoped strictly by activeSchoolCode
   const fetchSchoolConfig = async () => {
+    const configDocId = scopedDocId(activeSchoolCode, 'default');
     try {
-      const docRef = doc(db, 'school_config', 'default');
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        setSchoolConfig(docSnap.data() as SchoolConfig);
-      } else {
-        // Seed default config
-        const defaultConfig: SchoolConfig = {
-          id: 'default',
-          schoolName: 'SEKOLAH KEBANGSAAN DEMO',
-          schoolType: 'SK',
-          schoolCategory: 'Non-SKM',
-          hasPreschool: true,
-          hasPPKI: false,
-          academicSession: '2026/2027',
-          defaultLanguages: ['Bahasa Melayu', 'English'],
-          schoolLogo: ''
+      const [configSnap, schoolSnap] = await Promise.all([
+        getDoc(doc(db, 'school_config', configDocId)),
+        getDoc(doc(db, 'schools', activeSchoolCode)).catch(() => null),
+      ]);
+      const sp = schoolSnap?.exists() ? (schoolSnap.data() as SchoolProfile) : null;
+      if (configSnap.exists()) {
+        const cfg = configSnap.data() as SchoolConfig;
+        const merged: SchoolConfig = {
+          ...cfg,
+          schoolCode: activeSchoolCode,
+          schoolName: sp?.schoolName || cfg.schoolName || displaySchoolName,
+          schoolLogo: sp?.logoUrl ?? cfg.schoolLogo ?? schoolSettings?.schoolLogo ?? '',
+          slogan: sp?.slogan || cfg.slogan || schoolSettings?.slogan || DEFAULT_SCHOOL_SLOGAN,
+          adminEmails: sp?.adminEmails || cfg.adminEmails || schoolSettings?.adminEmails || [],
         };
-        await setDoc(docRef, defaultConfig);
+        setSchoolConfig(merged);
+      } else {
+        const defaultConfig: SchoolConfig = {
+          id: configDocId,
+          schoolCode: activeSchoolCode,
+          schoolName: sp?.schoolName || displaySchoolName,
+          schoolType: sp?.schoolType || 'SJKC',
+          schoolCategory: sp?.schoolCategory || 'SKM',
+          hasPreschool: sp?.hasPreschool ?? false,
+          hasPPKI: sp?.hasPPKI ?? false,
+          academicSession: sp?.academicSession || '2026/2027',
+          defaultLanguages: ['Bahasa Cina', 'Bahasa Melayu', 'English'],
+          schoolLogo: sp?.logoUrl || schoolSettings?.schoolLogo || '',
+          slogan: sp?.slogan || schoolSettings?.slogan || DEFAULT_SCHOOL_SLOGAN,
+          adminEmails:
+            sp?.adminEmails ||
+            schoolSettings?.adminEmails ||
+            (currentUser?.email ? [currentUser.email.toLowerCase().trim()] : []),
+        };
+        await setDoc(doc(db, 'school_config', configDocId), deepSanitizeFirestore(defaultConfig), { merge: true });
         setSchoolConfig(defaultConfig);
       }
     } catch (e) {
-      handleFirestoreError(e, OperationType.GET, 'school_config/default');
+      handleFirestoreError(e, OperationType.GET, `school_config/${configDocId}`);
     }
   };
 
   const fetchAcademicYears = async () => {
     try {
       const snap = await getDocs(collection(db, 'academic_years'));
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as AcademicYearConfig));
-      // Sort list
+      const list = snap.docs
+        .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+        .map(d => ({ id: d.id, ...d.data() } as AcademicYearConfig));
       list.sort((a, b) => b.year.localeCompare(a.year));
       setAcademicYears(list);
       
-      // If no academic years, seed default from config
       if (list.length === 0) {
         const defaultYear = '2026/2027';
-        await setDoc(doc(db, 'academic_years', defaultYear), {
-          id: defaultYear,
+        const docId = scopedDocId(activeSchoolCode, defaultYear);
+        const payload: AcademicYearConfig = {
+          id: docId,
+          schoolCode: activeSchoolCode,
           year: defaultYear,
           status: 'active'
-        });
-        setAcademicYears([{ id: defaultYear, year: defaultYear, status: 'active' }]);
+        };
+        await setDoc(doc(db, 'academic_years', docId), payload);
+        setAcademicYears([payload]);
         setSelectedAcademicYear(defaultYear);
       } else {
         const active = list.find(y => y.status === 'active') || list[0];
@@ -323,7 +377,7 @@ export default function MasterDataDashboard() {
     setPersonnelError(null);
     try {
       const idToken = await auth.currentUser?.getIdToken();
-      const res = await fetch('/api/core/personnel', {
+      const res = await fetch(`/api/core/personnel?schoolCode=${encodeURIComponent(activeSchoolCode)}`, {
         headers: {
           'Authorization': `Bearer ${idToken || ''}`
         }
@@ -341,77 +395,86 @@ export default function MasterDataDashboard() {
       console.warn('Could not fetch personnel from /api/core/personnel:', apiErr);
     }
 
-    // Resilient Fallback 1: Query client Firestore `personnel` collection
+    // Resilient Fallback 1: Query client Firestore `personnel` collection filtered by activeSchoolCode
     try {
       const pSnap = await getDocs(collection(db, 'personnel')).catch(() => null);
       if (pSnap && !pSnap.empty) {
-        const list = pSnap.docs.map(d => ({ id: d.id, ...d.data() } as PersonnelProfile));
-        list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-        setPersonnel(list);
-        setPersonnelError(null);
-        return;
+        const scopedDocs = pSnap.docs.filter(d => belongsToSchool(d.data() as any, activeSchoolCode));
+        if (scopedDocs.length > 0) {
+          const list = scopedDocs.map(d => ({ id: d.id, ...d.data() } as PersonnelProfile));
+          list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+          setPersonnel(list);
+          setPersonnelError(null);
+          return;
+        }
       }
     } catch (fsErr) {
       console.warn('Firestore personnel read notice:', fsErr);
     }
 
-    // Resilient Fallback 2: Load official roster from /api/personnel/official-roster
-    try {
-      const rosterRes = await fetch('/api/personnel/official-roster').catch(() => null);
-      if (rosterRes && rosterRes.ok) {
-        const rData = await rosterRes.json();
-        if (Array.isArray(rData.roster) && rData.roster.length > 0) {
-          const mappedRoster: PersonnelProfile[] = rData.roster.map((r: any) => ({
-            id: r.id || `staff_${r.ic || Math.random().toString(36).substr(2, 9)}`,
-            name: String(r.name || '').trim().toUpperCase(),
-            ic: String(r.ic || '').replace(/[^0-9]/g, ''),
-            gender: (r.gender === 'P' || r.gender === 'Perempuan') ? 'P' : 'L',
-            email: String(r.email || '').toLowerCase().trim(),
-            phone: String(r.phone || '').trim(),
-            staffFileNo: String(r.staffFileNo || '').trim(),
-            grade: String(r.grade || '').trim(),
-            position: String(r.position || 'GURU').trim(),
-            majorOption: String(r.majorOption || '').trim(),
-            minorOption: String(r.minorOption || '').trim(),
-            employmentStatus: 'Tetap',
-            teachingStatus: 'Aktif',
-            category: r.category || (r.position === 'GB' ? 'PRINCIPAL' : ((r.category === 'AKP' || r.position === 'PKA' || r.position === 'PPM') ? 'AKP' : 'GURU')),
-            portfolios: [],
-            committees: [],
-            coordinators: [],
-            additionalResponsibilities: [],
-          }));
-          mappedRoster.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-          setPersonnel(mappedRoster);
-          setPersonnelError(null);
+    // Resilient Fallback 2: STRICTLY ONLY for YCC3404 legacy default school
+    if (isLegacyDefaultSchool(activeSchoolCode)) {
+      try {
+        const rosterRes = await fetch(`/api/personnel/official-roster?schoolCode=${encodeURIComponent(activeSchoolCode)}`).catch(() => null);
+        if (rosterRes && rosterRes.ok) {
+          const rData = await rosterRes.json();
+          if (Array.isArray(rData.roster) && rData.roster.length > 0) {
+            const mappedRoster: PersonnelProfile[] = rData.roster.map((r: any) => ({
+              id: r.id || `staff_${r.ic || Math.random().toString(36).substr(2, 9)}`,
+              schoolCode: activeSchoolCode,
+              name: String(r.name || '').trim().toUpperCase(),
+              ic: String(r.ic || '').replace(/[^0-9]/g, ''),
+              gender: (r.gender === 'P' || r.gender === 'Perempuan') ? 'P' : 'L',
+              email: String(r.email || '').toLowerCase().trim(),
+              phone: String(r.phone || '').trim(),
+              staffFileNo: String(r.staffFileNo || '').trim(),
+              grade: String(r.grade || '').trim(),
+              position: String(r.position || 'GURU').trim(),
+              majorOption: String(r.majorOption || '').trim(),
+              minorOption: String(r.minorOption || '').trim(),
+              employmentStatus: 'Tetap',
+              teachingStatus: 'Aktif',
+              category: r.category || (r.position === 'GB' ? 'PRINCIPAL' : ((r.category === 'AKP' || r.position === 'PKA' || r.position === 'PPM') ? 'AKP' : 'GURU')),
+              portfolios: [],
+              committees: [],
+              coordinators: [],
+              additionalResponsibilities: [],
+            }));
+            mappedRoster.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+            setPersonnel(mappedRoster);
+            setPersonnelError(null);
 
-          // Seed Firestore personnel collection in background so subsequent reads are persistent
-          try {
-            const batch = writeBatch(db);
-            mappedRoster.forEach(p => {
-              const docRef = doc(db, 'personnel', p.id);
-              batch.set(docRef, p, { merge: true });
-            });
-            await batch.commit().catch(() => null);
-          } catch (seedErr) {
-            console.warn('Background seed to personnel collection:', seedErr);
+            try {
+              const batch = writeBatch(db);
+              mappedRoster.forEach(p => {
+                const docRef = doc(db, 'personnel', p.id);
+                batch.set(docRef, p, { merge: true });
+              });
+              await batch.commit().catch(() => null);
+            } catch (seedErr) {
+              console.warn('Background seed to personnel collection:', seedErr);
+            }
+            return;
           }
-          return;
         }
+      } catch (rosterErr) {
+        console.warn('Could not load official roster fallback:', rosterErr);
       }
-    } catch (rosterErr) {
-      console.warn('Could not load official roster fallback:', rosterErr);
     }
 
     setPersonnel([]);
-    setPersonnelError('Tiada rekod guru ditemui. Sila daftar guru baharu atau semak pangkalan data.');
+    setPersonnelError(null);
   };
 
   const fetchClasses = async (ay: string) => {
     try {
       const q = query(collection(db, 'classes'), where('academicYear', '==', ay));
       const snap = await getDocs(q);
-      setClasses(snap.docs.map(d => ({ id: d.id, ...d.data() } as ClassConfig)));
+      setClasses(
+        snap.docs
+          .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as ClassConfig))
+      );
     } catch (e) {
       handleFirestoreError(e, OperationType.LIST, 'classes');
     }
@@ -421,7 +484,11 @@ export default function MasterDataDashboard() {
     try {
       const q = query(collection(db, 'subject_allocations'), where('academicYear', '==', ay));
       const snap = await getDocs(q);
-      setAllocations(snap.docs.map(d => ({ id: d.id, ...d.data() } as SubjectAllocation)));
+      setAllocations(
+        snap.docs
+          .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as SubjectAllocation))
+      );
     } catch (e) {
       handleFirestoreError(e, OperationType.LIST, 'subject_allocations');
     }
@@ -429,21 +496,27 @@ export default function MasterDataDashboard() {
 
   const fetchEnrollments = async (ay: string) => {
     try {
-      // Fetch student masters
       const mSnap = await getDocs(collection(db, 'student_master'));
-      setStudentMasters(mSnap.docs.map(d => ({ student_id: d.id, ...d.data() } as StudentMaster)));
+      setStudentMasters(
+        mSnap.docs
+          .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+          .map(d => ({ student_id: d.id, ...d.data() } as StudentMaster))
+      );
 
-      // Fetch active enrollments in standard students collection for backward compatibility
       const q = query(collection(db, 'students'), where('academic_year', '==', ay));
       const snap = await getDocs(q);
-      setActiveEnrollments(snap.docs.map(d => ({ id: d.id, ...d.data() } as Student)));
+      setActiveEnrollments(
+        snap.docs
+          .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+          .map(d => ({ id: d.id, ...d.data() } as Student))
+      );
     } catch (e) {
       handleFirestoreError(e, OperationType.LIST, 'students');
     }
   };
 
   // ==========================================
-  // MODULE 1: School Configuration Form
+  // MODULE 1: School Configuration & Dynamic Branding Form
   // ==========================================
   const [configForm, setConfigForm] = useState<Partial<SchoolConfig>>({});
   const [editingConfig, setEditingConfig] = useState(false);
@@ -456,26 +529,100 @@ export default function MasterDataDashboard() {
   const saveSchoolConfig = async () => {
     if (!configForm.schoolName) return;
     setLoading(true);
+    setProfileSaveMsg(null);
     try {
-      const docRef = doc(db, 'school_config', 'default');
-      await setDoc(docRef, configForm, { merge: true });
-      
-      // Also sync to school_settings/general for whole-app shell branding
-      try {
-        await setDoc(doc(db, 'school_settings', 'general'), {
-          schoolName: configForm.schoolName,
-          schoolLogo: configForm.schoolLogo || '',
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-      } catch (e) {
-        // Safe ignore
+      const nowIso = new Date().toISOString();
+      const cleanName = configForm.schoolName.trim();
+      const cleanLogo = (configForm.schoolLogo || '').trim();
+      const cleanSlogan = (configForm.slogan || '').trim() || DEFAULT_SCHOOL_SLOGAN;
+      const cleanAdmins = Array.from(
+        new Set(
+          (configForm.adminEmails || [])
+            .map((em) => String(em).toLowerCase().trim())
+            .filter(Boolean)
+        )
+      );
+
+      const configDocId = scopedDocId(activeSchoolCode, 'default');
+      const settingsDocId = scopedDocId(activeSchoolCode, 'general');
+
+      const nextConfig: SchoolConfig = {
+        ...(schoolConfig || {
+          id: configDocId,
+          schoolName: cleanName,
+          schoolType: 'SJKC',
+          schoolCategory: 'SKM',
+          hasPreschool: false,
+          hasPPKI: false,
+          academicSession: '2026/2027',
+          defaultLanguages: ['Bahasa Cina', 'Bahasa Melayu', 'English'],
+        }),
+        ...configForm,
+        id: configDocId,
+        schoolCode: activeSchoolCode,
+        schoolName: cleanName,
+        schoolLogo: cleanLogo,
+        slogan: cleanSlogan,
+        adminEmails: cleanAdmins,
+      };
+
+      await setDoc(doc(db, 'school_config', configDocId), deepSanitizeFirestore(nextConfig), { merge: true });
+
+      await setDoc(
+        doc(db, 'schools', activeSchoolCode),
+        deepSanitizeFirestore({
+          schoolCode: activeSchoolCode,
+          schoolName: cleanName,
+          logoUrl: cleanLogo,
+          slogan: cleanSlogan,
+          adminEmails: cleanAdmins,
+          schoolType: nextConfig.schoolType,
+          schoolCategory: nextConfig.schoolCategory,
+          hasPreschool: nextConfig.hasPreschool,
+          hasPPKI: nextConfig.hasPPKI,
+          academicSession: nextConfig.academicSession,
+          updatedAt: nowIso,
+        }),
+        { merge: true }
+      );
+
+      await setDoc(
+        doc(db, 'school_settings', settingsDocId),
+        deepSanitizeFirestore({
+          schoolCode: activeSchoolCode,
+          schoolName: cleanName,
+          schoolLogo: cleanLogo,
+          logoUrl: cleanLogo,
+          slogan: cleanSlogan,
+          adminEmails: cleanAdmins,
+          updatedAt: nowIso,
+        }),
+        { merge: true }
+      );
+
+      if (onUpdateSchoolSettings) {
+        onUpdateSchoolSettings({
+          ...(schoolSettings || {
+            principalEmail: currentUser?.email || cleanAdmins[0] || '',
+            principalUid: currentUser?.uid || '',
+          }),
+          schoolCode: activeSchoolCode,
+          schoolName: cleanName,
+          schoolLogo: cleanLogo,
+          logoUrl: cleanLogo,
+          slogan: cleanSlogan,
+          adminEmails: cleanAdmins,
+          updatedAt: nowIso,
+        });
       }
 
-      setSchoolConfig(configForm as SchoolConfig);
+      setSchoolConfig(nextConfig);
       setEditingConfig(false);
-      await logAuditTrail('UPDATE', 0, 'default', `Kemas kini konfigurasi sekolah: ${configForm.schoolName} (${configForm.schoolType})`);
+      setProfileSaveMsg('Profil & identiti sekolah berjaya dikemaskini dan dipaparkan serta-merta.');
+      setTimeout(() => setProfileSaveMsg(null), 5000);
+      await logAuditTrail('UPDATE', 0, configDocId, `Kemas kini profil & identiti sekolah (${activeSchoolCode}): ${cleanName}`);
     } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'school_config/default');
+      handleFirestoreError(e, OperationType.WRITE, `school_config/${scopedDocId(activeSchoolCode, 'default')}`);
     }
     setLoading(false);
   };
@@ -496,15 +643,17 @@ export default function MasterDataDashboard() {
     }
     setLoading(true);
     try {
-      const ref = doc(db, 'academic_years', newYear);
+      const docId = scopedDocId(activeSchoolCode, newYear);
+      const ref = doc(db, 'academic_years', docId);
       const payload: AcademicYearConfig = {
-        id: newYear,
+        id: docId,
+        schoolCode: activeSchoolCode,
         year: newYear,
         status: 'historical'
       };
       await setDoc(ref, payload);
       setNewYear('');
-      await logAuditTrail('CREATE', 0, newYear, `Tambah sesi akademik baharu: ${newYear}`);
+      await logAuditTrail('CREATE', 0, docId, `Tambah sesi akademik baharu: ${newYear}`);
       await fetchAcademicYears();
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, `academic_years/${newYear}`);
@@ -516,14 +665,16 @@ export default function MasterDataDashboard() {
     setLoading(true);
     try {
       if (status === 'active') {
-        // Deactivate all others
         const batchPromises = academicYears.map(async (y) => {
-          const ref = doc(db, 'academic_years', y.year);
+          const docId = y.id || scopedDocId(activeSchoolCode, y.year);
+          const ref = doc(db, 'academic_years', docId);
           await updateDoc(ref, { status: y.year === year ? 'active' : 'historical' });
         });
         await Promise.all(batchPromises);
       } else {
-        await updateDoc(doc(db, 'academic_years', year), { status: 'historical' });
+        const target = academicYears.find((y) => y.year === year);
+        const docId = target?.id || scopedDocId(activeSchoolCode, year);
+        await updateDoc(doc(db, 'academic_years', docId), { status: 'historical' });
       }
       await logAuditTrail('STATE_CHANGE', 0, year, `Tukar status sesi akademik ${year} kepada ${status}`);
       await fetchAcademicYears();
@@ -598,6 +749,7 @@ export default function MasterDataDashboard() {
       // Route through server endpoint POST /api/core/personnel which generates staff_<UUID>
       const payload = {
         id: editingTeacher?.id || undefined,
+        schoolCode: activeSchoolCode,
         name: teacherForm.name,
         ic: teacherForm.ic,
         email: teacherForm.email,
@@ -639,15 +791,15 @@ export default function MasterDataDashboard() {
           assignedId = resData.id || assignedId;
         } else {
           console.warn('Core API save returned status', res.status, '- saving directly to client Firestore');
-          assignedId = assignedId || (payload.ic ? `staff_${payload.ic}` : `staff_${Date.now()}`);
-          await setDoc(doc(db, 'personnel', assignedId), deepSanitizeFirestore({ ...payload, id: assignedId }), { merge: true });
-          await setDoc(doc(db, 'teachers', assignedId), deepSanitizeFirestore({ ...payload, id: assignedId }), { merge: true });
+          assignedId = assignedId || scopedDocId(activeSchoolCode, payload.ic ? `staff_${payload.ic}` : `staff_${Date.now()}`);
+          await setDoc(doc(db, 'personnel', assignedId), deepSanitizeFirestore({ ...payload, id: assignedId, schoolCode: activeSchoolCode }), { merge: true });
+          await setDoc(doc(db, 'teachers', assignedId), deepSanitizeFirestore({ ...payload, id: assignedId, schoolCode: activeSchoolCode }), { merge: true });
         }
       } catch (postErr) {
         console.warn('Core API save failed, saving directly to client Firestore:', postErr);
-        assignedId = assignedId || (payload.ic ? `staff_${payload.ic}` : `staff_${Date.now()}`);
-        await setDoc(doc(db, 'personnel', assignedId), deepSanitizeFirestore({ ...payload, id: assignedId }), { merge: true });
-        await setDoc(doc(db, 'teachers', assignedId), deepSanitizeFirestore({ ...payload, id: assignedId }), { merge: true });
+        assignedId = assignedId || scopedDocId(activeSchoolCode, payload.ic ? `staff_${payload.ic}` : `staff_${Date.now()}`);
+        await setDoc(doc(db, 'personnel', assignedId), deepSanitizeFirestore({ ...payload, id: assignedId, schoolCode: activeSchoolCode }), { merge: true });
+        await setDoc(doc(db, 'teachers', assignedId), deepSanitizeFirestore({ ...payload, id: assignedId, schoolCode: activeSchoolCode }), { merge: true });
       }
 
       // Clean up old assignments for this teacher and academic year
@@ -658,15 +810,21 @@ export default function MasterDataDashboard() {
           where('academicYear', '==', selectedAcademicYear)
         );
         const oldSnap = await getDocs(oldQuery);
-        const deletePromises = oldSnap.docs.map(d => deleteDoc(d.ref));
+        const deletePromises = oldSnap.docs
+          .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+          .map(d => deleteDoc(d.ref));
         await Promise.all(deletePromises);
 
         // Save new sessional isolated governance assignments
         const savePromises = teacherAssignments.map(async (item) => {
-          const gaId = `${assignedId}_${selectedAcademicYear.replace(/\//g, '-')}_${item.governanceType}_${item.entityName.toUpperCase().replace(/\s+/g, '_')}`;
+          const gaId = scopedDocId(
+            activeSchoolCode,
+            `${assignedId}_${selectedAcademicYear.replace(/\//g, '-')}_${item.governanceType}_${item.entityName.toUpperCase().replace(/\s+/g, '_')}`
+          );
           const gaRef = doc(db, 'governance_assignments', gaId);
           await setDoc(gaRef, deepSanitizeFirestore({
             id: gaId,
+            schoolCode: activeSchoolCode,
             personnelId: assignedId,
             personnelName: teacherForm.name!.toUpperCase(),
             academicYear: selectedAcademicYear,
@@ -733,14 +891,15 @@ export default function MasterDataDashboard() {
     setSyncingPersonnelUsers(true);
     setSyncPersonnelSuccess(null);
     try {
-      // 1. Gather roster from current personnel state or Firestore or official roster
+      // 1. Gather roster from current school's personnel state or Firestore (YCC3404 fallback only if legacy school)
       let roster = personnel && personnel.length > 0 ? personnel : [];
       if (roster.length === 0) {
         const pSnap = await getDocs(collection(db, 'personnel')).catch(() => null);
-        if (pSnap && !pSnap.empty) {
-          roster = pSnap.docs.map(d => ({ id: d.id, ...d.data() })) as any;
-        } else {
-          const res = await fetch('/api/personnel/official-roster').catch(() => null);
+        const scopedPersonnel = pSnap ? pSnap.docs.filter(d => belongsToSchool(d.data() as any, activeSchoolCode)) : [];
+        if (scopedPersonnel.length > 0) {
+          roster = scopedPersonnel.map(d => ({ id: d.id, ...d.data() })) as any;
+        } else if (isLegacyDefaultSchool(activeSchoolCode)) {
+          const res = await fetch(`/api/personnel/official-roster?schoolCode=${encodeURIComponent(activeSchoolCode)}`).catch(() => null);
           if (res && res.ok) {
             const rData = await res.json();
             roster = rData.roster || [];
@@ -748,25 +907,20 @@ export default function MasterDataDashboard() {
         }
       }
 
-      // 2. Direct client-side deduplication + in-place sync into `users` collection
+      // 2. Direct client-side batch write into `users` collection scoped by activeSchoolCode
       let localSyncCount = 0;
       try {
         const usersSnap = await getDocs(collection(db, 'users')).catch(() => null);
         const existingUsersByEmail = new Map<string, any>();
         const existingUsersByIc = new Map<string, any>();
-        const existingUsersByPersonnelId = new Map<string, any>();
         const existingUsersById = new Map<string, any>();
         if (usersSnap) {
-          const rawUsers = usersSnap.docs.map((d) => ({ ...d.data(), _docId: d.id }));
-          const cleaned = await deduplicateUsersSnapshotInFirestore(db, rawUsers, true);
-          cleaned.dedupedUsers.forEach((u: any) => {
-            const docId = u._docId || u.uid;
-            existingUsersById.set(docId, u);
-            if (u.personnelId) existingUsersByPersonnelId.set(String(u.personnelId).trim(), u);
-            const em = normalizeStaffEmail(u.email);
-            if (em) existingUsersByEmail.set(em, u);
-            const ic = normalizeStaffIc(u.ic);
-            if (ic) existingUsersByIc.set(ic, u);
+          usersSnap.forEach(d => {
+            const u = d.data();
+            if (!belongsToSchool(u as any, activeSchoolCode)) return;
+            existingUsersById.set(d.id, { ...u, _docId: d.id });
+            if (u.email) existingUsersByEmail.set(u.email.toLowerCase().trim(), { ...u, _docId: d.id });
+            if ((u as any).ic) existingUsersByIc.set(String((u as any).ic).replace(/[^0-9]/g, ''), { ...u, _docId: d.id });
           });
         }
 
@@ -774,8 +928,8 @@ export default function MasterDataDashboard() {
         for (const p of roster) {
           const pName = String((p as any).name || (p as any).nama || '').trim().toUpperCase();
           if (!pName) continue;
-          const pEmail = normalizeStaffEmail((p as any).email);
-          const pIc = normalizeStaffIc((p as any).ic);
+          const pEmail = String((p as any).email || '').toLowerCase().trim();
+          const pIc = String((p as any).ic || '').replace(/[^0-9]/g, '');
           const pPosition = String((p as any).position || (p as any).jawatan || '').trim();
           const pCategory = String((p as any).category || '').toUpperCase().trim();
           const posUpper = pPosition.toUpperCase();
@@ -784,47 +938,29 @@ export default function MasterDataDashboard() {
           const resolvedRole = isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
           const resolvedCat = isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU');
 
-          const matched =
-            (pEmail && existingUsersByEmail.get(pEmail)) ||
-            (pIc && existingUsersByIc.get(pIc)) ||
-            (p.id && existingUsersByPersonnelId.get(String(p.id).trim())) ||
-            existingUsersById.get(p.id);
+          const matched = (pEmail && existingUsersByEmail.get(pEmail)) ||
+                          (pIc && existingUsersByIc.get(pIc)) ||
+                          existingUsersById.get(p.id);
 
-          const cleanPId = p.id
-            ? String(p.id).startsWith('staff_')
-              ? String(p.id)
-              : `staff_${p.id}`
-            : '';
-          const targetDocId = matched
-            ? String(matched._docId || matched.uid)
-            : pIc
-            ? `staff_${pIc}`
-            : cleanPId || `staff_${Date.now()}_${localSyncCount}`;
+          const baseStaffId = pIc ? `staff_${pIc}` : (p.id ? `staff_${p.id}` : `staff_${Date.now()}_${localSyncCount}`);
+          const targetDocId = matched ? matched._docId : scopedDocId(activeSchoolCode, baseStaffId);
           const userRef = doc(db, 'users', targetDocId);
-
-          const matchedVerified = Boolean(
-            matched && (matched.isVerified === true || matched.isPreRegistered === false || isRealAuthUid(matched.uid))
-          );
 
           const userPayload: any = {
             uid: matched ? (matched.uid || targetDocId) : targetDocId,
+            schoolCode: activeSchoolCode,
             name: pName,
-            email: pEmail || matched?.email || '',
+            email: pEmail,
             category: matched?.category || resolvedCat,
             role: matched?.role || resolvedRole,
-            ic: pIc || matched?.ic || '',
-            phone: String((p as any).phone || (p as any).noTel || matched?.phone || '').trim(),
-            grade: String((p as any).grade || (p as any).gred || matched?.grade || '').trim(),
-            position: pPosition || matched?.position || '',
-            staffFileNo: String((p as any).staffFileNo || (p as any).noFail || matched?.staffFileNo || '').trim(),
-            personnelId: p.id || matched?.personnelId || '',
-            subRole: (p as any).subRole || (p as any).primaryRoleCode || matched?.subRole,
-            primaryRoleCode: (p as any).primaryRoleCode || (p as any).subRole || matched?.primaryRoleCode,
-            leadershipRole: (p as any).leadershipRole || matched?.leadershipRole,
-            akpRole: (p as any).akpRole || matched?.akpRole,
-            active: matched ? matched.active !== false : true,
-            isVerified: matchedVerified,
-            isPreRegistered: !matchedVerified,
+            ic: pIc,
+            phone: String((p as any).phone || (p as any).noTel || '').trim(),
+            grade: String((p as any).grade || (p as any).gred || '').trim(),
+            position: pPosition,
+            staffFileNo: String((p as any).staffFileNo || (p as any).noFail || '').trim(),
+            personnelId: p.id,
+            active: true,
+            isPreRegistered: matched ? (matched.isPreRegistered ?? (typeof matched.uid === 'string' && matched.uid.startsWith('staff_'))) : true,
             updatedAt: serverTimestamp(),
           };
 
@@ -849,6 +985,7 @@ export default function MasterDataDashboard() {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${idToken || ''}`,
           },
+          body: JSON.stringify({ schoolCode: activeSchoolCode }),
         });
         if (res.ok) {
           const data = await res.json().catch(() => null);
@@ -910,6 +1047,7 @@ export default function MasterDataDashboard() {
       }
 
       const payload: Omit<SubjectAllocation, 'id'> = {
+        schoolCode: activeSchoolCode,
         academicYear: selectedAcademicYear,
         teacherId: selectedTeacher.id,
         teacherName: selectedTeacher.name,
@@ -1012,10 +1150,14 @@ export default function MasterDataDashboard() {
     setLoading(true);
     try {
       const classTeacher = personnel.find(p => p.id === classForm.classTeacherId);
-      const classId = `${selectedAcademicYear.replace(/\//g, '-')}_${classForm.name.toUpperCase().trim()}`;
+      const classId = scopedDocId(
+        activeSchoolCode,
+        `${selectedAcademicYear.replace(/\//g, '-')}_${classForm.name.toUpperCase().trim()}`
+      );
       
       const payload: ClassConfig = {
         id: classId,
+        schoolCode: activeSchoolCode,
         name: classForm.name.trim().toUpperCase(),
         academicYear: selectedAcademicYear,
         yearGroup: Number(classForm.yearGroup || 1),
@@ -1070,10 +1212,14 @@ export default function MasterDataDashboard() {
     if (promoTargetYear) {
       const q = query(collection(db, 'classes'), where('academicYear', '==', promoTargetYear));
       getDocs(q).then(snap => {
-        setPromoClasses(snap.docs.map(d => ({ id: d.id, ...d.data() } as ClassConfig)));
+        setPromoClasses(
+          snap.docs
+            .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
+            .map(d => ({ id: d.id, ...d.data() } as ClassConfig))
+        );
       });
     }
-  }, [promoTargetYear]);
+  }, [promoTargetYear, activeSchoolCode]);
 
   const openStudentModal = (student: StudentMaster | null) => {
     if (student) {
@@ -1095,9 +1241,11 @@ export default function MasterDataDashboard() {
     }
     setLoading(true);
     try {
-      const sId = studentForm.student_id.toUpperCase().trim();
+      const rawId = studentForm.student_id.toUpperCase().trim();
+      const sId = editingStudent ? rawId : scopedDocId(activeSchoolCode, rawId);
       await setDoc(doc(db, 'student_master', sId), deepSanitizeFirestore({
         ...studentForm,
+        schoolCode: activeSchoolCode,
         student_id: sId
       }), { merge: true });
 
@@ -1132,9 +1280,10 @@ export default function MasterDataDashboard() {
       }
 
       // Add to standard 'students' collection (enrollment)
-      const enrollId = `${master.student_id}_${selectedAcademicYear.replace(/\//g, '-')}`;
+      const enrollId = scopedDocId(activeSchoolCode, `${master.student_id}_${selectedAcademicYear.replace(/\//g, '-')}`);
       await setDoc(doc(db, 'students', enrollId), deepSanitizeFirestore({
         id: enrollId,
+        schoolCode: activeSchoolCode,
         student_id: master.student_id,
         name: master.name,
         gender: master.gender,
@@ -1179,9 +1328,10 @@ export default function MasterDataDashboard() {
         const enrollment = activeEnrollments.find(e => e.student_id === studentId);
         if (!enrollment) return;
 
-        const enrollId = `${studentId}_${promoTargetYear.replace(/\//g, '-')}`;
+        const enrollId = scopedDocId(activeSchoolCode, `${studentId}_${promoTargetYear.replace(/\//g, '-')}`);
         await setDoc(doc(db, 'students', enrollId), deepSanitizeFirestore({
           id: enrollId,
+          schoolCode: activeSchoolCode,
           student_id: studentId,
           name: enrollment.name,
           gender: enrollment.gender || 'L',
@@ -1267,7 +1417,8 @@ export default function MasterDataDashboard() {
         body: JSON.stringify({
           excelBase64: base64Payload,
           academicYear: selectedAcademicYear || '2026',
-          fileName: fileNamePayload || 'YCC3404 Keseluruhan Murid.xlsx',
+          fileName: fileNamePayload || `${activeSchoolCode}_APDM_Murid.xlsx`,
+          schoolCode: activeSchoolCode,
         }),
       });
 
@@ -1314,6 +1465,7 @@ export default function MasterDataDashboard() {
         body: JSON.stringify({
           sheetUrl: guruSheetUrl.trim() || undefined,
           csvData: guruCsvData.trim() || undefined,
+          schoolCode: activeSchoolCode,
         }),
       });
 
@@ -1665,20 +1817,22 @@ export default function MasterDataDashboard() {
           const cleanIc = ic?.replace(/[^a-zA-Z0-9]/g, '') || '';
 
           if (!cleanIc) continue;
+          const scopedKey = scopedDocId(activeSchoolCode, cleanIc);
 
           // Check DB
-          const ref = doc(db, 'personnel', cleanIc);
+          const ref = doc(db, 'personnel', scopedKey);
           const snap = await getDoc(ref);
 
           if (!snap.exists()) {
             insertCount++;
             resolvedRows.push({
-              key: cleanIc,
+              key: scopedKey,
               type: 'personnel',
               status: 'INSERT',
               action: 'Kemasukan Baharu',
               data: {
-                id: cleanIc,
+                id: scopedKey,
+                schoolCode: activeSchoolCode,
                 name: name || 'GURU BARU',
                 ic: ic,
                 gender,
@@ -1750,20 +1904,22 @@ export default function MasterDataDashboard() {
           const cleanId = sId?.toUpperCase().trim() || '';
 
           if (!cleanId) continue;
+          const scopedId = scopedDocId(activeSchoolCode, cleanId);
 
           // Check DB
-          const ref = doc(db, 'student_master', cleanId);
+          const ref = doc(db, 'student_master', scopedId);
           const snap = await getDoc(ref);
 
           if (!snap.exists()) {
             insertCount++;
             resolvedRows.push({
-              key: cleanId,
+              key: scopedId,
               type: 'student',
               status: 'INSERT',
               action: 'Kemasukan Baharu',
               data: {
-                student_id: cleanId,
+                student_id: scopedId,
+                schoolCode: activeSchoolCode,
                 name: name || 'MURID BARU',
                 gender,
                 race: race || 'Melayu',
@@ -1847,6 +2003,7 @@ export default function MasterDataDashboard() {
           const rollbackRef = doc(db, 'rollback_records', rollbackId);
           await setDoc(rollbackRef, {
             id: rollbackId,
+            schoolCode: activeSchoolCode,
             sessionId,
             collection: colName,
             docId: row.key,
@@ -1856,81 +2013,58 @@ export default function MasterDataDashboard() {
 
           // Perform write
           if (row.type === 'personnel') {
-            await setDoc(ref, row.data, { merge: true });
+            await setDoc(ref, { ...row.data, schoolCode: activeSchoolCode }, { merge: true });
 
             // Backward compatible collection update
             await setDoc(doc(db, 'teachers', row.key), {
+              schoolCode: activeSchoolCode,
               name: row.data.name,
               ic: row.data.ic,
               email: row.data.email?.toLowerCase().trim()
             }, { merge: true });
 
-            // Automatically mirror into users collection IN-PLACE (match by email or IC first so no duplicates are created)
+            // Automatically mirror into users collection for Staff Attendance Accounts
             try {
-              const cleanEmail = normalizeStaffEmail(row.data.email);
+              const cleanEmail = row.data.email?.toLowerCase().trim() || '';
               const posUpper = String(row.data.position || row.data.jawatan || '').toUpperCase();
               const isGb = posUpper.includes('GURU BESAR') || posUpper === 'GB' || row.data.leadershipRole === 'GURU_BESAR';
               const catUpper = String(row.data.category || '').toUpperCase();
               const isAkp = catUpper === 'AKP' || posUpper.includes('PKA') || posUpper.includes('PPM') || posUpper.includes('PT') || posUpper.includes('PEMBANTU') || posUpper.includes('KERANI') || posUpper.includes('OPERASI');
-              const cleanIc = normalizeStaffIc(row.data.ic);
+              const cleanIc = String(row.data.ic || '').replace(/[^0-9]/g, '');
+              const userDocId = scopedDocId(activeSchoolCode, cleanIc ? `staff_${cleanIc}` : `staff_${row.key}`);
 
-              let existingUserDoc: any = null;
-              if (cleanEmail) {
-                const uByEmail = await getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail))).catch(() => null);
-                if (uByEmail && !uByEmail.empty) {
-                  const preferred = uByEmail.docs.find((d) => isRealAuthUid(d.id)) || uByEmail.docs[0];
-                  existingUserDoc = { id: preferred.id, ...preferred.data() };
-                }
-              }
-              if (!existingUserDoc && cleanIc) {
-                const uByIc = await getDocs(query(collection(db, 'users'), where('ic', '==', cleanIc))).catch(() => null);
-                if (uByIc && !uByIc.empty) {
-                  const preferred = uByIc.docs.find((d) => isRealAuthUid(d.id)) || uByIc.docs[0];
-                  existingUserDoc = { id: preferred.id, ...preferred.data() };
-                }
-              }
-
-              const userDocId = existingUserDoc ? existingUserDoc.id : (cleanIc ? `staff_${cleanIc}` : `staff_${row.key}`);
-              const alreadyVerified = Boolean(
-                existingUserDoc && (existingUserDoc.isVerified === true || existingUserDoc.isPreRegistered === false || isRealAuthUid(existingUserDoc.uid))
-              );
-
-              await setDoc(doc(db, 'users', userDocId), deepSanitizeFirestore({
-                uid: existingUserDoc ? (existingUserDoc.uid || userDocId) : userDocId,
+              await setDoc(doc(db, 'users', userDocId), {
+                uid: userDocId,
+                schoolCode: activeSchoolCode,
                 name: row.data.name,
-                email: cleanEmail || existingUserDoc?.email || '',
-                category: existingUserDoc?.category || (isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU')),
-                role: existingUserDoc?.role || (isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU')),
-                ic: cleanIc || row.data.ic || existingUserDoc?.ic || '',
-                phone: row.data.phone || existingUserDoc?.phone || '',
-                grade: row.data.grade || existingUserDoc?.grade || '',
-                position: row.data.position || existingUserDoc?.position || '',
-                staffFileNo: row.data.staffFileNo || existingUserDoc?.staffFileNo || '',
+                email: cleanEmail,
+                category: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
+                role: isGb ? 'PRINCIPAL' : (isAkp ? 'AKP' : 'GURU'),
+                ic: row.data.ic || '',
+                phone: row.data.phone || '',
+                grade: row.data.grade || '',
+                position: row.data.position || '',
+                staffFileNo: row.data.staffFileNo || '',
                 personnelId: row.key,
-                active: existingUserDoc ? existingUserDoc.active !== false : true,
-                isVerified: alreadyVerified,
-                isPreRegistered: !alreadyVerified,
+                active: true,
+                isPreRegistered: true,
                 updatedAt: new Date().toISOString(),
-              }), { merge: true });
+              }, { merge: true });
             } catch (userMirrorErr) {
               console.warn('Note: Master Data user mirror notice:', userMirrorErr);
             }
 
           } else {
-            await setDoc(ref, row.data, { merge: true });
+            await setDoc(ref, { ...row.data, schoolCode: activeSchoolCode }, { merge: true });
           }
           successCount++;
         }
       }
 
-      // Guard pass: clean any duplicate user docs created prior to import
-      if (importType === 'personnel') {
-        await deduplicateAndCleanUsersInFirestore(db, true).catch(() => {});
-      }
-
       // Record Import Session metadata
       const sessionDoc: ImportSession = {
         id: sessionId,
+        schoolCode: activeSchoolCode,
         timestamp: new Date().toISOString(),
         importType: importType,
         summary: idsSummary,
@@ -2073,40 +2207,45 @@ export default function MasterDataDashboard() {
         {!loading && (
           <div className="space-y-8">
             {/* ======================================================== */}
-            {/* SUB-TAB 1: SCHOOL CONFIGURATION */}
+            {/* SUB-TAB 1: PROFIL & IDENTITI SEKOLAH (MULTI-TENANT) */}
             {/* ======================================================== */}
             {activeSubTab === 'config' && schoolConfig && (
               <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-md">
-                <div className="flex items-center justify-between mb-8 border-b border-slate-100 pb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 border-b border-slate-100 pb-4">
                   <div>
-                    <h3 className="text-xl font-black italic uppercase tracking-tight text-slate-800">
-                      Konfigurasi Tadbir Urus Sekolah
-                    </h3>
+                    <div className="flex items-center gap-2.5">
+                      <h3 className="text-xl font-black italic uppercase tracking-tight text-slate-800">
+                        Profil &amp; Identiti Sekolah
+                      </h3>
+                      <span className="px-2.5 py-0.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 font-mono text-xs font-black">
+                        {activeSchoolCode}
+                      </span>
+                    </div>
                     <p className="text-xs text-slate-400 mt-1">
-                      Maklumat institusi primer yang diwarisi oleh semua sub-module iSEPADU.
+                      Ubah nama sekolah, lencana/logo, slogan dan senarai e-mel pentadbir yang dipaparkan di Navbar, Footer dan semua laporan.
                     </p>
                   </div>
                   {!editingConfig ? (
                     <button
                       onClick={() => setEditingConfig(true)}
-                      className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl transition-all"
+                      className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl transition-all self-start cursor-pointer"
                     >
-                      <Edit3 size={14} /> Kemas Kini
+                      <Edit3 size={14} /> Kemas Kini Profil
                     </button>
                   ) : (
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 self-start">
                       <button
                         onClick={saveSchoolConfig}
-                        className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl transition-all"
+                        className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl transition-all cursor-pointer"
                       >
-                        <Save size={14} /> Simpan
+                        <Save size={14} /> Simpan Perubahan
                       </button>
                       <button
                         onClick={() => {
                           setConfigForm(schoolConfig);
                           setEditingConfig(false);
                         }}
-                        className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl transition-all"
+                        className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-extrabold text-xs uppercase px-4 py-2.5 rounded-xl transition-all cursor-pointer"
                       >
                         <X size={14} /> Batal
                       </button>
@@ -2114,15 +2253,34 @@ export default function MasterDataDashboard() {
                   )}
                 </div>
 
+                {profileSaveMsg && (
+                  <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3 text-emerald-800 text-xs font-bold">
+                    <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+                    <span>{profileSaveMsg}</span>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-6">
                     <div>
-                      <label className="block text-xs font-black uppercase text-slate-400 mb-2">Nama Sekolah</label>
+                      <label className="block text-xs font-black uppercase text-slate-400 mb-2">Nama Sekolah *</label>
                       <input
                         type="text"
                         disabled={!editingConfig}
                         value={configForm.schoolName || ''}
-                        onChange={(e) => setConfigForm({ ...configForm, schoolName: e.target.value.toUpperCase() })}
+                        onChange={(e) => setConfigForm({ ...configForm, schoolName: e.target.value })}
+                        className="w-full bg-slate-50 disabled:bg-slate-50/50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-black uppercase text-slate-400 mb-2">Slogan / Subtajuk Sekolah</label>
+                      <input
+                        type="text"
+                        disabled={!editingConfig}
+                        value={configForm.slogan ?? DEFAULT_SCHOOL_SLOGAN}
+                        placeholder={DEFAULT_SCHOOL_SLOGAN}
+                        onChange={(e) => setConfigForm({ ...configForm, slogan: e.target.value })}
                         className="w-full bg-slate-50 disabled:bg-slate-50/50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-500"
                       />
                     </div>
@@ -2132,7 +2290,7 @@ export default function MasterDataDashboard() {
                         <label className="block text-xs font-black uppercase text-slate-400 mb-2">Jenis Sekolah</label>
                         <select
                           disabled={!editingConfig}
-                          value={configForm.schoolType || 'SK'}
+                          value={configForm.schoolType || 'SJKC'}
                           onChange={(e) => setConfigForm({ ...configForm, schoolType: e.target.value as any })}
                           className="w-full bg-slate-50 disabled:opacity-75 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-500"
                         >
@@ -2146,7 +2304,7 @@ export default function MasterDataDashboard() {
                         <label className="block text-xs font-black uppercase text-slate-400 mb-2">Kategori</label>
                         <select
                           disabled={!editingConfig}
-                          value={configForm.schoolCategory || 'Non-SKM'}
+                          value={configForm.schoolCategory || 'SKM'}
                           onChange={(e) => setConfigForm({ ...configForm, schoolCategory: e.target.value as any })}
                           className="w-full bg-slate-50 disabled:opacity-75 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-500"
                         >
@@ -2195,7 +2353,7 @@ export default function MasterDataDashboard() {
 
                     <div>
                       <div className="flex items-center justify-between mb-2">
-                        <label className="text-xs font-black uppercase text-slate-400">Logo Sekolah</label>
+                        <label className="text-xs font-black uppercase text-slate-400">Logo / Lencana Sekolah</label>
                         <button
                           type="button"
                           onClick={() => setIsLogoModalOpen(true)}
@@ -2208,24 +2366,83 @@ export default function MasterDataDashboard() {
 
                       <div className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl">
                         <div className="w-14 h-14 bg-slate-900 rounded-xl p-1 shrink-0 flex items-center justify-center">
-                          <SchoolLogo src={configForm.schoolLogo || ''} className="w-12 h-12" />
+                          <SchoolLogo src={configForm.schoolLogo || ''} schoolCode={activeSchoolCode} className="w-12 h-12" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <input
                             type="text"
                             disabled={!editingConfig}
                             value={configForm.schoolLogo || ''}
-                            placeholder="Tinggalkan kosong untuk menggunakan logo laluan"
+                            placeholder="Tampal URL logo atau klik Muat Naik"
                             onChange={(e) => setConfigForm({ ...configForm, schoolLogo: e.target.value })}
                             className="w-full bg-white disabled:bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-blue-500 truncate"
                           />
                           <p className="text-[10px] text-slate-400 mt-1">
                             {configForm.schoolLogo
                               ? (configForm.schoolLogo.startsWith('data:') ? 'Format: Imej Dimuat Naik (Tersimpan)' : 'Format: Pautan URL Luaran')
-                              : 'Menggunakan lambang rasmi laluan iSEPADU'}
+                              : 'Menggunakan lencana lalai kod sekolah'}
                           </p>
                         </div>
                       </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-black uppercase text-slate-400 mb-2">
+                        Senarai E-mel Admin / Guru Besar ({activeSchoolCode})
+                      </label>
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {(configForm.adminEmails || []).map((em) => (
+                          <span
+                            key={em}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs font-mono font-bold"
+                          >
+                            {em}
+                            {editingConfig && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setConfigForm({
+                                    ...configForm,
+                                    adminEmails: (configForm.adminEmails || []).filter((x) => x !== em),
+                                  })
+                                }
+                                className="text-rose-500 hover:text-rose-700"
+                              >
+                                <X size={12} />
+                              </button>
+                            )}
+                          </span>
+                        ))}
+                        {(configForm.adminEmails || []).length === 0 && (
+                          <span className="text-[11px] text-slate-400 italic">Belum ada e-mel admin tambahan ditetapkan.</span>
+                        )}
+                      </div>
+                      {editingConfig && (
+                        <div className="flex gap-2">
+                          <input
+                            type="email"
+                            value={adminEmailInput}
+                            onChange={(e) => setAdminEmailInput(e.target.value)}
+                            placeholder="cth: gb@moe-dl.edu.my"
+                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono text-slate-800 focus:outline-none focus:border-blue-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const clean = adminEmailInput.trim().toLowerCase();
+                              if (!clean || !clean.includes('@')) return;
+                              const existing = configForm.adminEmails || [];
+                              if (!existing.includes(clean)) {
+                                setConfigForm({ ...configForm, adminEmails: [...existing, clean] });
+                              }
+                              setAdminEmailInput('');
+                            }}
+                            className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black uppercase cursor-pointer"
+                          >
+                            Tambah Admin
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2390,6 +2607,7 @@ export default function MasterDataDashboard() {
                           <td className="px-6 py-4">
                             <StaffRoleCell
                               userId={p.id}
+                              schoolCode={activeSchoolCode}
                               currentCategory={p.category || 'GURU'}
                               currentSubRole={(p as any).subRole || (p as any).primaryRoleCode || ((p as any).role === 'PRINCIPAL' || (p as any).jawatan === 'Guru Besar' ? 'GB' : undefined)}
                               currentRole={p.category || 'GURU'}
@@ -2557,7 +2775,11 @@ export default function MasterDataDashboard() {
                 </div>
 
                 {allocationViewMode === 'matrix' ? (
-                  <TimetableSystem activeAcademicYear={selectedAcademicYear || '2027'} />
+                  <TimetableSystem
+                    activeAcademicYear={selectedAcademicYear || '2027'}
+                    schoolCode={activeSchoolCode}
+                    schoolName={displaySchoolName}
+                  />
                 ) : (
                   <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-md">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
@@ -3291,7 +3513,7 @@ export default function MasterDataDashboard() {
                             Import Data APDM Murid (Format Rasmi .xlsx)
                           </h4>
                           <p className="text-xs text-slate-500 mt-0.5">
-                            Penyelarasan automatik dari fail APDM KPM ("YCC3404 Keseluruhan Murid as of 2026-10-26.xlsx") ke dalam Pangkalan Data iSEPADU Core secara selamat tanpa menjejaskan data akademik sedia ada.
+                            Penyelarasan automatik dari fail APDM KPM ({activeSchoolCode}) ke dalam Pangkalan Data iSEPADU Core secara selamat tanpa menjejaskan data akademik sedia ada.
                           </p>
                         </div>
                       </div>
@@ -4063,11 +4285,11 @@ export default function MasterDataDashboard() {
               <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                 <div>
                   <span className="text-[10px] font-black text-slate-400 uppercase block">Institusi Pendidikan</span>
-                  <span className="text-xs font-black text-slate-900">SJK(C) CHUNG HUA BALINGIAN</span>
+                  <span className="text-xs font-black text-slate-900">{displaySchoolName}</span>
                 </div>
                 <div className="text-right">
-                  <span className="text-[10px] font-black text-slate-400 uppercase block">Kod & Sesi</span>
-                  <span className="text-xs font-mono font-bold text-slate-700">YCC3404 (Sesi 2026)</span>
+                  <span className="text-[10px] font-black text-slate-400 uppercase block">Kod &amp; Sesi</span>
+                  <span className="text-xs font-mono font-bold text-slate-700">{activeSchoolCode} (Sesi {selectedAcademicYear || '2026'})</span>
                 </div>
               </div>
 
@@ -4251,11 +4473,11 @@ export default function MasterDataDashboard() {
               <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                 <div>
                   <span className="text-[10px] font-black text-slate-400 uppercase block">Institusi Pendidikan</span>
-                  <span className="text-xs font-black text-slate-900">SJK(C) CHUNG HUA BALINGIAN</span>
+                  <span className="text-xs font-black text-slate-900">{displaySchoolName}</span>
                 </div>
                 <div className="text-right">
-                  <span className="text-[10px] font-black text-slate-400 uppercase block">Kod & Sesi</span>
-                  <span className="text-xs font-mono font-bold text-slate-700">YCC3404 (Sesi {selectedAcademicYear || '2026'})</span>
+                  <span className="text-[10px] font-black text-slate-400 uppercase block">Kod &amp; Sesi</span>
+                  <span className="text-xs font-mono font-bold text-slate-700">{activeSchoolCode} (Sesi {selectedAcademicYear || '2026'})</span>
                 </div>
               </div>
 
@@ -4917,9 +5139,22 @@ export default function MasterDataDashboard() {
         isOpen={isLogoModalOpen}
         onClose={() => setIsLogoModalOpen(false)}
         currentLogoUrl={configForm.schoolLogo || schoolConfig?.schoolLogo || ''}
+        schoolCode={activeSchoolCode}
         onLogoUpdated={(newLogo) => {
           setConfigForm((prev) => ({ ...prev, schoolLogo: newLogo }));
           setSchoolConfig((prev) => (prev ? { ...prev, schoolLogo: newLogo } : null));
+          if (onUpdateSchoolSettings) {
+            onUpdateSchoolSettings({
+              ...(schoolSettings || {
+                schoolName: displaySchoolName,
+                schoolCode: activeSchoolCode,
+                principalEmail: currentUser?.email || '',
+                principalUid: currentUser?.uid || '',
+              }),
+              schoolLogo: newLogo,
+              logoUrl: newLogo,
+            });
+          }
         }}
       />
     </div>

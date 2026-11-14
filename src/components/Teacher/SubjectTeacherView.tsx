@@ -28,7 +28,9 @@ import {
   MismatchBadge,
   InterventionPriorityBadge,
 } from '../Academic/AcademicBadges';
-import { SUBJECTS_BY_YEAR, ACADEMIC_YEARS, DEFAULT_ACADEMIC_YEAR, CLASSES, SCHOOL_NAME_MS } from '../../constants';
+import { SUBJECTS_BY_YEAR, ACADEMIC_YEARS, DEFAULT_ACADEMIC_YEAR, CLASSES } from '../../constants';
+import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 import SchoolLogo from '../SchoolLogo';
 import { StudentProfileModal } from '../Student/StudentProfileModal';
 import { Save, Search, Table as TableIcon, FileEdit, CheckCircle, AlertTriangle, Users, BarChart3, PieChart as PieChartIcon, TrendingUp, BookOpen } from 'lucide-react';
@@ -72,6 +74,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 export default function SubjectTeacherView({ profile, initialAssessmentType = 'PBD' }: Props) {
+  const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName } = useSchoolTenant();
   const [students, setStudents] = useState<Student[]>([]);
   const [selectedYear, setSelectedYear] = useState<number>(profile.year_assigned || 1);
   const [selectedSubject, setSelectedSubject] = useState<string>(profile.subject_assigned || (SUBJECTS_BY_YEAR[1] ? SUBJECTS_BY_YEAR[1][0] : ''));
@@ -139,13 +142,13 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
   const academicYears = ACADEMIC_YEARS;
 
   useEffect(() => {
-    // Clear results state first to avoid mixing results of different assessment types/subjects/years
+    // Clear results state first to avoid mixing results of different assessment types/subjects/years/schools
     setResults({});
     // Clear timeouts
     Object.values(saveTimeouts.current).forEach(clearTimeout);
     saveTimeouts.current = {};
     fetchStudents();
-  }, [selectedYear, academicYear, assessmentType, term, selectedSubject]);
+  }, [selectedYear, academicYear, assessmentType, term, selectedSubject, activeSchoolCode]);
 
   // For PBD, we use a fixed term (1) because all columns (TOV-ETR) are in one record
   const effectiveTerm = assessmentType === 'PBD' ? 1 : term;
@@ -159,7 +162,9 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
         where('academic_year', '==', academicYear)
       );
       const snapshot = await getDocs(q);
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any } as Student));
+      const list = snapshot.docs
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .map(doc => ({ id: doc.id, ...doc.data() as any } as Student));
       list.sort((a, b) => a.name.localeCompare(b.name));
       setStudents(list);
       
@@ -189,13 +194,15 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
     const snapshot = await getDocs(q);
     const existing: Record<string, any> = {};
     
-    // Sort by updatedAt descending to prioritize newest records if duplicates exist
+    // Filter by active schoolCode and sort by updatedAt descending to prioritize newest records if duplicates exist
     // Special handling for serverTimestamp(): it might be null locally before sync
-    const sortedDocs = snapshot.docs.sort((a, b) => {
-      const timeA = a.data().updatedAt?.seconds || 0;
-      const timeB = b.data().updatedAt?.seconds || 0;
-      return timeB - timeA;
-    });
+    const sortedDocs = snapshot.docs
+      .filter(docSnap => belongsToSchool(docSnap.data(), activeSchoolCode))
+      .sort((a, b) => {
+        const timeA = a.data().updatedAt?.seconds || 0;
+        const timeB = b.data().updatedAt?.seconds || 0;
+        return timeB - timeA;
+      });
 
     sortedDocs.forEach(docSnap => {
       const data = docSnap.data();
@@ -205,7 +212,10 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
         existing[studentId] = { id: docSnap.id, ...data };
       } else {
         // If the current doc in loop is THE deterministic one, we prefer its ID
-        const deterministicId = `${studentId}_${selectedSubject}_${effectiveTerm}_${academicYear.replace(/\//g, '-')}`;
+        const deterministicId = scopedDocId(
+          activeSchoolCode,
+          `${studentId}_${selectedSubject}_${effectiveTerm}_${academicYear.replace(/\//g, '-')}`
+        );
         if (docSnap.id === deterministicId) {
           existing[studentId].id = docSnap.id;
         }
@@ -273,10 +283,14 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
     setSavedStatus('Menyimpan...');
     const collectionName = assessmentType === 'UASA' ? 'uasa_results' : 'pbd_results';
     try {
-      const resultId = `${studentId}_${selectedSubject}_${effectiveTerm}_${academicYear.replace(/\//g, '-')}`;
+      const resultId = scopedDocId(
+        activeSchoolCode,
+        `${studentId}_${selectedSubject}_${effectiveTerm}_${academicYear.replace(/\//g, '-')}`
+      );
       const docRef = doc(db, collectionName, resultId);
 
       const payload: any = {
+        schoolCode: activeSchoolCode,
         student_id: studentId,
         subject_id: selectedSubject,
         term: Number(effectiveTerm),
@@ -453,7 +467,7 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
           <SchoolLogo className="w-16 h-16" p="p-1" />
           <div>
             <div className="flex flex-col">
-              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 leading-none">{SCHOOL_NAME_MS}</h4>
+              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 leading-none">{tenantSchoolName}</h4>
               <h1 className="text-2xl font-black italic uppercase tracking-tighter text-slate-900 leading-none">Guru Mata Pelajaran</h1>
             </div>
             <p className="text-slate-500 text-xs mt-1 italic">Data disimpan secara automatik semasa anda mengisi.</p>
