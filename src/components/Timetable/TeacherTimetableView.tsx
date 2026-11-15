@@ -510,8 +510,8 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
             onChange={(e) => setSelectedTeacherCode(e.target.value)}
             className="px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs font-bold text-white outline-none focus:border-blue-500 cursor-pointer max-w-xs"
           >
-            {teacherMapping.list.map((t) => (
-              <option key={t.id} value={t.code}>
+            {teacherMapping.list.map((t, idx) => (
+              <option key={`${t.code}_${t.id}_${idx}`} value={t.code}>
                 [{t.num}] {t.code} - {t.name}
               </option>
             ))}

@@ -475,10 +475,14 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         const pSnap = await getDocs(collection(db, 'personnel')).catch(() => null);
         const teachers: PersonnelProfile[] = [];
         if (pSnap && !pSnap.empty) {
+          const seenEmails = new Set<string>();
           pSnap.forEach((d) => {
             const data = d.data();
-            if (belongsToSchool(data, activeSchoolCode) && isTeacherForTimetable(data)) {
-              teachers.push({ id: d.id, ...data } as PersonnelProfile);
+            if (belongsToSchool(data, activeSchoolCode) && isTeacherForTimetable(data) && data.name) {
+              const emailKey = String(data.email || '').toLowerCase().trim();
+              if (emailKey && seenEmails.has(emailKey)) return;
+              if (emailKey) seenEmails.add(emailKey);
+              teachers.push({ ...data, id: d.id } as PersonnelProfile);
             }
           });
         }
@@ -585,9 +589,13 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
       });
     }
 
-    const list = sourceList.slice(0, 50).map((t, idx) => {
-      const num = idx + 1;
+    const seenCodes = new Set<string>();
+    const seenIds = new Set<string>();
+    const dedupedList: Array<{ id: string; num: number; code: string; name: string }> = [];
+
+    sourceList.forEach((t) => {
       let cleanName = (t.name || '').replace(/\s+/g, ' ').trim();
+      if (!cleanName) return;
       if (isLegacySchool) {
         if (cleanName.toUpperCase().includes('FAHIM') && cleanName.toUpperCase().includes('AMAR')) {
           cleanName = 'MUHAMMAD FAHIM AMAR';
@@ -597,17 +605,25 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
       }
 
       // 生成代号：4个词的名字只取前2个字母缩写（例如 Stephanie Wong Eng Hee -> SW）
-      const code = (t as any).code || generateTeacherShortCode(cleanName);
+      const code = ((t as any).code || generateTeacherShortCode(cleanName)).trim().toUpperCase();
+      if (!code || seenCodes.has(code)) return;
+      seenCodes.add(code);
 
-      return {
-        id: t.id,
-        num,
+      let uniqueId = t.id || `teacher_${code}`;
+      if (seenIds.has(uniqueId)) {
+        uniqueId = `${uniqueId}_${code}`;
+      }
+      seenIds.add(uniqueId);
+
+      dedupedList.push({
+        id: uniqueId,
+        num: dedupedList.length + 1,
         code,
         name: cleanName,
-      };
+      });
     });
 
-    return { list };
+    return { list: dedupedList.slice(0, 50) };
   }, [personnelList, isLegacySchool]);
 
   // 修改各科节数（完全不锁死）
@@ -987,8 +1003,8 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                                       title="Guru 1 (Guru Utama)"
                                     >
                                       <option value="">- G1 -</option>
-                                      {dynamicTeacherMapping.list.map((t) => (
-                                        <option key={t.id} value={t.code}>
+                                      {dynamicTeacherMapping.list.map((t, idx) => (
+                                        <option key={`${t.code}_${t.id}_g1_${idx}`} value={t.code}>
                                           {displayMode === 'CODE' ? t.code : String(t.num)} ({t.code})
                                         </option>
                                       ))}
@@ -1025,8 +1041,8 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                                       title="Guru 2 (Guru Bersama / Co-Teacher)"
                                     >
                                       <option value="">- G2 (Co) -</option>
-                                      {dynamicTeacherMapping.list.map((t) => (
-                                        <option key={t.id} value={t.code}>
+                                      {dynamicTeacherMapping.list.map((t, idx) => (
+                                        <option key={`${t.code}_${t.id}_g2_${idx}`} value={t.code}>
                                           {displayMode === 'CODE' ? t.code : String(t.num)} ({t.code})
                                         </option>
                                       ))}
@@ -1058,10 +1074,10 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                                   }`}
                                 >
                                   <option value="">-</option>
-                                  {dynamicTeacherMapping.list.map((t) => {
+                                  {dynamicTeacherMapping.list.map((t, idx) => {
                                     const cellDisplay = displayMode === 'CODE' ? t.code : String(t.num);
                                     return (
-                                      <option key={t.id} value={t.code}>
+                                      <option key={`${t.code}_${t.id}_std_${idx}`} value={t.code}>
                                         {cellDisplay}
                                       </option>
                                     );
@@ -1145,7 +1161,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
-                    {sortedTeachersByWorkload.map((t) => {
+                    {sortedTeachersByWorkload.map((t, idx) => {
                       const workload = teacherWorkloads[t.code] || 0;
                       const estMaxDaily = Math.min(8, Math.ceil(workload / 5));
                       const isOver40 = workload > 40;
@@ -1155,7 +1171,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
 
                       return (
                         <tr
-                          key={t.id}
+                          key={`${t.code}_${t.id}_wl_${idx}`}
                           draggable
                           onDragStart={(e) => {
                             e.dataTransfer.setData('text/plain', t.code);
@@ -1242,8 +1258,8 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                     className="flex-1 py-1.5 px-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white font-sans outline-none focus:border-blue-500 cursor-pointer"
                   >
                     <option value="">-- Belum Ditetapkan --</option>
-                    {dynamicTeacherMapping.list.map((t) => (
-                      <option key={t.id} value={t.code}>
+                    {dynamicTeacherMapping.list.map((t, idx) => (
+                      <option key={`${t.code}_${t.id}_gk_${idx}`} value={t.code}>
                         [{t.num}] {t.code} - {t.name}
                       </option>
                     ))}

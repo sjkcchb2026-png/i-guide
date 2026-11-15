@@ -1003,7 +1003,7 @@ export default function AssessmentSecretaryView() {
                     </tr>
                   ) : (
                     filteredTeachers.map((t, idx) => (
-                      <tr key={t.id} className="hover:bg-slate-50 transition-colors">
+                      <tr key={`${t.id}_${idx}`} className="hover:bg-slate-50 transition-colors">
                         <td className="px-6 py-4 text-sm text-slate-400">{idx + 1}</td>
                         <td className="px-6 py-4 font-medium">{t.name}</td>
                         <td className="px-6 py-4 text-sm font-mono text-slate-500">{t.ic}</td>

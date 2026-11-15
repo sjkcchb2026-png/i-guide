@@ -151,7 +151,7 @@ export const PrintMonthlyAnalysisReport: React.FC<PrintMonthlyAnalysisReportProp
                 </tr>
               ) : (
                 overall.staffMetrics.map((m, idx) => (
-                  <tr key={m.user.uid} className={idx % 2 === 1 ? 'bg-slate-50' : 'bg-white'}>
+                  <tr key={`${m.user.uid}_${idx}`} className={idx % 2 === 1 ? 'bg-slate-50' : 'bg-white'}>
                     <td className="p-1.5 border border-slate-300 text-center font-mono">{idx + 1}</td>
                     <td className="p-1.5 border border-slate-300 font-medium">
                       <div className="font-bold text-slate-900">{m.user.name}</div>

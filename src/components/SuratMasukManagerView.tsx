@@ -1563,11 +1563,11 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
                 </div>
 
                 <div className="max-h-36 overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-2.5 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {activeTeachers.map((t) => {
+                  {activeTeachers.map((t, idx) => {
                     const checked = selectedTeacherIds.includes(t.teacherId);
                     return (
                       <label
-                        key={t.teacherId}
+                        key={`${t.teacherId}_${idx}`}
                         className="flex items-center gap-2 text-slate-200 cursor-pointer hover:bg-slate-900 p-1 rounded"
                       >
                         <input

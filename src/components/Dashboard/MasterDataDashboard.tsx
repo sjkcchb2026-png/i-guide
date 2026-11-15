@@ -386,7 +386,18 @@ export default function MasterDataDashboard({
       if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
         if (Array.isArray(data.personnel) && data.personnel.length > 0) {
-          setPersonnel(data.personnel);
+          const seenIds = new Set<string>();
+          const seenEmails = new Set<string>();
+          const deduped = (data.personnel as PersonnelProfile[]).filter((p) => {
+            const idKey = String(p.id || '').trim();
+            const emailKey = String(p.email || '').toLowerCase().trim();
+            if (!p.name) return false;
+            if ((idKey && seenIds.has(idKey)) || (emailKey && seenEmails.has(emailKey))) return false;
+            if (idKey) seenIds.add(idKey);
+            if (emailKey) seenEmails.add(emailKey);
+            return true;
+          });
+          setPersonnel(deduped);
           setPersonnelError(null);
           return;
         }
@@ -401,7 +412,19 @@ export default function MasterDataDashboard({
       if (pSnap && !pSnap.empty) {
         const scopedDocs = pSnap.docs.filter(d => belongsToSchool(d.data() as any, activeSchoolCode));
         if (scopedDocs.length > 0) {
-          const list = scopedDocs.map(d => ({ id: d.id, ...d.data() } as PersonnelProfile));
+          const seenIds = new Set<string>();
+          const seenEmails = new Set<string>();
+          const list = scopedDocs
+            .map(d => ({ ...d.data(), id: d.id } as PersonnelProfile))
+            .filter(p => {
+              const idKey = String(p.id || '').trim();
+              const emailKey = String(p.email || '').toLowerCase().trim();
+              if (!p.name) return false;
+              if ((idKey && seenIds.has(idKey)) || (emailKey && seenEmails.has(emailKey))) return false;
+              if (idKey) seenIds.add(idKey);
+              if (emailKey) seenEmails.add(emailKey);
+              return true;
+            });
           list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
           setPersonnel(list);
           setPersonnelError(null);
@@ -2596,8 +2619,8 @@ export default function MasterDataDashboard({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                      {personnel.map(p => (
-                        <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
+                      {personnel.map((p, idx) => (
+                        <tr key={`${p.id}_${idx}`} className="hover:bg-slate-50/50 transition-colors">
                           <td className="px-6 py-4 text-slate-900 uppercase">
                             <div>{p.name}</div>
                             <div className="text-[10px] text-slate-400 italic mt-0.5">{p.employmentStatus} ({p.gender})</div>
@@ -4838,8 +4861,8 @@ export default function MasterDataDashboard({
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-800 focus:outline-none"
                 >
                   <option value="">-- Tiada Guru Kelas --</option>
-                  {personnel.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} (IC: {p.ic})</option>
+                  {personnel.map((p, idx) => (
+                    <option key={`${p.id}_cls_${idx}`} value={p.id}>{p.name} (IC: {p.ic})</option>
                   ))}
                 </select>
               </div>
@@ -4873,8 +4896,8 @@ export default function MasterDataDashboard({
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-800 focus:outline-none"
                 >
                   <option value="">-- Pilih Guru --</option>
-                  {personnel.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
+                  {personnel.map((p, idx) => (
+                    <option key={`${p.id}_alloc_${idx}`} value={p.id}>{p.name}</option>
                   ))}
                 </select>
               </div>

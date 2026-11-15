@@ -16,7 +16,12 @@ import {
   ShieldCheck,
   FileSpreadsheet,
   X,
-  Send
+  Send,
+  ArrowLeftRight,
+  Baby,
+  MessageSquare,
+  Copy,
+  Check
 } from 'lucide-react';
 import {
   collection,
@@ -43,6 +48,10 @@ import {
   detectAbsentTeachersForDate,
   generateAutoReliefPlan,
 } from '../utils/autoReliefEngine';
+import {
+  PrasekolahTimetableDoc,
+  normalizePrasekolahTimetableDoc,
+} from '../utils/prasekolahTimetable';
 
 export interface ReliefAlertRecord {
   id: string;
@@ -104,6 +113,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
   // Teachers directory
   const [teacherList, setTeacherList] = useState<Array<{ id: string; name: string; email: string; code: string; phone?: string }>>([]);
   const [scheduleGrid, setScheduleGrid] = useState<ScheduleGrid>(createEmptyScheduleGrid());
+  const [prasekolahTimetable, setPrasekolahTimetable] = useState<PrasekolahTimetableDoc | null>(null);
   const [activeAcademicYear, setActiveAcademicYear] = useState<string>('2027');
   const [absenceRecords, setAbsenceRecords] = useState<AbsenceSyncSourceRecord[]>([]);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
@@ -113,7 +123,9 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
   const [activeAlertForSchedule, setActiveAlertForSchedule] = useState<ReliefAlertRecord | null>(null);
   const [activeAutoSlots, setActiveAutoSlots] = useState<AutoReliefSlotItem[]>([]);
   const [slotAssignments, setSlotAssignments] = useState<Record<string, string>>({}); // key: slotKey or classId_period -> substituteTeacherId/code
+  const [slotRepaymentDates, setSlotRepaymentDates] = useState<Record<string, string>>({}); // key: slotKey -> YYYY-MM-DD Tarikh Pulang Balik
   const [submittingSchedule, setSubmittingSchedule] = useState<boolean>(false);
+  const [copiedSlipWhatsApp, setCopiedSlipWhatsApp] = useState<boolean>(false);
 
   // Print slip state
   const [printSlipData, setPrintSlipData] = useState<{
@@ -126,6 +138,8 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       className: string;
       subject: string;
       substituteName: string;
+      reliefModeLabel?: string;
+      repaymentDetails?: string;
     }>;
   } | null>(null);
 
@@ -158,20 +172,41 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
     let isMounted = true;
     async function loadDirectoryAndSchedule() {
       try {
-        const [usersSnap, personnelSnap, timetableSnap, absSnap] = await Promise.all([
+        const [usersSnap, personnelSnap, timetableSnap, absSnap, praSnap] = await Promise.all([
           getDocs(collection(db, 'users')).catch(() => ({ docs: [] })),
           getDocs(collection(db, 'personnel')).catch(() => ({ docs: [] })),
           getDocs(collection(db, 'school_timetables')).catch(() => ({ docs: [] })),
           getDocs(collection(db, 'absence_records')).catch(() => ({ docs: [] })),
+          getDocs(collection(db, 'prasekolah_timetables')).catch(() => ({ docs: [] })),
         ]);
 
         const map = new Map<string, { id: string; name: string; email: string; code: string; phone?: string }>();
+        const seenCodes = new Set<string>();
+
+        const addUniqueTeacher = (entry: { id: string; name: string; email: string; code: string; phone?: string }) => {
+          const cleanCode = (entry.code || '').trim().toUpperCase();
+          const cleanEmail = (entry.email || '').trim().toLowerCase();
+          const cleanNameUpper = (entry.name || '').trim().toUpperCase();
+          if (!cleanCode || seenCodes.has(cleanCode)) return;
+          const alreadyExists = Array.from(map.values()).some(
+            (p) =>
+              (cleanEmail && p.email.trim().toLowerCase() === cleanEmail) ||
+              (cleanNameUpper &&
+                (p.name.toUpperCase() === cleanNameUpper ||
+                  p.name.toUpperCase().includes(cleanNameUpper) ||
+                  cleanNameUpper.includes(p.name.toUpperCase())))
+          );
+          if (alreadyExists) return;
+          seenCodes.add(cleanCode);
+          map.set(entry.id, { ...entry, code: cleanCode });
+        };
+
         personnelSnap.docs.forEach((d) => {
           const data = d.data();
           if (!belongsToSchool(data, activeSchoolCode)) return;
           const cleanName = (data.name || data.fullName || d.id).replace(/\s+/g, ' ').trim();
           const code = data.code || generateTeacherShortCode(cleanName);
-          map.set(d.id, {
+          addUniqueTeacher({
             id: d.id,
             name: cleanName,
             email: data.email || '',
@@ -185,7 +220,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
           if (!belongsToSchool(data, activeSchoolCode)) return;
           if (!map.has(d.id)) {
             const cleanName = (data.name || d.id).replace(/\s+/g, ' ').trim();
-            map.set(d.id, {
+            addUniqueTeacher({
               id: d.id,
               name: cleanName,
               email: data.email || '',
@@ -197,20 +232,13 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
 
         if (isLegacySchool) {
           OFFICIAL_TEACHERS.forEach((ot) => {
-            const exists = Array.from(map.values()).some(
-              (p) =>
-                (p.email && p.email.toLowerCase() === ot.email.toLowerCase()) ||
-                p.name.toUpperCase().includes(ot.name.toUpperCase())
-            );
-            if (!exists) {
-              map.set(ot.id, {
-                id: ot.id,
-                name: ot.name,
-                email: ot.email,
-                code: ot.code,
-                phone: ot.phone || '',
-              });
-            }
+            addUniqueTeacher({
+              id: ot.id,
+              name: ot.name,
+              email: ot.email,
+              code: ot.code,
+              phone: ot.phone || '',
+            });
           });
         }
 
@@ -239,9 +267,28 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
           }
         }
 
+        const scopedPraDocs = praSnap.docs.filter((d) => belongsToSchool(d.data(), activeSchoolCode));
+        const loadedPraDoc =
+          scopedPraDocs.length > 0
+            ? normalizePrasekolahTimetableDoc(scopedPraDocs[0].data() as Partial<PrasekolahTimetableDoc>, {
+                id: scopedPraDocs[0].id,
+                schoolCode: activeSchoolCode,
+                academicYear: resolvedYr,
+                guruPrasekolahCode: isLegacySchool ? 'SW' : 'GPRA',
+                guruPrasekolahName: isLegacySchool ? 'STEPHANIE WONG ENG HEE' : 'Guru Prasekolah',
+              })
+            : normalizePrasekolahTimetableDoc(null, {
+                id: scopedDocId(activeSchoolCode, `prasekolah_${resolvedYr}`),
+                schoolCode: activeSchoolCode,
+                academicYear: resolvedYr,
+                guruPrasekolahCode: isLegacySchool ? 'SW' : 'GPRA',
+                guruPrasekolahName: isLegacySchool ? 'STEPHANIE WONG ENG HEE' : 'Guru Prasekolah',
+              });
+
         if (isMounted) {
           setTeacherList(Array.from(map.values()));
           setScheduleGrid(loadedSchedule);
+          setPrasekolahTimetable(loadedPraDoc);
           setActiveAcademicYear(resolvedYr);
           setAbsenceRecords(absList);
         }
@@ -261,23 +308,31 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
   }, [alerts]);
 
   const teacherMappingList = useMemo(() => {
-    return {
-      list: teacherList.map((t, i) => ({
+    const seen = new Set<string>();
+    const list: Array<{ id: string; num: number; code: string; name: string }> = [];
+    teacherList.forEach((t) => {
+      const code = (t.code || '').trim().toUpperCase();
+      if (!code || seen.has(code)) return;
+      seen.add(code);
+      list.push({
         id: t.id,
-        num: i + 1,
-        code: t.code,
+        num: list.length + 1,
+        code,
         name: t.name,
-      })),
+      });
+    });
+    return {
+      homerooms: {} as Record<number, string>,
+      list,
     };
   }, [teacherList]);
 
-  // Handle opening 1-Click scheduling modal with REAL clock-overlap & lightest-workload Auto-Relief
-  const handleOpenScheduleModal = (alertItem: ReliefAlertRecord) => {
-    setErrorBanner(null);
-    setActiveAlertForSchedule(alertItem);
-    setSelectedAlert(alertItem);
-
-    // Resolve absent teacher codes from alert IDs/names
+  // Handle opening 1-Click scheduling modal with REAL clock-overlap & Priority 1 Same-Class Lesson Swap + Prasekolah One-Way Relief
+  const recomputeModalAutoSlots = (
+    alertItem: ReliefAlertRecord,
+    overridesMap: Record<string, string>,
+    repaymentMap: Record<string, string>
+  ) => {
     const detectedAbsent = detectAbsentTeachersForDate({
       dateStr: alertItem.startDate,
       teacherMapping: teacherMappingList,
@@ -294,13 +349,32 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       absentTeacherCodes: absentCodes,
       teacherMapping: teacherMappingList,
       detectedAbsentTeachers: detectedAbsent,
+      manualOverrides: overridesMap,
+      repaymentDateOverrides: repaymentMap,
+      prasekolahTimetable,
+      absenceRecords,
+      suratAlerts: [alertItem],
     });
     setActiveAutoSlots(plan.slots);
+    return plan;
+  };
+
+  const handleOpenScheduleModal = (alertItem: ReliefAlertRecord) => {
+    setErrorBanner(null);
+    setActiveAlertForSchedule(alertItem);
+    setSelectedAlert(alertItem);
+    setSlotRepaymentDates({});
+
+    const plan = recomputeModalAutoSlots(alertItem, {}, {});
 
     const initialMap: Record<string, string> = {};
+    const initialRepayMap: Record<string, string> = {};
     if (plan.slots.length > 0) {
       plan.slots.forEach((slot) => {
         initialMap[slot.slotKey] = slot.assignedSubstituteCode;
+        if (slot.repaymentDate) {
+          initialRepayMap[slot.slotKey] = slot.repaymentDate;
+        }
       });
     } else {
       alertItem.affectedClasses.forEach((cls, i) => {
@@ -314,6 +388,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       });
     }
     setSlotAssignments(initialMap);
+    setSlotRepaymentDates(initialRepayMap);
     setIsScheduleModalOpen(true);
   };
 
@@ -330,14 +405,29 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
           ? activeAutoSlots.map((slot) => {
               const assignedCode = slotAssignments[slot.slotKey] || slot.assignedSubstituteCode;
               const teacherObj = teacherList.find((t) => t.code === assignedCode || t.id === assignedCode);
+              const repayDate = slotRepaymentDates[slot.slotKey] || slot.repaymentDate || '';
+              const isSwap = slot.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA';
+              const repaymentDetails =
+                isSwap && repayDate
+                  ? `Pulang Balik: ${repayDate}${slot.repaymentDay ? ` (${slot.repaymentDay})` : ''} · ${slot.repaymentSlotLabel || ''} (${slot.repaymentTimeLabel || ''}) — ${slot.absentTeacherCodes[0] || ''} ajar ${slot.repaymentSubjectCode || slot.subjectCode}`
+                  : 'Tidak Perlu Pulang Balik';
+
               return {
                 period: `${slot.slotLabel} (${slot.timeLabel})`,
-                classId: `T${slot.grade}`,
+                classId: slot.isPrasekolah ? 'PRASEKOLAH' : `T${slot.grade}`,
                 className: slot.classLabel,
-                subjectCode: slot.subjectCode,
+                subjectCode:
+                  isSwap && slot.substituteTeachingSubjectCode
+                    ? `${slot.substituteTeachingSubjectCode} (Tukar Waktu dengan ${slot.subjectCode})`
+                    : slot.subjectCode,
                 subjectName: slot.subjectName,
                 substituteTeacherId: teacherObj?.id || assignedCode,
                 substituteName: teacherObj?.name || assignedCode || 'GURU GANTI',
+                reliefMode: slot.reliefMode,
+                reliefModeLabel: slot.reliefModeLabel,
+                requiresRepayment: slot.requiresRepayment,
+                repaymentDate: isSwap ? repayDate : '',
+                repaymentDetails,
               };
             })
           : activeAlertForSchedule.affectedClasses.map((cls, idx) => {
@@ -351,6 +441,11 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                 subjectName: cls.subjectName,
                 substituteTeacherId: assignedTId || '',
                 substituteName: teacherObj?.name || 'GURU GANTI',
+                reliefMode: 'GANTI_BIASA',
+                reliefModeLabel: 'Ganti Biasa (Tidak Perlu Pulang Balik)',
+                requiresRepayment: false,
+                repaymentDate: '',
+                repaymentDetails: 'Tidak Perlu Pulang Balik',
               };
             });
 
@@ -392,6 +487,8 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
           className: a.className,
           subject: `${a.subjectCode} - ${a.subjectName}`,
           substituteName: a.substituteName,
+          reliefModeLabel: a.reliefModeLabel,
+          repaymentDetails: a.repaymentDetails,
         })),
       });
 
@@ -743,6 +840,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
             displayMode="CODE"
             schoolCode={activeSchoolCode}
             schoolName={schoolSettings?.schoolName || tenantSchoolName}
+            prasekolahTimetable={prasekolahTimetable}
           />
         </div>
       )}
@@ -798,56 +896,123 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                 </span>
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 {activeAutoSlots.length > 0 ? (
                   activeAutoSlots.map((slot) => {
                     const currentAssigned = slotAssignments[slot.slotKey] || slot.assignedSubstituteCode;
+                    const currentRepayDate = slotRepaymentDates[slot.slotKey] ?? slot.repaymentDate ?? '';
+                    const isSwap = slot.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA';
+                    const isPra = slot.reliefMode === 'GANTI_PRASEKOLAH';
+
                     return (
                       <div
                         key={slot.slotKey}
-                        className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                        className={`p-3.5 border rounded-xl flex flex-col gap-3 text-xs ${
+                          isPra
+                            ? 'bg-teal-950/20 border-teal-500/30'
+                            : isSwap
+                            ? 'bg-indigo-950/20 border-indigo-500/30'
+                            : 'bg-slate-950 border-slate-800'
+                        }`}
                       >
-                        <div className="space-y-0.5">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-white text-sm">{slot.classLabel}</span>
-                            <span className="px-2 py-0.5 bg-blue-950 text-blue-300 border border-blue-800/60 rounded font-mono text-[10px] font-bold">
-                              {slot.subjectCode}
-                            </span>
-                            {slot.isYear1ShiftedMorning && (
-                              <span className="text-[10px] font-bold text-amber-300">
-                                [{slot.timeLabel}]
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-white text-sm">{slot.classLabel}</span>
+                              <span className="px-2 py-0.5 bg-blue-950 text-blue-300 border border-blue-800/60 rounded font-mono text-[10px] font-bold">
+                                {slot.subjectCode}
                               </span>
-                            )}
-                            {slot.isPKAR && (
-                              <span className="text-[10px] font-bold text-emerald-400">
-                                PKAR +0.5w
-                              </span>
-                            )}
+                              {isSwap ? (
+                                <span className="px-2 py-0.5 rounded bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-[10px] font-black flex items-center gap-1">
+                                  <ArrowLeftRight className="w-3 h-3" />
+                                  Tukar Waktu Kelas Sama (Ajar {slot.substituteTeachingSubjectCode || slot.subjectCode})
+                                </span>
+                              ) : isPra ? (
+                                <span className="px-2 py-0.5 rounded bg-teal-500/20 border border-teal-400/40 text-teal-200 text-[10px] font-black flex items-center gap-1">
+                                  <Baby className="w-3 h-3" />
+                                  Ganti Prasekolah (Tidak Perlu Pulang Balik)
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-bold">
+                                  Ganti Biasa (Tidak Perlu Pulang Balik)
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              {slot.slotLabel} ({slot.timeLabel}) · {slot.subjectName}
+                            </div>
                           </div>
-                          <div className="text-[11px] text-slate-400">
-                            {slot.slotLabel} ({slot.timeLabel})
+
+                          <div className="flex items-center gap-2 w-full sm:w-80">
+                            <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <select
+                              value={currentAssigned}
+                              onChange={(e) => {
+                                const nextCode = e.target.value;
+                                const nextMap = {
+                                  ...slotAssignments,
+                                  [slot.slotKey]: nextCode,
+                                };
+                                setSlotAssignments(nextMap);
+                                if (activeAlertForSchedule) {
+                                  recomputeModalAutoSlots(activeAlertForSchedule, nextMap, slotRepaymentDates);
+                                }
+                              }}
+                              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white font-bold"
+                            >
+                              {slot.recommendedCandidates.map((cand, idx) => {
+                                const tag =
+                                  cand.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA' && cand.repaymentInfo
+                                    ? `🔄 Tukar Waktu (Ajar ${cand.repaymentInfo.substituteOriginalSubjectCode} · Pulang ${cand.repaymentInfo.repaymentDate})`
+                                    : slot.isPrasekolah
+                                    ? '🧸 Ganti Prasekolah (Tiada Pulang Balik)'
+                                    : 'Ganti Biasa (Tiada Pulang Balik)';
+                                return (
+                                  <option key={`${cand.code}_${idx}`} value={cand.code}>
+                                    {idx === 0 ? '★ ' : ''}[{cand.code}] {cand.name} — {tag} ({cand.baseDayLoad}w→{cand.projectedDayLoad}w)
+                                  </option>
+                                );
+                              })}
+                            </select>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 w-full sm:w-72">
-                          <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                          <select
-                            value={currentAssigned}
-                            onChange={(e) =>
-                              setSlotAssignments((prev) => ({
-                                ...prev,
-                                [slot.slotKey]: e.target.value,
-                              }))
-                            }
-                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white font-bold"
-                          >
-                            {slot.recommendedCandidates.map((cand, idx) => (
-                              <option key={cand.code} value={cand.code}>
-                                {idx === 0 ? '★ ' : ''}[{cand.code}] {cand.name} ({cand.baseDayLoad}w→{cand.projectedDayLoad}w)
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        {/* Editable Tarikh Pulang Balik row for Tukar Waktu Kelas Sama */}
+                        {isSwap && (
+                          <div className="pt-2 border-t border-indigo-500/20 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                            <div className="text-indigo-200">
+                              🔄 <strong>Pulang Balik (2-Hala):</strong> Pada{' '}
+                              <strong>{currentRepayDate || slot.repaymentDate}</strong> ({slot.repaymentDay}),{' '}
+                              <strong>{slot.absentTeacherCodes[0]}</strong> masuk {slot.classLabel} pada{' '}
+                              <strong>
+                                {slot.repaymentSlotLabel} ({slot.repaymentTimeLabel})
+                              </strong>{' '}
+                              ajar subjek <strong>{slot.repaymentSubjectCode || slot.subjectCode}</strong>.
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-bold uppercase text-indigo-300">
+                                Tarikh Pulang Balik:
+                              </span>
+                              <input
+                                type="date"
+                                value={currentRepayDate}
+                                min={activeAlertForSchedule.startDate}
+                                onChange={(e) => {
+                                  const nextDate = e.target.value;
+                                  const nextRepayMap = {
+                                    ...slotRepaymentDates,
+                                    [slot.slotKey]: nextDate,
+                                  };
+                                  setSlotRepaymentDates(nextRepayMap);
+                                  if (activeAlertForSchedule) {
+                                    recomputeModalAutoSlots(activeAlertForSchedule, slotAssignments, nextRepayMap);
+                                  }
+                                }}
+                                className="bg-slate-900 border border-indigo-500/50 rounded-lg px-2 py-1 text-xs font-bold text-indigo-200"
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })
@@ -892,8 +1057,8 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                             }
                             className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white font-bold"
                           >
-                            {otherTeachers.map((t) => (
-                              <option key={t.id} value={t.id}>
+                            {otherTeachers.map((t, idx) => (
+                              <option key={`${t.id}_${idx}`} value={t.id}>
                                 {t.name}
                               </option>
                             ))}
@@ -938,13 +1103,76 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       {/* ================= MODAL / PRINT VIEW: SLIP GURU GANTI ================= */}
       {printSlipData && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full p-6 space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto print:p-0 print:border-none print:bg-white print:max-w-none">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-3xl w-full p-6 space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto print:p-0 print:border-none print:bg-white print:max-w-none">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3 print:hidden">
               <h3 className="text-base font-black text-white flex items-center gap-2">
                 <Printer className="w-5 h-5 text-emerald-400" />
-                <span>Slip Penugasan Guru Ganti (KPM)</span>
+                <span>Slip Penugasan Guru Ganti & Tukar Waktu (KPM)</span>
               </h3>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const waLines = [
+                      `*📌 SLIP GURU GANTI & TUKAR WAKTU (${(schoolSettings?.schoolName || tenantSchoolName).toUpperCase()})*`,
+                      `📅 Tarikh: *${printSlipData.date}* | Ruj: ${printSlipData.letterRef}`,
+                      `👤 Guru Tidak Hadir: *${printSlipData.absentTeacher}*`,
+                      `📌 Sebab: ${printSlipData.reason}`,
+                      `----------------------------------------`,
+                      ...printSlipData.assignments.map(
+                        (a, idx) =>
+                          `*${idx + 1}. [${a.className}] ${a.period}*\n` +
+                          `   • Subjek: ${a.subject}\n` +
+                          `   • Guru Ganti: *${a.substituteName}* (${a.reliefModeLabel || 'Ganti Biasa'})\n` +
+                          `   • Pulang Balik: *${a.repaymentDetails || 'Tidak Perlu Pulang Balik'}*`
+                      ),
+                    ].join('\n');
+                    try {
+                      await navigator.clipboard.writeText(waLines);
+                      setCopiedSlipWhatsApp(true);
+                      setTimeout(() => setCopiedSlipWhatsApp(false), 2500);
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer"
+                >
+                  {copiedSlipWhatsApp ? (
+                    <>
+                      <Check className="w-4 h-4 text-emerald-400" />
+                      <span>Disalin untuk WhatsApp!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4" />
+                      <span>Salin Teks WhatsApp</span>
+                    </>
+                  )}
+                </button>
+                <a
+                  href={`https://wa.me/?text=${encodeURIComponent(
+                    [
+                      `*📌 SLIP GURU GANTI & TUKAR WAKTU (${(schoolSettings?.schoolName || tenantSchoolName).toUpperCase()})*`,
+                      `📅 Tarikh: *${printSlipData.date}* | Ruj: ${printSlipData.letterRef}`,
+                      `👤 Guru Tidak Hadir: *${printSlipData.absentTeacher}*`,
+                      `📌 Sebab: ${printSlipData.reason}`,
+                      `----------------------------------------`,
+                      ...printSlipData.assignments.map(
+                        (a, idx) =>
+                          `*${idx + 1}. [${a.className}] ${a.period}*\n` +
+                          `   • Subjek: ${a.subject}\n` +
+                          `   • Guru Ganti: *${a.substituteName}* (${a.reliefModeLabel || 'Ganti Biasa'})\n` +
+                          `   • Pulang Balik: *${a.repaymentDetails || 'Tidak Perlu Pulang Balik'}*`
+                      ),
+                    ].join('\n')
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  <span>WhatsApp</span>
+                </a>
                 <button
                   type="button"
                   onClick={() => window.print()}
@@ -970,7 +1198,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                   {schoolSettings?.schoolName || tenantSchoolName}
                 </div>
                 <div className="text-[11px] font-bold text-slate-800 uppercase mt-0.5">
-                  SLIP GURU GANTI (JADUAL RELIEF)
+                  SLIP GURU GANTI & TUKAR WAKTU KELAS SAMA (JADUAL RELIEF)
                 </div>
                 <div className="text-[10px] text-slate-600 mt-0.5">
                   Tarikh: <strong>{printSlipData.date}</strong> | Ruj. Surat: <strong>{printSlipData.letterRef}</strong>
@@ -991,8 +1219,9 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                   <tr className="border-b border-black font-bold text-center bg-slate-100">
                     <th className="border border-black py-1.5 px-2">Waktu / Masa</th>
                     <th className="border border-black py-1.5 px-2">Kelas</th>
-                    <th className="border border-black py-1.5 px-2">Mata Pelajaran</th>
-                    <th className="border border-black py-1.5 px-2">Guru Ganti Ditugaskan</th>
+                    <th className="border border-black py-1.5 px-2">Mata Pelajaran / Aktiviti</th>
+                    <th className="border border-black py-1.5 px-2">Guru Ganti & Mod</th>
+                    <th className="border border-black py-1.5 px-2">Tarikh Pulang Balik</th>
                     <th className="border border-black py-1.5 px-2 w-20">T.Tangan</th>
                   </tr>
                 </thead>
@@ -1008,8 +1237,14 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                       <td className="border border-black py-2 px-2">
                         {item.subject}
                       </td>
-                      <td className="border border-black py-2 px-2 font-bold text-center">
-                        {item.substituteName}
+                      <td className="border border-black py-2 px-2 text-center">
+                        <div className="font-bold">{item.substituteName}</div>
+                        <div className="text-[9px] text-slate-700">
+                          {item.reliefModeLabel || 'Ganti Biasa'}
+                        </div>
+                      </td>
+                      <td className="border border-black py-2 px-2 text-center text-[10px]">
+                        {item.repaymentDetails || 'Tidak Perlu Pulang Balik'}
                       </td>
                       <td className="border border-black py-2 px-2 text-center">
                         &nbsp;

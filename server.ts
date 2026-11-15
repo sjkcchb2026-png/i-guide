@@ -2506,12 +2506,23 @@ async function startServer() {
     try {
       const { db: targetCoreDb, isTargetCore, targetInfo } = await getCoreDbInstance();
       const snap = await targetCoreDb.collection('personnel').get();
+      const seenIds = new Set<string>();
+      const seenEmails = new Set<string>();
       const personnel = snap.docs
         .map(d => ({
-          id: d.id,
           ...d.data(),
+          id: d.id,
         }))
-        .filter(p => belongsToSchool(p as any, schoolCode));
+        .filter((p: any) => {
+          if (!belongsToSchool(p, schoolCode)) return false;
+          if (!p.name) return false;
+          const idKey = String(p.id || '').trim();
+          const emailKey = String(p.email || '').toLowerCase().trim();
+          if ((idKey && seenIds.has(idKey)) || (emailKey && seenEmails.has(emailKey))) return false;
+          if (idKey) seenIds.add(idKey);
+          if (emailKey) seenEmails.add(emailKey);
+          return true;
+        });
       personnel.sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
 
       return res.json({

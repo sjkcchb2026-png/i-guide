@@ -994,8 +994,8 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
                 className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
               >
                 <option value="">-- Sila Pilih Guru --</option>
-                {teachers.map(t => (
-                  <option key={t.id} value={t.name}>{t.name}</option>
+                {teachers.map((t, idx) => (
+                  <option key={`${t.id}_${idx}`} value={t.name}>{t.name}</option>
                 ))}
               </select>
             </div>

@@ -2718,11 +2718,11 @@ export default function KokoMembershipView({ profile, role }: Props) {
                       {teachers.length === 0 ? (
                         <p className="text-slate-400 text-xs italic text-center py-6">Tiada rekod guru berdaftar dalam sistem.</p>
                       ) : (
-                        teachers.sort((a,b) => a.name.localeCompare(b.name)).map(t => {
+                        teachers.sort((a,b) => a.name.localeCompare(b.name)).map((t, idx) => {
                           const isSelected = (currentCommittee?.teachers || []).includes(t.name);
                           return (
                             <label 
-                              key={t.id} 
+                              key={`${t.id}_${idx}`} 
                               className={`flex items-center justify-between p-3.5 rounded-2xl cursor-pointer border transition-all ${
                                 isSelected 
                                   ? 'bg-blue-50/50 border-blue-200 text-blue-950 font-black' 

@@ -9,6 +9,11 @@ import { JKeyinGrid } from './JKeyinGrid';
 import { JUtamaView, JUtamaPrintableSheet } from './JUtamaView';
 import { ClassTimetableView, LampiranAPrintableSheet } from './ClassTimetableView';
 import { BilikGuruReliefView } from './BilikGuruReliefView';
+import { PrasekolahTimetableView } from './PrasekolahTimetableView';
+import {
+  PrasekolahTimetableDoc,
+  normalizePrasekolahTimetableDoc,
+} from '../../utils/prasekolahTimetable';
 import { TeacherTimetableView, LampiranBPrintableSheet } from './TeacherTimetableView';
 import { ReliefSchedulingView } from '../ReliefSchedulingView';
 import { exportAllTimetablesToExcel } from '../../utils/timetableExport';
@@ -53,7 +58,8 @@ import {
   Bell,
   Calendar,
   FileSpreadsheet,
-  Download
+  Download,
+  Baby
 } from 'lucide-react';
 
 export type TimetableTab = 
@@ -62,6 +68,7 @@ export type TimetableTab =
   | 'JUTAMAP' 
   | 'JUTAMAL' 
   | 'JT1_6' 
+  | 'PRASEKOLAH'
   | 'BGURU' 
   | 'RELIEF'
   | 'JG1_50';
@@ -98,6 +105,17 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
   );
 
   const [schedule, setSchedule] = useState<ScheduleGrid>(createEmptyScheduleGrid());
+  const [prasekolahDoc, setPrasekolahDoc] = useState<PrasekolahTimetableDoc>(() =>
+    normalizePrasekolahTimetableDoc(null, {
+      id: scopedDocId(activeSchoolCode, `prasekolah_${activeAcademicYear || '2027'}`),
+      schoolCode: activeSchoolCode,
+      academicYear: activeAcademicYear || '2027',
+      guruPrasekolahCode: isLegacySchool ? 'SW' : 'GPRA',
+      guruPrasekolahName: isLegacySchool ? 'STEPHANIE WONG ENG HEE' : 'Guru Prasekolah',
+      ppmName: 'PPM Prasekolah',
+    })
+  );
+  const [isSavingPrasekolah, setIsSavingPrasekolah] = useState<boolean>(false);
   const [clashes, setClashes] = useState<TimetableClash[]>([]);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [isExportingAll, setIsExportingAll] = useState<boolean>(false);
@@ -125,10 +143,14 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
         const pSnap = await getDocs(collection(db, 'personnel')).catch(() => null);
         const teachers: PersonnelProfile[] = [];
         if (pSnap && !pSnap.empty) {
+          const seenEmails = new Set<string>();
           pSnap.forEach((d) => {
             const data = d.data();
-            if (belongsToSchool(data, activeSchoolCode) && isTeacherForTimetable(data)) {
-              teachers.push({ id: d.id, ...data } as PersonnelProfile);
+            if (belongsToSchool(data, activeSchoolCode) && isTeacherForTimetable(data) && data.name) {
+              const emailKey = String(data.email || '').toLowerCase().trim();
+              if (emailKey && seenEmails.has(emailKey)) return;
+              if (emailKey) seenEmails.add(emailKey);
+              teachers.push({ ...data, id: d.id } as PersonnelProfile);
             }
           });
         }
@@ -246,6 +268,36 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           setSchedule(createEmptyScheduleGrid());
           setClashes([]);
         }
+
+        // 4. Load Isolated Prasekolah Timetable (prasekolah_timetables)
+        const praDocId = scopedDocId(activeSchoolCode, `prasekolah_${selectedYear}`);
+        const praDocRef = doc(db, 'prasekolah_timetables', praDocId);
+        const praSnap = await getDoc(praDocRef).catch(() => null);
+        if (isMounted) {
+          if (praSnap && praSnap.exists()) {
+            setPrasekolahDoc(
+              normalizePrasekolahTimetableDoc(praSnap.data() as Partial<PrasekolahTimetableDoc>, {
+                id: praDocId,
+                schoolCode: activeSchoolCode,
+                academicYear: selectedYear,
+                guruPrasekolahCode: isLegacySchool ? 'SW' : 'GPRA',
+                guruPrasekolahName: isLegacySchool ? 'STEPHANIE WONG ENG HEE' : 'Guru Prasekolah',
+                ppmName: 'PPM Prasekolah',
+              })
+            );
+          } else {
+            setPrasekolahDoc(
+              normalizePrasekolahTimetableDoc(null, {
+                id: praDocId,
+                schoolCode: activeSchoolCode,
+                academicYear: selectedYear,
+                guruPrasekolahCode: isLegacySchool ? 'SW' : 'GPRA',
+                guruPrasekolahName: isLegacySchool ? 'STEPHANIE WONG ENG HEE' : 'Guru Prasekolah',
+                ppmName: 'PPM Prasekolah',
+              })
+            );
+          }
+        }
       } catch (err) {
         console.warn('Could not load Timetable data:', err);
       }
@@ -263,7 +315,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     };
   }, [selectedYear, activeSchoolCode, isLegacySchool]);
 
-  // Teacher Mapping for code & num resolution
+  // Teacher Mapping for code & num resolution (deduplicated by teacher short code)
   const teacherMapping = useMemo(() => {
     const sourceList: PersonnelProfile[] = [...personnelList];
 
@@ -288,9 +340,13 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
       });
     }
 
-    const list = sourceList.slice(0, 50).map((t, idx) => {
-      const num = idx + 1;
+    const seenCodes = new Set<string>();
+    const seenIds = new Set<string>();
+    const dedupedList: Array<{ id: string; num: number; code: string; name: string }> = [];
+
+    sourceList.forEach((t) => {
       let cleanName = (t.name || '').replace(/\s+/g, ' ').trim();
+      if (!cleanName) return;
       if (isLegacySchool) {
         if (cleanName.toUpperCase().includes('FAHIM') && cleanName.toUpperCase().includes('AMAR')) {
           cleanName = 'MUHAMMAD FAHIM AMAR';
@@ -299,18 +355,25 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
         }
       }
 
-      // Generate short form (rule: 4 words -> 2 initials, e.g. Stephanie Wong Eng Hee -> SW)
-      const code = (t as any).code || generateTeacherShortCode(cleanName);
+      const code = ((t as any).code || generateTeacherShortCode(cleanName)).trim().toUpperCase();
+      if (!code || seenCodes.has(code)) return;
+      seenCodes.add(code);
 
-      return {
-        id: t.id,
-        num,
+      let uniqueId = t.id || `teacher_${code}`;
+      if (seenIds.has(uniqueId)) {
+        uniqueId = `${uniqueId}_${code}`;
+      }
+      seenIds.add(uniqueId);
+
+      dedupedList.push({
+        id: uniqueId,
+        num: dedupedList.length + 1,
         code,
         name: cleanName,
-      };
+      });
     });
 
-    return { list };
+    return { list: dedupedList.slice(0, 50) };
   }, [personnelList, isLegacySchool]);
 
   // Update schedule handler (with automatic Firestore persistence)
@@ -465,6 +528,33 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     }
   };
 
+  // Save Isolated Prasekolah Timetable to Firestore (prasekolah_timetables)
+  const handleSavePrasekolahTimetable = async (nextDoc: PrasekolahTimetableDoc) => {
+    try {
+      setIsSavingPrasekolah(true);
+      const praDocId = scopedDocId(activeSchoolCode, `prasekolah_${selectedYear}`);
+      const praDocRef = doc(db, 'prasekolah_timetables', praDocId);
+      const payload = JSON.parse(
+        JSON.stringify({
+          ...nextDoc,
+          id: praDocId,
+          schoolCode: activeSchoolCode,
+          academicYear: selectedYear,
+          updatedAt: new Date().toISOString(),
+        })
+      );
+      await setDoc(praDocRef, payload, { merge: true });
+      setPrasekolahDoc(payload);
+      setSaveStatus('Jadual Prasekolah (Terpisah) berjaya disimpan!');
+      setTimeout(() => setSaveStatus(null), 3000);
+    } catch (err: any) {
+      console.error('Save Prasekolah schedule error:', err);
+      setSaveStatus(`Ralat Jadual Prasekolah: ${err.message}`);
+    } finally {
+      setIsSavingPrasekolah(false);
+    }
+  };
+
   // Bulk Download All (Excel .xlsx containing Jadual Induk + 6 Lampiran A + all Lampiran B)
   const handleExportAllExcel = async () => {
     try {
@@ -568,6 +658,18 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           >
             <GraduationCap className="w-3.5 h-3.5" />
             <span>JT1–6 (Kelas)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('PRASEKOLAH')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+              activeTab === 'PRASEKOLAH'
+                ? 'bg-teal-600 text-white shadow-md shadow-teal-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Baby className="w-3.5 h-3.5 text-teal-300" />
+            <span>Jadual Prasekolah (Terpisah)</span>
           </button>
 
           <button
@@ -772,6 +874,18 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           />
         )}
 
+        {activeTab === 'PRASEKOLAH' && (
+          <PrasekolahTimetableView
+            prasekolahDoc={prasekolahDoc}
+            teacherList={teacherMapping.list}
+            isAdmin={true}
+            isSaving={isSavingPrasekolah}
+            schoolName={activeSchoolName}
+            schoolCode={activeSchoolCode}
+            onSaveDoc={handleSavePrasekolahTimetable}
+          />
+        )}
+
         {activeTab === 'BGURU' && (
           <BilikGuruReliefView
             schedule={schedule}
@@ -780,6 +894,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             displayMode={displayMode}
             schoolCode={activeSchoolCode}
             schoolName={activeSchoolName}
+            prasekolahTimetable={prasekolahDoc}
           />
         )}
 

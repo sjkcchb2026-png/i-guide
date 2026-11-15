@@ -115,21 +115,47 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
       q,
       async (snapshot) => {
         const users: UserProfile[] = [];
+        const seenUids = new Set<string>();
         const seenEmails = new Set<string>();
         const seenIcs = new Set<string>();
 
-        snapshot.forEach((d) => {
-          const u = d.data() as UserProfile;
-          if (!belongsToSchool(u, activeSchoolCode)) return;
-          if (!u.uid) {
-            u.uid = d.id;
-          }
+        // Sort docs so canonical Auth UID docs (d.id === d.data().uid and not starting with 'staff_') come first
+        const sortedDocs = [...snapshot.docs].sort((a, b) => {
+          const aIsStaffDoc = a.id.includes('staff_');
+          const bIsStaffDoc = b.id.includes('staff_');
+          if (aIsStaffDoc !== bIsStaffDoc) return aIsStaffDoc ? 1 : -1;
+          return a.id.localeCompare(b.id);
+        });
+
+        sortedDocs.forEach((d) => {
+          const rawData = d.data() as UserProfile & { mergedIntoUid?: string };
+          if (!belongsToSchool(rawData, activeSchoolCode)) return;
+          if (rawData.mergedIntoUid && rawData.mergedIntoUid !== d.id) return;
+
+          const u: UserProfile = {
+            ...rawData,
+            uid: rawData.uid || d.id,
+          };
           if (!u.name) {
             u.name = String((u as any).displayName || (u as any).nama || u.email?.split('@')[0] || 'STAF').trim();
           }
+
+          const cleanUid = (u.uid || '').trim();
+          const cleanEmail = (u.email || '').toLowerCase().trim();
+          const cleanIc = String((u as any).ic || '').replace(/[^0-9]/g, '');
+
+          if (
+            (cleanUid && seenUids.has(cleanUid)) ||
+            (cleanEmail && seenEmails.has(cleanEmail)) ||
+            (cleanIc && seenIcs.has(cleanIc))
+          ) {
+            return;
+          }
+
           users.push(u);
-          if (u.email) seenEmails.add(u.email.toLowerCase().trim());
-          if ((u as any).ic) seenIcs.add(String((u as any).ic).replace(/[^0-9]/g, ''));
+          if (cleanUid) seenUids.add(cleanUid);
+          if (cleanEmail) seenEmails.add(cleanEmail);
+          if (cleanIc) seenIcs.add(cleanIc);
         });
 
         // Merge any teachers or AKP from Master Data / official roster (legacy YCC3404 only) not yet in users
@@ -1007,7 +1033,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                         return matchStaff && matchDate && u.status !== 'CANCELLED';
                       });
 
-                      const rowKey = staff.uid || (staff as any).id || (staff as any).ic || staff.email || `att_row_${idx}`;
+                      const rowKey = `${staff.uid || (staff as any).id || (staff as any).ic || staff.email || 'att_row'}_${idx}`;
                       return (
                         <tr key={rowKey} className="hover:bg-slate-800/50 transition">
                           
@@ -1246,7 +1272,7 @@ export const PrincipalDashboard: React.FC<PrincipalDashboardProps> = ({
                 <tbody className="divide-y divide-slate-800 font-mono">
                   {staffList.map((staff, idx) => {
                     const isStaffPreReg = Boolean(staff.isPreRegistered || (typeof staff.uid === 'string' && staff.uid.startsWith('staff_')));
-                    const rowKey = staff.uid || (staff as any).id || (staff as any).ic || staff.email || `staff_row_${idx}`;
+                    const rowKey = `${staff.uid || (staff as any).id || (staff as any).ic || staff.email || 'staff_row'}_${idx}`;
                     return (
                     <tr key={rowKey} className="hover:bg-slate-800/40 transition">
                       

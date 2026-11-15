@@ -257,16 +257,39 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
   const [fetchedTeachers, setFetchedTeachers] = useState<TeacherProfile[]>([]);
 
   useEffect(() => {
+    const dedupeTeachers = (rawList: TeacherProfile[]): TeacherProfile[] => {
+      const seenIds = new Set<string>();
+      const seenEmails = new Set<string>();
+      const seenNames = new Set<string>();
+      const result: TeacherProfile[] = [];
+      for (const t of rawList) {
+        const idKey = (t.teacherId || '').trim();
+        const emailKey = (t.email || '').toLowerCase().trim();
+        const nameKey = (t.fullName || '').toUpperCase().replace(/\s+/g, ' ').trim();
+        if (!nameKey || nameKey === 'GURU') continue;
+        if ((idKey && seenIds.has(idKey)) || (emailKey && seenEmails.has(emailKey)) || seenNames.has(nameKey)) {
+          continue;
+        }
+        if (idKey) seenIds.add(idKey);
+        if (emailKey) seenEmails.add(emailKey);
+        seenNames.add(nameKey);
+        result.push(t);
+      }
+      return result;
+    };
+
     if (propTeachers && propTeachers.length > 0) {
       setFetchedTeachers(
-        propTeachers.map((t) => ({
-          teacherId: t.teacherId || t.id || t.uid || '',
-          fullName: t.fullName || t.name || 'Guru',
-          email: t.email || '',
-          phone: t.phone || '',
-          role: t.role || '',
-          status: t.status || 'ACTIVE',
-        }))
+        dedupeTeachers(
+          propTeachers.map((t, idx) => ({
+            teacherId: t.teacherId || t.id || t.uid || `teacher_${idx}`,
+            fullName: t.fullName || t.name || 'Guru',
+            email: t.email || '',
+            phone: t.phone || '',
+            role: t.role || '',
+            status: t.status || 'ACTIVE',
+          }))
+        )
       );
       return;
     }
@@ -288,7 +311,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                 status: 'ACTIVE',
               };
             });
-            setFetchedTeachers(list);
+            setFetchedTeachers(dedupeTeachers(list));
           } else {
             const usersSnap = await getDocs(collection(db, 'users'));
             const list: TeacherProfile[] = usersSnap.docs
@@ -305,7 +328,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                 };
               })
               .filter((t) => t.status === 'ACTIVE');
-            setFetchedTeachers(list);
+            setFetchedTeachers(dedupeTeachers(list));
           }
         } catch (e) {
           console.warn('Could not auto-fetch personnel:', e);
@@ -1225,9 +1248,9 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
               <span>Hari Lahir Hari Ini! Selamat Ulang Tahun Kelahiran! 🎉</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              {staffBirthdays.today.map((b) => (
+              {staffBirthdays.today.map((b, idx) => (
                 <div
-                  key={b.teacherId}
+                  key={`${b.teacherId}_today_${idx}`}
                   className="bg-slate-950/80 border border-pink-500/40 rounded-xl p-3 flex items-center justify-between gap-3 shadow-md"
                 >
                   <div>
@@ -1259,9 +1282,9 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
               <span>Akan Datang (7 Hari Lagi):</span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-              {staffBirthdays.upcoming7Days.map((b) => (
+              {staffBirthdays.upcoming7Days.map((b, idx) => (
                 <div
-                  key={b.teacherId}
+                  key={`${b.teacherId}_upcoming_${idx}`}
                   className="bg-slate-950/60 border border-slate-800 rounded-xl p-2.5 flex items-center justify-between gap-2"
                 >
                   <div className="min-w-0">
@@ -1296,9 +1319,9 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {staffBirthdays.thisMonth.map((b) => (
+                {staffBirthdays.thisMonth.map((b, idx) => (
                   <div
-                    key={b.teacherId}
+                    key={`${b.teacherId}_month_${idx}`}
                     className="bg-slate-950/50 border border-slate-800/80 rounded-xl p-2 flex items-center justify-between gap-2"
                   >
                     <div className="min-w-0">
@@ -1644,8 +1667,8 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 font-mono">
-                  {teacherComplianceStats.map((stat) => (
-                    <tr key={stat.teacher.teacherId} className="hover:bg-slate-800/40">
+                  {teacherComplianceStats.map((stat, idx) => (
+                    <tr key={`${stat.teacher.teacherId}_${idx}`} className="hover:bg-slate-800/40">
                       <td className="py-3 px-4 font-sans font-bold text-white">
                         <div>{stat.teacher.fullName}</div>
                         <div className="text-[10px] text-slate-400 font-mono">

@@ -1082,8 +1082,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
               className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-700 text-[10px] font-bold text-slate-200 outline-none focus:border-emerald-500 cursor-pointer"
             >
               <option value="">-- Tanpa Guru --</option>
-              {teacherMapping.list.map((t) => (
-                <option key={t.id} value={t.code}>
+              {teacherMapping.list.map((t, idx) => (
+                <option key={`${t.code}_${t.id}_${idx}`} value={t.code}>
                   [{t.num}] {t.code} - {t.name}
                 </option>
               ))}
@@ -1796,9 +1796,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                             className="flex-1 p-2 rounded-xl bg-slate-950 border border-slate-700 text-white font-bold outline-none focus:border-indigo-500 cursor-pointer"
                           >
                             <option value="">-- Tiada / Kosong --</option>
-                            {teacherMapping.list.map((t) => (
+                            {teacherMapping.list.map((t, idx) => (
                               <option
-                                key={t.id}
+                                key={`${t.code}_${t.id}_${idx}`}
                                 value={t.code}
                                 disabled={otherSelected.has(t.code)}
                               >
@@ -1853,8 +1853,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                       className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-bold outline-none focus:border-blue-500 cursor-pointer"
                     >
                       <option value="">-- Kosongkan Guru --</option>
-                      {teacherMapping.list.map((t) => (
-                        <option key={t.id} value={t.code}>
+                      {teacherMapping.list.map((t, idx) => (
+                        <option key={`${t.code}_${t.id}_${idx}`} value={t.code}>
                           [{t.num}] {t.code} - {t.name}
                         </option>
                       ))}

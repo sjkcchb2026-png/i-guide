@@ -475,6 +475,21 @@
         "perkara": { "type": "string", "maxLength": 500 },
         "createdAt": { "type": "string", "format": "date-time" }
       }
+    },
+    "PrasekolahTimetable": {
+      "title": "PrasekolahTimetable",
+      "description": "Isolated Prasekolah timetable configuration and Monday-Friday time blocks (07:30-11:30) for one-way relief.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "className": { "type": "string", "maxLength": 120 },
+        "guruPrasekolahCode": { "type": "string", "maxLength": 30 },
+        "guruPrasekolahName": { "type": "string", "maxLength": 200 },
+        "ppmName": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
     }
   },
   "firestore": {
@@ -493,6 +508,10 @@
     "/school_timetables/{docId}": {
       "schema": { "$ref": "#/entities/SchoolTimetable" },
       "description": "School teaching allocation matrix and timetable schedule grids."
+    },
+    "/prasekolah_timetables/{docId}": {
+      "schema": { "$ref": "#/entities/PrasekolahTimetable" },
+      "description": "Isolated Prasekolah Monday-Friday timetable grids and one-way relief configuration."
     },
     "/school_settings/{settingId}": {
       "schema": { "$ref": "#/entities/SchoolSettings" },

@@ -263,8 +263,8 @@ export const MonthlyAnalysisView: React.FC<MonthlyAnalysisViewProps> = ({
               className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500"
             >
               <option value="ALL">全员总体汇总 (Semua)</option>
-              {staffList.map((s) => (
-                <option key={s.uid} value={s.uid}>
+              {staffList.map((s, idx) => (
+                <option key={`${s.uid}_${idx}`} value={s.uid}>
                   {s.name} ({s.role === 'PRINCIPAL' ? 'Guru Besar (校长)' : s.category === 'GURU' ? 'Guru (教师)' : 'AKP (职员)'})
                 </option>
               ))}
@@ -577,7 +577,7 @@ export const MonthlyAnalysisView: React.FC<MonthlyAnalysisViewProps> = ({
               ) : (
                 overall.staffMetrics.map((m, idx) => (
                   <tr
-                    key={m.user.uid}
+                    key={`${m.user.uid}_${idx}`}
                     className={`hover:bg-slate-800/40 transition ${
                       expandedStaffUid === m.user.uid ? 'bg-slate-800/60' : ''
                     }`}

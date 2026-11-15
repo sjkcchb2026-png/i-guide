@@ -200,7 +200,16 @@ export default function App() {
               });
               await setDoc(userDocRef, linkedProfile, { merge: true });
               if (matchedDoc.id !== user.uid) {
-                await setDoc(matchedDoc.ref, { uid: user.uid, schoolCode: matchedSchoolCode, isPreRegistered: false, active: true }, { merge: true }).catch(() => {});
+                await setDoc(
+                  matchedDoc.ref,
+                  {
+                    mergedIntoUid: user.uid,
+                    schoolCode: matchedSchoolCode,
+                    isPreRegistered: false,
+                    active: false,
+                  },
+                  { merge: true }
+                ).catch(() => {});
               }
               resolvedUserSnap = await getDoc(userDocRef);
             }
