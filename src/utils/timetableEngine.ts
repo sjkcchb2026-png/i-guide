@@ -196,13 +196,19 @@ export function isMajorLanguageSubject(subjectCode: string): boolean {
   return MAJOR_LANGUAGES.has((subjectCode || '').trim().toUpperCase());
 }
 
+export function normalizeDistinctSubjectGroup(subjectCode: string): string {
+  const clean = (subjectCode || '').trim().toUpperCase();
+  if (clean === 'PJ' || clean === 'PK') return 'PJPK';
+  return clean;
+}
+
 export function countDistinctSubjectsOnDay(currentClassDayLessons: any[]): number {
   const distinct = new Set<string>();
   currentClassDayLessons.forEach((l) => {
     if (!l || l.isPemulihan || !l.subjectCode) return;
     const c = String(l.subjectCode).trim().toUpperCase();
     if (!c || EXCLUDED_DAILY_SUBJECT_CODES.has(c) || c.startsWith('PKAR')) return;
-    distinct.add(c);
+    distinct.add(normalizeDistinctSubjectGroup(c));
   });
   return distinct.size;
 }
@@ -329,6 +335,7 @@ export function canSafelyAssignBlockToDay(params: SafeDayAssignParams): boolean 
     return true;
   }
 
+  const distinctGroups = new Set<string>();
   const counts = new Map<string, number>();
   let occupiedPeriods = 0;
 
@@ -340,17 +347,21 @@ export function canSafelyAssignBlockToDay(params: SafeDayAssignParams): boolean 
     occupiedPeriods++;
     if (!EXCLUDED_DAILY_SUBJECT_CODES.has(c) && !c.startsWith('PKAR')) {
       counts.set(c, (counts.get(c) || 0) + 1);
+      distinctGroups.add(normalizeDistinctSubjectGroup(c));
     }
   });
 
   const prevCount = counts.get(code) || 0;
+  const candidateGroup = normalizeDistinctSubjectGroup(code);
+  const hadGroupBefore = distinctGroups.has(candidateGroup);
   counts.set(code, prevCount + blockLength);
+  distinctGroups.add(candidateGroup);
   const occupiedAfter = occupiedPeriods + blockLength;
   const remainingEmpty = Math.max(0, dayMaxPeriods - occupiedAfter);
   if (remainingEmpty === 0) return true;
 
   const maxSubjects = maxSubjectsOverride ?? getMaxSubjectsPerDay(classLevel);
-  const distinctAfter = counts.size;
+  const distinctAfter = distinctGroups.size;
 
   const getRemQuota = (sCode: string): number => {
     if (!remainingSubjectPeriodsInWeek) return 99;
@@ -372,8 +383,13 @@ export function canSafelyAssignBlockToDay(params: SafeDayAssignParams): boolean 
     fillableByExisting += Math.min(roomInDay, roomInWeek);
   });
 
+  // {PJ, PK} counts as 1 combined subject group rather than two separate isolated subjects
+  if (counts.get('PJ') === 1 && counts.get('PK') === 1) {
+    singlePeriodSubjectCount = Math.max(0, singlePeriodSubjectCount - 1);
+  }
+
   // Tahap 1 guard: avoid > 2 isolated single-period lessons unless existing subjects on day can fill remaining slots
-  if (classLevel <= 3 && blockLength === 1 && prevCount === 0 && singlePeriodSubjectCount > 2) {
+  if (classLevel <= 3 && blockLength === 1 && !hadGroupBefore && singlePeriodSubjectCount > 2) {
     if (fillableByExisting < remainingEmpty) {
       return false;
     }
@@ -415,7 +431,7 @@ export function canAddSubjectToClassDay(
     return false;
   }
 
-  // 统计当天的纯学术科目种类数 (排除 PN, MEMBACA, PKAR, TASMIK)
+  // 统计当天的纯学术科目种类数 (排除 PN, MEMBACA, PKAR, TASMIK；PJ 与 PK 合并算 1 科)
   const existingSubjects = new Set<string>();
   let existingCountForThisSub = 0;
 
@@ -423,13 +439,14 @@ export function canAddSubjectToClassDay(
     if (!l || l.isPemulihan || !l.subjectCode) return;
     const c = String(l.subjectCode).trim().toUpperCase();
     if (!c || EXCLUDED_DAILY_SUBJECT_CODES.has(c) || c.startsWith('PKAR')) return;
-    existingSubjects.add(c);
+    existingSubjects.add(normalizeDistinctSubjectGroup(c));
     if (c === code) existingCountForThisSub++;
   });
 
-  // 规则 1: 若当天还没有这门课，检查科目总数是否超过低年级(4)/高年级(6)上限
+  // 规则 1: 若当天还没有这门课所属科目组 (PJ+PK 合并算 1 科)，检查科目总数是否超过低年级(4)/高年级(6)上限
   const maxSubjects = options?.maxSubjectsOverride ?? getMaxSubjectsPerDay(classLevel);
-  if (existingCountForThisSub === 0 && existingSubjects.size >= maxSubjects) {
+  const candidateGroup = normalizeDistinctSubjectGroup(code);
+  if (!existingSubjects.has(candidateGroup) && existingSubjects.size >= maxSubjects) {
     return false;
   }
 
@@ -1218,6 +1235,11 @@ export function repairEmptyClassSlots(ctx: RepairEmptyClassSlotsParams): number 
     return empties;
   };
 
+  const classHasPJ = (classId: string): boolean =>
+    assignments.some(
+      (a) => a.classId === classId && isPJSubject(a.canonicalSubjectCode, a.subjectName) && a.effectiveWeeklyPeriods > 0
+    );
+
   const canPlaceCandidateAt = (
     classId: string,
     classLevel: number,
@@ -1231,6 +1253,9 @@ export function repairEmptyClassSlots(ctx: RepairEmptyClassSlotsParams): number 
     if (classSlotOccupied.has(`${classId}_${day}_${period}`)) return false;
     if (teacherSlotOccupied.has(`${teacherId}_${day}_${period}`)) return false;
     if (isPJSubject(subjectCode) && !isPjValidAt(classId, classLevel, day, period)) return false;
+    if (subjectCode.trim().toUpperCase() === 'PK' && classHasPJ(classId) && getSubjectPeriodsOnDay(classId, 'PJ', day).length === 0) {
+      return false;
+    }
 
     const dayLessons = getClassDayLessons(classId, day);
     const existingSubPeriods = getSubjectPeriodsOnDay(classId, subjectCode, day);
@@ -2285,12 +2310,12 @@ export function runTimetableEngine(params: {
     const tWeekly = teacherWeeklyTotals.get(asg.teacherId) || 0;
     const codeU = asg.canonicalSubjectCode.toUpperCase();
     const isElectiveDouble = ['PSV', 'RBT', 'SEJ'].includes(codeU);
-    const isMinorSingle = ['PK', 'MZ'].includes(codeU);
+    const isMinorSingleSubject = ['PK', 'MZ'].includes(codeU);
 
     const blocks = decomposeSubjectCompactly(asg.canonicalSubjectCode, required - scheduled, classLevel).sort((a, b) => b - a);
     blocks.forEach((blockLen) => {
       const priorityTier =
-        blockLen >= 2 ? (isElectiveDouble ? 2 : 1) : isMinorSingle ? 4 : 3;
+        blockLen >= 2 ? (isElectiveDouble ? 2 : 1) : codeU === 'PK' ? 3.5 : isMinorSingleSubject ? 4 : 3;
       engineBlockQueue.push({
         asg,
         blockLen,
@@ -2379,7 +2404,14 @@ export function runTimetableEngine(params: {
       }),
       [asg.teacherId]
     );
-    const dayCandidates = [...existingDoubleDays, ...unusedDays, ...otherUsedDays];
+    const isPkWithPj =
+      asg.canonicalSubjectCode.trim().toUpperCase() === 'PK' &&
+      DAYS_OF_WEEK.some((d) => getSubjectPeriodsOnDay(asg.classId, 'PJ', d).length > 0);
+    const dayCandidates = (isPkWithPj
+      ? [...existingDoubleDays, ...unusedDays, ...otherUsedDays].filter(
+          (d) => getSubjectPeriodsOnDay(asg.classId, 'PJ', d).length > 0
+        )
+      : [...existingDoubleDays, ...unusedDays, ...otherUsedDays]);
 
     for (const tierCfg of capTiers) {
       if (placed) break;
@@ -2579,6 +2611,9 @@ export function runTimetableEngine(params: {
           if (!occL) continue;
           const occSubPeriods = getSubjectPeriodsOnDay(asg.classId, occL.subjectCode, day);
           if (occSubPeriods.length >= 2) continue;
+          const occIsPkWithPj =
+            occL.subjectCode.toUpperCase() === 'PK' &&
+            DAYS_OF_WEEK.some((d) => getSubjectPeriodsOnDay(asg.classId, 'PJ', d).length > 0);
 
           // Unbook occL temporarily, move to an empty slot on another day or same day
           const occIdx = lessons.findIndex((l) => l.id === occL.id);
@@ -2606,6 +2641,7 @@ export function runTimetableEngine(params: {
           if (canPlaceDoubleHere) {
               for (const altDay of DAYS_OF_WEEK) {
               if (movedOcc) break;
+              if (occIsPkWithPj && getSubjectPeriodsOnDay(asg.classId, 'PJ', altDay).length === 0) continue;
               const altMax = getDailyMaxPeriods(altDay, classLevel, academicYear);
               for (let altP = 1; altP <= altMax && !movedOcc; altP++) {
                 if (altDay === day && (altP === p || altP === p + 1)) continue;

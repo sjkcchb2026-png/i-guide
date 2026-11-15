@@ -6,11 +6,12 @@ import { PersonnelProfile } from '../../types';
 import { isTeacherForTimetable } from '../../utils/checkoutRules';
 import { SchoolTimetableMatrix, SubjectAllocationRow } from './SchoolTimetableMatrix';
 import { JKeyinGrid } from './JKeyinGrid';
-import { JUtamaView } from './JUtamaView';
-import { ClassTimetableView } from './ClassTimetableView';
+import { JUtamaView, JUtamaPrintableSheet } from './JUtamaView';
+import { ClassTimetableView, LampiranAPrintableSheet } from './ClassTimetableView';
 import { BilikGuruReliefView } from './BilikGuruReliefView';
-import { TeacherTimetableView } from './TeacherTimetableView';
+import { TeacherTimetableView, LampiranBPrintableSheet } from './TeacherTimetableView';
 import { ReliefSchedulingView } from '../ReliefSchedulingView';
+import { exportAllTimetablesToExcel } from '../../utils/timetableExport';
 import { OFFICIAL_TEACHERS, generateTeacherShortCode } from '../../constants/officialRoster';
 import {
   buildDefaultCurriculumMatrix,
@@ -50,7 +51,9 @@ import {
   ToggleLeft, 
   ToggleRight,
   Bell,
-  Calendar
+  Calendar,
+  FileSpreadsheet,
+  Download
 } from 'lucide-react';
 
 export type TimetableTab = 
@@ -97,6 +100,14 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
   const [schedule, setSchedule] = useState<ScheduleGrid>(createEmptyScheduleGrid());
   const [clashes, setClashes] = useState<TimetableClash[]>([]);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [isExportingAll, setIsExportingAll] = useState<boolean>(false);
+  const [isBulkPrinting, setIsBulkPrinting] = useState<boolean>(false);
+
+  useEffect(() => {
+    const onAfterPrint = () => setIsBulkPrinting(false);
+    window.addEventListener('afterprint', onAfterPrint);
+    return () => window.removeEventListener('afterprint', onAfterPrint);
+  }, []);
 
   // Sync year prop if changed by parent
   useEffect(() => {
@@ -355,13 +366,51 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     try {
       setSaveStatus('Sedang menjana jadual waktu secara automatik...');
       const variationSeed = Math.floor(Math.random() * 10000) + 1;
-      const { grid, clashes: newClashes, unplaced } = generateAutoSchedule(
+      const { grid, unplaced } = generateAutoSchedule(
         currentMatrix,
         currentClassTeachers,
         selectedYear,
         variationSeed
       );
 
+      // Preserve user-customized Tahun 1 07:15-07:30 morning program (e.g., renamed to Program Agama / 1-3 teachers)
+      DAYS_OF_WEEK.forEach((day) => {
+        const prevMemb = schedule[1]?.[day]?.['MEMBACA'];
+        if (
+          prevMemb &&
+          (prevMemb.teacherCode?.trim() ||
+            prevMemb.subjectCode !== 'MEMBACA' ||
+            (prevMemb.subjectName && prevMemb.subjectName !== 'Program Membaca'))
+        ) {
+          if (!grid[1]) grid[1] = {} as any;
+          if (!grid[1][day]) grid[1][day] = {};
+          grid[1][day]['MEMBACA'] = JSON.parse(JSON.stringify(prevMemb));
+        }
+      });
+
+      // Preserve manually placed TASMIK cells (including custom slots if dragged to another slot/day)
+      [1, 2, 3, 4, 5, 6].forEach((grade) => {
+        DAYS_OF_WEEK.forEach((day) => {
+          const prevDay = schedule[grade]?.[day];
+          if (!prevDay) return;
+          Object.entries(prevDay).forEach(([slotId, prevCell]) => {
+            if (!prevCell) return;
+            const isManualTasmik =
+              (prevCell.subjectCode || '').toUpperCase() === 'TASMIK' &&
+              Boolean(prevCell.teacherCode && prevCell.teacherCode.trim());
+            if (!isManualTasmik) return;
+            if (!grid[grade]) grid[grade] = {} as any;
+            if (!grid[grade][day]) grid[grade][day] = {};
+            if (slotId === 'TASMIK' || !grid[grade][day][slotId]) {
+              grid[grade][day][slotId] = JSON.parse(JSON.stringify(prevCell));
+            } else if (!grid[grade][day]['TASMIK']?.teacherCode?.trim()) {
+              grid[grade][day]['TASMIK'] = JSON.parse(JSON.stringify(prevCell));
+            }
+          });
+        });
+      });
+
+      const newClashes = detectScheduleClashes(grid, selectedYear);
       setSchedule(grid);
       setClashes(newClashes);
 
@@ -416,10 +465,46 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     }
   };
 
+  // Bulk Download All (Excel .xlsx containing Jadual Induk + 6 Lampiran A + all Lampiran B)
+  const handleExportAllExcel = async () => {
+    try {
+      setIsExportingAll(true);
+      setSaveStatus('Sedang menjana fail Excel lengkap (Jadual Induk + Lampiran A + Lampiran B)...');
+      await exportAllTimetablesToExcel({
+        schedule,
+        academicYear: selectedYear,
+        schoolName: activeSchoolName,
+        schoolCode: activeSchoolCode,
+        classTeachers,
+        matrixData,
+        teacherMapping,
+        displayMode,
+      });
+      setSaveStatus('Semua jadual waktu berjaya dimuat turun dalam fail Excel (.xlsx)!');
+      setTimeout(() => setSaveStatus(null), 4000);
+    } catch (err: any) {
+      setSaveStatus(`Ralat eksport Excel: ${err?.message || 'Gagal menjana fail'}`);
+      setTimeout(() => setSaveStatus(null), 5000);
+    } finally {
+      setIsExportingAll(false);
+    }
+  };
+
+  // Batch Print All (A4 Landscape PDF mode)
+  const handleBulkPrintPdf = () => {
+    setIsBulkPrinting(true);
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        window.print();
+      }, 220);
+    });
+  };
+
   return (
     <div className="space-y-6">
       {/* System Navigation Tabs Bar */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 shadow-xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 shadow-xl flex flex-col gap-3 print:hidden">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         {/* Module Sub-tabs */}
         <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0">
           <button
@@ -562,11 +647,39 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             </button>
           )}
         </div>
+        </div>
+
+        {/* Dedicated Bulk Export Action Strip */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-slate-800/80">
+          <span className="text-[11px] font-bold text-slate-400">
+            Eksport Pukal Rasmi (Jadual Induk · 6 Lampiran A Kelas · {teacherMapping.list.length} Lampiran B Guru Option A)
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={isExportingAll}
+              onClick={handleExportAllExcel}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-black uppercase tracking-wider transition shadow-md shadow-emerald-600/30 cursor-pointer"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>{isExportingAll ? 'Menjana Excel...' : 'Muat Turun Semua Jadual (Excel)'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleBulkPrintPdf}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black uppercase tracking-wider transition shadow-md shadow-indigo-600/30 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Muat Turun / Cetak Semua (PDF A4 Landskap)</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {saveStatus && (
         <div
-          className={`p-3 rounded-xl border text-xs font-bold flex items-center gap-2 ${
+          className={`p-3 rounded-xl border text-xs font-bold flex items-center gap-2 print:hidden ${
             saveStatus.includes('Ralat')
               ? 'bg-rose-950/80 border-rose-700 text-rose-200'
               : 'bg-emerald-950/80 border-emerald-700 text-emerald-200'
@@ -577,8 +690,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
         </div>
       )}
 
-      {/* Main Tab View Rendering */}
-      <div>
+      {/* Main Tab View Rendering (Hidden when bulk-printing all sheets) */}
+      <div className={isBulkPrinting ? 'print:hidden' : ''}>
         {activeTab === 'AGIHAN' && (
           <SchoolTimetableMatrix
             activeAcademicYear={selectedYear}
@@ -618,9 +731,12 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             schoolName={activeSchoolName}
             schoolCode={activeSchoolCode}
             classTeachers={classTeachers}
+            matrixData={matrixData}
             displayMode={displayMode}
             teacherMapping={teacherMapping}
             initialOrientation="PORTRAIT"
+            onExportAllExcel={handleExportAllExcel}
+            onBulkPrintPdf={handleBulkPrintPdf}
           />
         )}
 
@@ -631,9 +747,12 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             schoolName={activeSchoolName}
             schoolCode={activeSchoolCode}
             classTeachers={classTeachers}
+            matrixData={matrixData}
             displayMode={displayMode}
             teacherMapping={teacherMapping}
             initialOrientation="LANDSCAPE"
+            onExportAllExcel={handleExportAllExcel}
+            onBulkPrintPdf={handleBulkPrintPdf}
           />
         )}
 
@@ -648,6 +767,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             displayMode={displayMode}
             teacherMapping={teacherMapping}
             onUpdateSchedule={handleUpdateSchedule}
+            onExportAllExcel={handleExportAllExcel}
+            onBulkPrintPdf={handleBulkPrintPdf}
           />
         )}
 
@@ -657,6 +778,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             academicYear={selectedYear}
             teacherMapping={teacherMapping}
             displayMode={displayMode}
+            schoolCode={activeSchoolCode}
+            schoolName={activeSchoolName}
           />
         )}
 
@@ -673,9 +796,55 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             teacherMapping={teacherMapping}
             displayMode={displayMode}
             defaultTeacherCode={defaultTeacherCode}
+            classTeachers={classTeachers}
+            matrixData={matrixData}
+            onExportAllExcel={handleExportAllExcel}
+            onBulkPrintPdf={handleBulkPrintPdf}
           />
         )}
       </div>
+
+      {/* Batch Printable A4 Landscape Pages Container (Active during Bulk Print All PDF) */}
+      {isBulkPrinting && (
+        <div className="hidden print:block space-y-6">
+          <JUtamaPrintableSheet
+            schedule={schedule}
+            academicYear={selectedYear}
+            schoolName={activeSchoolName}
+            schoolCode={activeSchoolCode}
+            classTeachers={classTeachers}
+            displayMode={displayMode}
+            teacherMapping={teacherMapping}
+            pageBreakClass="print-landscape-page"
+          />
+
+          {[1, 2, 3, 4, 5, 6].map((grade) => (
+            <LampiranAPrintableSheet
+              key={`bulk_class_${grade}`}
+              schedule={schedule}
+              grade={grade}
+              academicYear={selectedYear}
+              schoolName={activeSchoolName}
+              classTeachers={classTeachers}
+              matrixData={matrixData}
+              teacherMapping={teacherMapping}
+              displayMode={displayMode}
+              pageBreakClass="print-landscape-page"
+            />
+          ))}
+
+          {teacherMapping.list.map((teacher) => (
+            <LampiranBPrintableSheet
+              key={`bulk_teacher_${teacher.id}`}
+              schedule={schedule}
+              academicYear={selectedYear}
+              teacher={teacher}
+              schoolName={activeSchoolName}
+              pageBreakClass="print-landscape-page"
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 };

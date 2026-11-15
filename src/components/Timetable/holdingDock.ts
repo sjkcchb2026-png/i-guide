@@ -298,8 +298,8 @@ export function evaluateSlotDropRadar(
     };
   }
 
-  // Holding dock cards belong strictly to their class level
-  if (!candidate.fromSlot && candidate.grade !== targetGrade) {
+  // Holding dock cards belong strictly to their class level (grade === 0 allows all grades, e.g. universal TASMIK template)
+  if (!candidate.fromSlot && candidate.grade !== 0 && candidate.grade !== targetGrade) {
     return {
       valid: false,
       differentGrade: true,
@@ -328,7 +328,51 @@ export function evaluateSlotDropRadar(
       locked: true,
       hasTeacherClash: false,
       workloadExceeded: false,
-      reason: 'Program Membaca hanya untuk Tahun 1',
+      reason: 'Program Pagi (07:15–07:30) hanya untuk Tahun 1',
+    };
+  }
+
+  if (
+    targetSlotId === 'MEMBACA' &&
+    candidate.fromSlot?.slotId !== 'MEMBACA' &&
+    candidate.subjectCode.toUpperCase() !== 'MEMBACA'
+  ) {
+    return {
+      valid: false,
+      locked: true,
+      hasTeacherClash: false,
+      workloadExceeded: false,
+      reason: 'Slot 07:15–07:30 khusus untuk Program Pagi (Membaca / Agama)',
+    };
+  }
+
+  // Strictly reserve Wednesday & Thursday W11 (12:45-13:15 TASMIK slot) and Friday Tahun 4-6 W9 (11:45-12:15 TASMIK slot) for TASMIK only
+  if (
+    (targetDay === 'RABU' || targetDay === 'KHAMIS') &&
+    targetSlotId === 'TASMIK' &&
+    candidate.subjectCode.toUpperCase() !== 'TASMIK'
+  ) {
+    return {
+      valid: false,
+      locked: true,
+      hasTeacherClash: false,
+      workloadExceeded: false,
+      reason: 'Waktu W11 (12:45–13:15) pada hari Rabu & Khamis dikhaskan untuk TASMIK sahaja',
+    };
+  }
+
+  if (
+    targetDay === 'JUMAAT' &&
+    targetGrade >= 4 &&
+    targetSlotId === 'TASMIK' &&
+    candidate.subjectCode.toUpperCase() !== 'TASMIK'
+  ) {
+    return {
+      valid: false,
+      locked: true,
+      hasTeacherClash: false,
+      workloadExceeded: false,
+      reason: 'Waktu W9 (11:45–12:15) pada hari Jumaat bagi Tahun 4–6 dikhaskan untuk TASMIK sahaja',
     };
   }
 
@@ -351,10 +395,28 @@ export function evaluateSlotDropRadar(
     : [targetDay];
   const simGrid = cloneGridForDays(grid, affectedDays);
 
-  const existingTargetCell = simGrid[targetGrade]?.[targetDay]?.[targetSlotId] || null;
+  const rawTargetCell = simGrid[targetGrade]?.[targetDay]?.[targetSlotId] || null;
+  const isEmptyManualPlaceholder = (c: TimetableCell | null) =>
+    Boolean(c && c.isManualSlot && !c.teacherCode?.trim());
+  const existingTargetCell = isEmptyManualPlaceholder(rawTargetCell) ? null : rawTargetCell;
   let movedCell: TimetableCell;
 
   if (candidate.fromSlot) {
+    const { grade: fGrade, day: fDay, slotId: fSlot } = candidate.fromSlot;
+    if (
+      existingTargetCell &&
+      existingTargetCell.subjectCode?.toUpperCase() !== 'TASMIK' &&
+      (((fDay === 'RABU' || fDay === 'KHAMIS') && fSlot === 'TASMIK') ||
+        (fDay === 'JUMAAT' && fGrade >= 4 && fSlot === 'TASMIK'))
+    ) {
+      return {
+        valid: false,
+        locked: true,
+        hasTeacherClash: false,
+        workloadExceeded: false,
+        reason: 'Slot TASMIK yang dikhaskan tidak boleh ditukar dengan subjek lain',
+      };
+    }
     const srcCell = simGrid[candidate.fromSlot.grade]?.[candidate.fromSlot.day]?.[candidate.fromSlot.slotId];
     movedCell = srcCell
       ? { ...srcCell }
@@ -367,7 +429,8 @@ export function evaluateSlotDropRadar(
           isCoTeaching: candidate.isCoTeaching,
           periodLength: targetSlotId === 'MEMBACA' ? 0.5 : 1,
         };
-    simGrid[candidate.fromSlot.grade][candidate.fromSlot.day][candidate.fromSlot.slotId] = existingTargetCell;
+    simGrid[candidate.fromSlot.grade][candidate.fromSlot.day][candidate.fromSlot.slotId] =
+      existingTargetCell;
   } else {
     movedCell = {
       subjectId: candidate.subjectId || candidate.subjectCode.toLowerCase(),
@@ -377,7 +440,10 @@ export function evaluateSlotDropRadar(
       secondaryTeacherCode: candidate.secondaryTeacherCode,
       isCoTeaching: candidate.isCoTeaching,
       periodLength: targetSlotId === 'MEMBACA' ? 0.5 : 1,
-      isManualSlot: targetSlotId === 'TASMIK' || targetSlotId === 'MEMBACA',
+      isManualSlot:
+        targetSlotId === 'TASMIK' ||
+        targetSlotId === 'MEMBACA' ||
+        candidate.subjectCode.toUpperCase() === 'TASMIK',
     };
   }
 

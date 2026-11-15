@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   generateAutoSchedule,
   auditScheduleWorkload,
+  createEmptyScheduleGrid,
   resetScheduleSignature,
 } from '../src/components/Timetable/autoScheduler';
 import { DAYS_OF_WEEK, DayOfWeek } from '../src/components/Timetable/types';
@@ -11,6 +12,10 @@ import {
 } from '../src/constants/defaultCurriculumMatrix';
 import {
   runTimetableEngine,
+  countDistinctSubjectsOnDay,
+  canAddSubjectToClassDay,
+  canSafelyAssignBlockToDay,
+  normalizeDistinctSubjectGroup,
   ClassProfile,
   TeacherProfile,
   SubjectAssignment,
@@ -76,6 +81,11 @@ for (let seed = 0; seed < 5; seed++) {
     0,
     `Seed ${seed}: PJ slot violation found (must be W1 or W2, max 1/day): ${audit.violations.join('; ')}`
   );
+  assert.equal(
+    audit.pkNotSameDayAsPjViolations,
+    0,
+    `Seed ${seed}: PK must be scheduled on the same day as a PJ period: ${audit.violations.join('; ')}`
+  );
 
   // Verify heavy teachers (W >= 26) have balanced daily distributions (no Friday starvation)
   const heavyCodes = ['DT', 'LCI', 'LSC', 'VY', 'JW', 'MFA', 'NCY'];
@@ -130,8 +140,21 @@ for (let seed = 0; seed < 5; seed++) {
         );
       }
     }
+
+    const pkDays = DAYS_OF_WEEK.filter((day) =>
+      Object.values(res.grid[grade]?.[day] || {}).some((c) => c?.subjectCode?.toUpperCase() === 'PK')
+    );
+    const pjDaySet = new Set(pjEntries.map((e) => e.day));
+    if (pjDaySet.size > 0 && pkDays.length > 0) {
+      pkDays.forEach((pkDay) => {
+        assert.ok(
+          pjDaySet.has(pkDay),
+          `Seed ${seed} T.${grade}: PK on ${pkDay} is NOT on any PJ day (${Array.from(pjDaySet).join(', ')})`
+        );
+      });
+    }
   }
-  console.log(`    ✓ Passed audit | pjW2Count=${w2Total} | pmPaiViolations=${audit.pmPaiBlockViolations} | isValidWorkload=${audit.isValidWorkload}`);
+  console.log(`    ✓ Passed audit | pjW2Count=${w2Total} | pkPjSameDay=OK | pmPaiViolations=${audit.pmPaiBlockViolations} | isValidWorkload=${audit.isValidWorkload}`);
 }
 
 console.log(`\n  ✓ Average runtime over 5 runs: ${(totalTimeMs / 5).toFixed(1)} ms/run`);
@@ -272,6 +295,72 @@ for (const [cid, expected] of Object.entries(expectedSignatures)) {
 }
 console.log('  ✓ Passed runTimetableEngine strict PM/PAI [2,2,1] / [2,2] / [2,1] checks!');
 
+// --------------------------------------------------------------------------
+// PART 4: PK same-day-as-PJ & {PJ, PK} counts as 1 distinct subject checks
+// --------------------------------------------------------------------------
+console.log('\n[PART 4] Verifying {PJ, PK} counts as 1 subject & PK-same-day-as-PJ enforcement...');
+assert.equal(normalizeDistinctSubjectGroup('PJ'), 'PJPK');
+assert.equal(normalizeDistinctSubjectGroup('PK'), 'PJPK');
+assert.equal(
+  countDistinctSubjectsOnDay([
+    { subjectCode: 'BC' },
+    { subjectCode: 'BC' },
+    { subjectCode: 'BM' },
+    { subjectCode: 'BM' },
+    { subjectCode: 'MT' },
+    { subjectCode: 'PJ' },
+    { subjectCode: 'PK' },
+  ]),
+  4,
+  '{PJ, PK} together with BC, BM, MT must count as 4 distinct subjects (PJ+PK=1)'
+);
+
+const tahap1DayWith4 = [
+  { subjectCode: 'BC' },
+  { subjectCode: 'BC' },
+  { subjectCode: 'BM' },
+  { subjectCode: 'BM' },
+  { subjectCode: 'MT' },
+  { subjectCode: 'PJ' },
+];
+assert.equal(
+  canAddSubjectToClassDay(tahap1DayWith4, 'PK', 1, 2),
+  true,
+  'Adding PK to a Tahap 1 day that already has 4 subjects including PJ must be allowed ({PJ, PK}=1)'
+);
+assert.equal(
+  canAddSubjectToClassDay(tahap1DayWith4, 'MZ', 1, 2),
+  false,
+  'Adding an unrelated 5th subject MZ to a Tahap 1 day with 4 subjects must still be blocked'
+);
+assert.equal(
+  canSafelyAssignBlockToDay({
+    dayMaxPeriods: 7,
+    currentDayLessons: tahap1DayWith4,
+    candidateSubjectCode: 'PK',
+    blockLength: 1,
+    classLevel: 2,
+  }),
+  true,
+  'canSafelyAssignBlockToDay must treat PJ+PK as 1 subject when filling final period'
+);
+
+// Audit check: PK on a non-PJ day must fail auditScheduleWorkload; PK on a PJ day passes and counts as 1 subject
+const testGrid = createEmptyScheduleGrid('2027');
+testGrid[4]['ISNIN']['W1'] = { subjectId: 'pj', subjectCode: 'PJ', subjectName: 'PJ', teacherCode: 'KL', periodLength: 1 };
+testGrid[4]['RABU']['W1'] = { subjectId: 'pj', subjectCode: 'PJ', subjectName: 'PJ', teacherCode: 'KL', periodLength: 1 };
+testGrid[4]['ISNIN']['W3'] = { subjectId: 'pk', subjectCode: 'PK', subjectName: 'PK', teacherCode: 'KL', periodLength: 1 };
+const okAudit = auditScheduleWorkload(testGrid, ['KL'], '2027');
+assert.equal(okAudit.pkNotSameDayAsPjViolations, 0, 'PK on ISNIN with PJ on ISNIN must have 0 violations');
+
+testGrid[4]['ISNIN']['W3'] = null;
+testGrid[4]['SELASA']['W3'] = { subjectId: 'pk', subjectCode: 'PK', subjectName: 'PK', teacherCode: 'KL', periodLength: 1 };
+const badAudit = auditScheduleWorkload(testGrid, ['KL'], '2027');
+assert.equal(badAudit.pkNotSameDayAsPjViolations, 1, 'PK on SELASA when PJ is on ISNIN/RABU must trigger violation');
+assert.equal(badAudit.isValidWorkload, false, 'Workload audit must be invalid when PK is not on a PJ day');
+
+console.log('  ✓ Passed {PJ, PK}=1 subject & PK-same-day-as-PJ checks!');
+
 console.log('\n================================================================');
-console.log('ALL WORKLOAD CAP, EVEN SPREAD, PJ GAP & PM/PAI DOUBLE TESTS PASSED (100%)');
+console.log('ALL WORKLOAD CAP, EVEN SPREAD, PJ GAP & PK-PJ TESTS PASSED (100%)');
 console.log('================================================================');

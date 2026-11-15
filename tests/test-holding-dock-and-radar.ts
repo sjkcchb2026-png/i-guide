@@ -190,6 +190,175 @@ const { grid } = generateAutoSchedule(matrix, classTeachers, '2027', 0);
   console.log('✓ 5. TASMIK Gabung Kelas exemption verified in Drag Radar');
 }
 
+// 6. Universal grade-0 TASMIK quick-drag template & Grid->Grid TASMIK drag across grades/days/slots + Gabung Kelas cap check
+{
+  const simGrid = createEmptyScheduleGrid('2027');
+  // MFA already has 7 regular classes on RABU (W1..W7 on T.2) + concurrent TASMIK on T.1 & T.2 RABU (12:45-13:15)
+  // Actual daily load for MFA = 7 + 1 (Gabung Kelas) = 8.0!
+  ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7'].forEach((sid) => {
+    simGrid[2]['RABU'][sid] = {
+      subjectId: 'pai',
+      subjectCode: 'PAI',
+      subjectName: 'PENDIDIKAN ISLAM',
+      teacherCode: 'MFA',
+      periodLength: 1,
+    };
+  });
+  simGrid[1]['RABU']['TASMIK'] = {
+    subjectId: 'tasmik_t1',
+    subjectCode: 'TASMIK',
+    subjectName: 'PROGRAM TASMIK',
+    teacherCode: 'MFA',
+    periodLength: 1,
+    isManualSlot: true,
+  };
+  simGrid[2]['RABU']['TASMIK'] = {
+    subjectId: 'tasmik_t2',
+    subjectCode: 'TASMIK',
+    subjectName: 'PROGRAM TASMIK',
+    teacherCode: 'MFA',
+    periodLength: 1,
+    isManualSlot: true,
+  };
+
+  // Universal template chip (grade: 0) dragging TASMIK into Tahun 3 RABU TASMIK (concurrent 12:45-13:15 Gabung Kelas) -> must still be valid (load remains 8.0)!
+  const rQuickTasmik = evaluateSlotDropRadar(
+    simGrid,
+    { grade: 0, subjectCode: 'TASMIK', subjectName: 'PROGRAM TASMIK', teacherCode: 'MFA' },
+    3,
+    'RABU',
+    'TASMIK',
+    '2027'
+  );
+  assert.equal(
+    rQuickTasmik.valid,
+    true,
+    `Universal grade-0 TASMIK chip dropping for Gabung Kelas must stay GREEN (8.0w), got: ${rQuickTasmik.reason}`
+  );
+
+  // Grid->Grid drag of TASMIK from T.1 RABU TASMIK to T.1 KHAMIS W10 (custom slot relocation) -> must be valid GREEN!
+  const rMoveTasmik = evaluateSlotDropRadar(
+    simGrid,
+    {
+      grade: 1,
+      subjectCode: 'TASMIK',
+      subjectName: 'PROGRAM TASMIK',
+      teacherCode: 'MFA',
+      fromSlot: { grade: 1, day: 'RABU', slotId: 'TASMIK' },
+    },
+    1,
+    'KHAMIS',
+    'W9',
+    '2027'
+  );
+  assert.equal(rMoveTasmik.valid, true, 'Grid->Grid dragging TASMIK onto KHAMIS W9 must be GREEN');
+
+  // Guard: regular lesson cannot be dropped onto Tahun 1 07:15-07:30 MEMBACA slot
+  const rBlockedMembaca = evaluateSlotDropRadar(
+    simGrid,
+    { grade: 1, subjectCode: 'BM', teacherCode: 'KL' },
+    1,
+    'ISNIN',
+    'MEMBACA',
+    '2027'
+  );
+  assert.equal(rBlockedMembaca.valid, false);
+  assert.equal(rBlockedMembaca.locked, true, 'Regular subject drop onto MEMBACA morning slot must be locked');
+
+  // Guard: regular lesson cannot be dropped onto RABU/KHAMIS W11 (TASMIK slot 12:45-13:15)
+  const rBlockedWedW11 = evaluateSlotDropRadar(
+    simGrid,
+    { grade: 3, subjectCode: 'BM', teacherCode: 'LMI' },
+    3,
+    'RABU',
+    'TASMIK',
+    '2027'
+  );
+  assert.equal(rBlockedWedW11.valid, false);
+  assert.equal(rBlockedWedW11.locked, true, 'Regular subject drop onto RABU W11 (TASMIK slot) must be locked');
+
+  const rBlockedThuW11 = evaluateSlotDropRadar(
+    simGrid,
+    { grade: 4, subjectCode: 'MT', teacherCode: 'KL' },
+    4,
+    'KHAMIS',
+    'TASMIK',
+    '2027'
+  );
+  assert.equal(rBlockedThuW11.valid, false);
+  assert.equal(rBlockedThuW11.locked, true, 'Regular subject drop onto KHAMIS W11 (TASMIK slot) must be locked');
+
+  // TASMIK dropped onto KHAMIS W11 (TASMIK slot) must be GREEN
+  const rAllowThuW11Tasmik = evaluateSlotDropRadar(
+    simGrid,
+    { grade: 0, subjectCode: 'TASMIK', subjectName: 'PROGRAM TASMIK', teacherCode: 'MFA' },
+    4,
+    'KHAMIS',
+    'TASMIK',
+    '2027'
+  );
+  assert.equal(rAllowThuW11Tasmik.valid, true, 'TASMIK drop onto KHAMIS W11 (TASMIK slot) must be allowed');
+
+  // Guard: regular lesson cannot be dropped onto JUMAAT W9 (TASMIK slot 11:45-12:15) for Tahun 4-6
+  for (const grade of [4, 5, 6]) {
+    const rBlockedFriW9 = evaluateSlotDropRadar(
+      simGrid,
+      { grade, subjectCode: 'BM', teacherCode: 'LMI' },
+      grade,
+      'JUMAAT',
+      'TASMIK',
+      '2027'
+    );
+    assert.equal(rBlockedFriW9.valid, false, `Tahun ${grade} JUMAAT W9 must block non-TASMIK drop`);
+    assert.equal(rBlockedFriW9.locked, true, `Tahun ${grade} JUMAAT W9 must report locked=true for non-TASMIK`);
+
+    const rAllowFriW9Tasmik = evaluateSlotDropRadar(
+      simGrid,
+      { grade: 0, subjectCode: 'TASMIK', subjectName: 'PROGRAM TASMIK', teacherCode: 'MFA' },
+      grade,
+      'JUMAAT',
+      'TASMIK',
+      '2027'
+    );
+    assert.equal(rAllowFriW9Tasmik.valid, true, `Tahun ${grade} JUMAAT W9 must allow TASMIK drop`);
+  }
+
+  // Guard: dragging out of reserved JUMAAT Tahun 5 W9 TASMIK cannot swap with an occupied non-TASMIK cell
+  simGrid[5]['JUMAAT']['TASMIK'] = {
+    subjectId: 'tasmik_t5',
+    subjectCode: 'TASMIK',
+    subjectName: 'PROGRAM TASMIK',
+    teacherCode: 'MFA',
+    periodLength: 1,
+    isManualSlot: true,
+  };
+  simGrid[5]['JUMAAT']['W6'] = {
+    subjectId: 'bm',
+    subjectCode: 'BM',
+    subjectName: 'BAHASA MELAYU',
+    teacherCode: 'JW',
+    periodLength: 1,
+  };
+  const rBlockedSwapOutFriW9 = evaluateSlotDropRadar(
+    simGrid,
+    {
+      grade: 5,
+      subjectCode: 'TASMIK',
+      subjectName: 'PROGRAM TASMIK',
+      teacherCode: 'MFA',
+      fromSlot: { grade: 5, day: 'JUMAAT', slotId: 'TASMIK' },
+    },
+    5,
+    'JUMAAT',
+    'W6',
+    '2027'
+  );
+  assert.equal(rBlockedSwapOutFriW9.valid, false);
+  assert.equal(rBlockedSwapOutFriW9.locked, true, 'Swapping out of reserved JUMAAT W9 TASMIK into non-TASMIK cell must be locked');
+
+  console.log('✓ 6. Universal TASMIK drag, Grid->Grid TASMIK relocation, Wed/Thu W11 & Fri T4-6 W9 TASMIK-only lock verified');
+}
+
 console.log('\n================================================================');
 console.log('ALL HOLDING DOCK & COLLISION RADAR TESTS PASSED (100%)');
 console.log('================================================================');

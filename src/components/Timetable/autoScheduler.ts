@@ -24,6 +24,7 @@ import {
   getMaxSubjectsPerDay,
   getMaxDailyPeriodsForSubject,
   isMajorLanguageSubject,
+  normalizeDistinctSubjectGroup,
   countDistinctSubjectsOnDay,
   decomposeSubjectCompactly,
   decomposeSubjectBlocks,
@@ -317,6 +318,7 @@ export interface ScheduleAuditReport {
   pjConsecutiveViolations: number;
   pjSlotViolations: number;
   pjW2Count: number;
+  pkNotSameDayAsPjViolations: number;
   pmPaiBlockViolations: number;
   pmPaiCrossRecessCount: number;
   tahap1SubjectExcessDays: number;
@@ -364,6 +366,7 @@ export function auditScheduleWorkload(
   let pjConsecutiveViolations = 0;
   let pjSlotViolations = 0;
   let pjW2Count = 0;
+  let pkNotSameDayAsPjViolations = 0;
   let tahap1SubjectExcessDays = 0;
   let tahap1Over5Days = 0;
   let tahap2SubjectCapViolations = 0;
@@ -375,13 +378,16 @@ export function auditScheduleWorkload(
   const compactDoubleSubjects = new Set(['PSV', 'RBT', 'SEJ']);
   const gradeSubjectTotal = new Map<string, number>();
   const gradeSubjectDaySet = new Map<string, Set<DayOfWeek>>();
+  const seenTasmikKeys = new Set<string>();
 
   [1, 2, 3, 4, 5, 6].forEach((grade) => {
     const pjDays: string[] = [];
+    const pkDays: string[] = [];
 
     DAYS_OF_WEEK.forEach((day) => {
       const slots = getGradeDaySlots(grade, day, academicYear);
       let pjCountToday = 0;
+      let hasPkToday = false;
       const regularSlots = slots.filter(
         (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
       );
@@ -401,6 +407,9 @@ export function auditScheduleWorkload(
           if (s.slotId === 'W2') {
             pjW2Count++;
           }
+        }
+        if (cell.subjectCode?.toUpperCase() === 'PK') {
+          hasPkToday = true;
         }
 
         const regIdx = regularSlots.findIndex((rs) => rs.slotId === s.slotId);
@@ -422,18 +431,30 @@ export function auditScheduleWorkload(
         if (cell.subjectCode === 'PN') return; // Already counted on SELASA (+1)
         if (!cell.teacherCode || !cell.teacherCode.trim()) return;
 
+        const isTasmikCell = s.slotId === 'TASMIK' || cell.subjectCode?.toUpperCase() === 'TASMIK';
         const len = cell.periodLength ?? (s.slotId === 'PKAR' || s.slotId === 'MEMBACA' ? 0.5 : 1);
         const tList = cell.teacherCode.split('/').map((c) => c.trim()).filter(Boolean);
         tList.forEach((t) => {
           if (!dailyMap[t]) {
             dailyMap[t] = { ISNIN: 0, SELASA: 1, RABU: 0, KHAMIS: 0, JUMAAT: 0 };
           }
+          if (isTasmikCell) {
+            const tasmikKey = `${t}__${day}__${s.startMinutes}`;
+            if (seenTasmikKeys.has(tasmikKey)) return;
+            seenTasmikKeys.add(tasmikKey);
+          }
           dailyMap[t][day] += len;
         });
       });
 
-      const distinctCount = daySubPositions.size;
+      const distinctGroupsToday = new Set<string>(
+        Array.from(daySubPositions.keys()).map((k) => normalizeDistinctSubjectGroup(k))
+      );
+      const distinctCount = distinctGroupsToday.size;
       totalDistinctSubjectDays += distinctCount;
+      if (hasPkToday) {
+        pkDays.push(day);
+      }
       const maxSubjectsAllowed = getMaxSubjectsPerDay(grade);
       if (grade <= 3) {
         if (distinctCount > maxSubjectsAllowed) {
@@ -508,6 +529,18 @@ export function auditScheduleWorkload(
           );
         }
       }
+    }
+
+    // Check PK MUST be scheduled on the same day as one of the class's PJ periods
+    if (pjDays.length > 0 && pkDays.length > 0) {
+      pkDays.forEach((pkDay) => {
+        if (!pjDays.includes(pkDay)) {
+          pkNotSameDayAsPjViolations++;
+          violations.push(
+            `PK T.${grade} pada ${pkDay} tidak sama hari dengan PJ (${pjDays.join(', ')})`
+          );
+        }
+      });
     }
   });
 
@@ -654,6 +687,7 @@ export function auditScheduleWorkload(
     teachersExceedingOver7Limit === 0 &&
     pjConsecutiveViolations === 0 &&
     pjSlotViolations === 0 &&
+    pkNotSameDayAsPjViolations === 0 &&
     pmPaiBlockViolations === 0 &&
     tahap2SubjectCapViolations === 0 &&
     subjectDailyPeriodCapViolations === 0 &&
@@ -667,6 +701,7 @@ export function auditScheduleWorkload(
     pjConsecutiveViolations,
     pjSlotViolations,
     pjW2Count,
+    pkNotSameDayAsPjViolations,
     pmPaiBlockViolations,
     pmPaiCrossRecessCount,
     tahap1SubjectExcessDays,
@@ -1060,7 +1095,8 @@ function runSingleScheduleAttempt(
         // Priority 4: Core multi-day [2]/[3] blocks (BC, BM, BI, MT, SN) — ensures shared MT/BC/BM teachers get clean slots
         // Priority 5: 2-period elective blocks (PSV, RBT, SEJ)
         // Priority 6: [1] blocks of languages / MT / SN
-        // Priority 7: 1-period PK / MZ (placed last so they never fragment 2-slot pairs!)
+        // Priority 6.5: 1-period PK (placed onto PJ days after core [1]-blocks; {PJ, PK}=1 subject so distinct cap never blocks)
+        // Priority 7: 1-period MZ (placed last so it never fragments 2-slot pairs!)
         const isElectiveDouble = ['PSV', 'RBT', 'SEJ'].includes(code);
         const pri =
           len >= 2
@@ -1069,6 +1105,8 @@ function runSingleScheduleAttempt(
               : isElectiveDouble
               ? 5
               : 4
+            : code === 'PK'
+            ? 6.5
             : isMinorSingleSubject
             ? 7
             : 6;
@@ -1250,19 +1288,39 @@ function runSingleScheduleAttempt(
       const friBiasA = dayA === 'JUMAAT' && maxWeekly >= 24 ? -0.45 : 0;
       const friBiasB = dayB === 'JUMAAT' && maxWeekly >= 24 ? -0.45 : 0;
 
+      // For heavy teachers (>=25w), weight daily load strongly so light days (3-4w) fill before heavy days reach 6-7w
+      const loadWeight = maxWeekly >= 25 ? 1.8 : 1.0;
+
       // Gentle tie-breaker toward fewer distinct subjects on that day
       const subjTieA = cntA === 0 ? infoA.distinctCount * 0.15 : 0;
       const subjTieB = cntB === 0 ? infoB.distinctCount * 0.15 : 0;
 
-      return (loadA + parityBiasA + friBiasA + subjTieA + dayNoise[dayA]) - (loadB + parityBiasB + friBiasB + subjTieB + dayNoise[dayB]);
+      return (loadA * loadWeight + parityBiasA + friBiasA + subjTieA + dayNoise[dayA]) - (loadB * loadWeight + parityBiasB + friBiasB + subjTieB + dayNoise[dayB]);
     });
   };
 
-  // Helper: Check PJ day constraints
+  // Helper: Check PJ day & PK same-day-as-PJ constraints
   const getScheduledPJDaysForGrade = (grade: number): DayOfWeek[] => {
     return DAYS_OF_WEEK.filter((d) =>
       Object.values(grid[grade]?.[d] || {}).some((c) => c && c.subjectCode.toUpperCase() === 'PJ')
     );
+  };
+
+  const gradeHasPJ = (grade: number): boolean =>
+    cleanMatrix.some((r) => r.subjectCode.toUpperCase() === 'PJ' && Number(r.periods[grade] || 0) > 0);
+
+  const getScheduledPKDaysForGrade = (grade: number): DayOfWeek[] => {
+    return DAYS_OF_WEEK.filter((d) =>
+      Object.values(grid[grade]?.[d] || {}).some((c) => c && c.subjectCode.toUpperCase() === 'PK')
+    );
+  };
+
+  const isDayAllowedForSubject = (grade: number, day: DayOfWeek, subjectCode: string): boolean => {
+    const code = subjectCode.trim().toUpperCase();
+    if (code === 'PK' && gradeHasPJ(grade)) {
+      return getScheduledPJDaysForGrade(grade).includes(day);
+    }
+    return true;
   };
 
   const canPlacePJOnDay = (grade: number, day: DayOfWeek, strictYear1Gap: boolean): boolean => {
@@ -1394,6 +1452,7 @@ function runSingleScheduleAttempt(
       const stage1Cap = Math.max(personalCap, block.length >= 3 ? Math.min(7, block.length + 1) : personalCap);
       const capStages = [
         { dailyCap: stage1Cap, enforceBreaks: true, allowCrossRecess: false, allowOver7: false, strictY1P4: true, maxSubjects: baseMaxSubjects, preferMergeOnly: true, checkFeasible: true },
+        { dailyCap: stage1Cap, enforceBreaks: true, allowCrossRecess: false, allowOver7: false, strictY1P4: true, maxSubjects: baseMaxSubjects, preferMergeOnly: false, checkFeasible: true },
         { dailyCap: 7, enforceBreaks: true, allowCrossRecess: false, allowOver7: false, strictY1P4: true, maxSubjects: baseMaxSubjects, preferMergeOnly: true, checkFeasible: true },
         { dailyCap: 7, enforceBreaks: false, allowCrossRecess: false, allowOver7: false, strictY1P4: false, maxSubjects: baseMaxSubjects, preferMergeOnly: false, checkFeasible: true },
         { dailyCap: 8, enforceBreaks: false, allowCrossRecess: false, allowOver7: true, strictY1P4: false, maxSubjects: baseMaxSubjects, preferMergeOnly: false, checkFeasible: false },
@@ -1418,6 +1477,7 @@ function runSingleScheduleAttempt(
 
         for (const day of daysOrder) {
           if (placed) break;
+          if (!isDayAllowedForSubject(block.grade, day, block.subjectCode)) continue;
 
           const dayInfo = getGradeDayRegularInfo(block.grade, day, block.subjectCode);
 
@@ -1783,6 +1843,7 @@ function runSingleScheduleAttempt(
       for (const day of daysOrder) {
         if (placed) break;
         if (block.subjectCode === 'PJ' && !canPlacePJOnDay(block.grade, day, false)) continue;
+        if (!isDayAllowedForSubject(block.grade, day, block.subjectCode)) continue;
 
         const allSlots = getGradeDaySlots(block.grade, day, academicYear);
         const candidateSlots = allSlots.filter(
@@ -1801,7 +1862,18 @@ function runSingleScheduleAttempt(
         for (let sIdx = 0; sIdx <= validSlots.length - block.length; sIdx++) {
           const slotGroup = validSlots.slice(sIdx, sIdx + block.length);
           const cells = slotGroup.map((s) => grid[block.grade][day][s.slotId]);
-          if (cells.some((c) => !c || c.isLocked || c.subjectCode === 'PM/PAI' || c.subjectCode.toUpperCase() === block.subjectCode.toUpperCase())) continue;
+          if (
+            cells.some(
+              (c) =>
+                !c ||
+                c.isLocked ||
+                c.subjectCode === 'PM/PAI' ||
+                c.subjectCode.toUpperCase() === block.subjectCode.toUpperCase() ||
+                (c.subjectCode.toUpperCase() === 'PJ' && getScheduledPKDaysForGrade(block.grade).includes(day))
+            )
+          ) {
+            continue;
+          }
 
           // Never evict half of an existing consecutive [2]/[3] block (prevents breaking SEJ/MT/PSV/RBT/languages!)
           const evictsPartOfDouble = slotGroup.some((sg, i) => {
@@ -1948,6 +2020,7 @@ function runSingleScheduleAttempt(
               for (const altDay of altDaysSorted) {
                 if (evictedPlaced) break;
                 if (evictedCell.subjectCode === 'PJ' && !canPlacePJOnDay(block.grade, altDay, false)) continue;
+                if (!isDayAllowedForSubject(block.grade, altDay, evictedCell.subjectCode)) continue;
 
                 const altSlots = getGradeDaySlots(block.grade, altDay, academicYear).filter(
                   (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
@@ -2091,10 +2164,11 @@ function runSingleScheduleAttempt(
           if (grid[block.grade][targetDay][emptySlot.slotId] !== null) continue;
 
           if (
-            block.subjectCode === 'PJ' &&
-            ((emptySlot.slotId !== 'W1' && emptySlot.slotId !== 'W2') || !canPlacePJOnDay(block.grade, targetDay, false))
+            !isDayAllowedForSubject(block.grade, targetDay, block.subjectCode) ||
+            (block.subjectCode === 'PJ' &&
+              ((emptySlot.slotId !== 'W1' && emptySlot.slotId !== 'W2') || !canPlacePJOnDay(block.grade, targetDay, false)))
           ) {
-            // Skip direct PJ placement if slot/day violates PJ rule
+            // Skip direct placement if slot/day violates PJ or PK-same-day-as-PJ rule
           } else {
             const tInfo = getGradeDayRegularInfo(block.grade, targetDay, block.subjectCode);
             const tPos = tInfo.regularSlots.findIndex((rs) => rs.slotId === emptySlot.slotId);
@@ -2236,20 +2310,25 @@ function runSingleScheduleAttempt(
                 (candRegIdx + 1 < candSlots.length && grid[block.grade][candDay][candSlots[candRegIdx + 1].slotId]?.subjectCode === candCell.subjectCode);
               if (candHasAdjSame) continue;
 
-              // Guard block PJ restrictions at candSlot
+              // Guard block PJ & PK restrictions at candSlot
               if (block.subjectCode === 'PJ') {
                 if (candSlot.slotId !== 'W1' && candSlot.slotId !== 'W2') continue;
                 if (!canPlacePJOnDay(block.grade, candDay, false)) continue;
               }
+              if (!isDayAllowedForSubject(block.grade, candDay, block.subjectCode)) continue;
 
-              // Guard candCell PJ restrictions at emptySlot
+              // Guard candCell PJ & PK restrictions at emptySlot
               if (candCell.subjectCode === 'PJ') {
                 if (emptySlot.slotId !== 'W1' && emptySlot.slotId !== 'W2') continue;
                 if (candDay !== targetDay) {
+                  if (getScheduledPKDaysForGrade(block.grade).includes(candDay)) continue;
                   const otherPjDays = getScheduledPJDaysForGrade(block.grade).filter((d) => d !== candDay);
                   if (otherPjDays.includes(targetDay)) continue;
                   if (block.grade >= 2 && isPJConsecutiveDayViolated(block.grade, otherPjDays, targetDay)) continue;
                 }
+              }
+              if (candDay !== targetDay && !isDayAllowedForSubject(block.grade, targetDay, candCell.subjectCode)) {
+                continue;
               }
 
               if (candDay !== targetDay) {
@@ -2357,6 +2436,7 @@ function runSingleScheduleAttempt(
           for (const targetDay of targetDaysSorted) {
             if (placed) break;
             if (block.subjectCode === 'PJ' && !canPlacePJOnDay(block.grade, targetDay, false)) continue;
+            if (!isDayAllowedForSubject(block.grade, targetDay, block.subjectCode)) continue;
             const targetAllSlots = getGradeDaySlots(block.grade, targetDay, academicYear).filter(
               (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
             );
@@ -2656,6 +2736,7 @@ function runSingleScheduleAttempt(
             for (const destA of aSlots) {
               if (grid[block.grade][dayA][destA.slotId] !== null) continue;
               if (isKP2027Year1 && block.grade === 1 && destA.slotId === 'W4') continue;
+              if (!isDayAllowedForSubject(block.grade, dayA, occCell.subjectCode)) continue;
               const aInfo = getGradeDayRegularInfo(block.grade, dayA, occCell.subjectCode);
               const aPos = aInfo.regularSlots.findIndex((rs) => rs.slotId === destA.slotId);
               if (
@@ -2729,14 +2810,18 @@ function runSingleScheduleAttempt(
     grade: number,
     relaxY1W4Subject: boolean = false
   ): boolean => {
-    // PJ is strictly Period 1 or Period 2 only
+    // PJ is strictly Period 1 or Period 2 only; PK must stay on a PJ day; PJ cannot leave a day that has PK
     if (cell.subjectCode === 'PJ') {
       if (toSlot.slotId !== 'W1' && toSlot.slotId !== 'W2') return false;
       if (fromDay !== toDay) {
+        if (getScheduledPKDaysForGrade(grade).includes(fromDay)) return false;
         const remainingPjDays = getScheduledPJDaysForGrade(grade).filter((d) => d !== fromDay);
         if (remainingPjDays.includes(toDay)) return false;
         if (grade >= 2 && isPJConsecutiveDayViolated(grade, remainingPjDays, toDay)) return false;
       }
+    }
+    if (fromDay !== toDay && !isDayAllowedForSubject(grade, toDay, cell.subjectCode)) {
+      return false;
     }
 
     // Never break ANY consecutive [2]/[3] block during gap compaction (same-day or cross-day!)
@@ -4964,6 +5049,12 @@ function runSingleScheduleAttempt(
 
             for (const mItem of daySingles) {
               if (mItem.cell.subjectCode === oCell.subjectCode) continue;
+              if (
+                !isDayAllowedForSubject(grade, otherDay, mItem.cell.subjectCode) ||
+                !isDayAllowedForSubject(grade, day, oCell.subjectCode)
+              ) {
+                continue;
+              }
               unbookSlots(grade, day, [mItem.slot]);
               unbookSlots(grade, otherDay, [oSlot]);
 
@@ -5251,6 +5342,12 @@ function runSingleScheduleAttempt(
                               if (isKP2027Year1 && otherG === 1 && os.slotId === 'W4') continue;
                               const oc = grid[otherG][oDay][os.slotId];
                               if (!oc || oc.isLocked || oc.subjectCode === 'PJ' || oc.subjectCode === 'PM/PAI' || oc.subjectCode === cCell.subjectCode) continue;
+                              if (
+                                !isDayAllowedForSubject(otherG, day, oc.subjectCode) ||
+                                !isDayAllowedForSubject(otherG, oDay, cCell.subjectCode)
+                              ) {
+                                continue;
+                              }
                               const oAdj =
                                 (oi > 0 && grid[otherG][oDay][oAllO[oi - 1].slotId]?.subjectCode === oc.subjectCode) ||
                                 (oi + 1 < oAllO.length && grid[otherG][oDay][oAllO[oi + 1].slotId]?.subjectCode === oc.subjectCode);
@@ -6179,12 +6276,14 @@ function runSingleScheduleAttempt(
               if (swapped) break;
               const cellHigh = grid[grade]?.[highDay]?.[sHigh.slotId];
               if (!cellHigh || cellHigh.isLocked || cellHigh.subjectCode === 'PJ') continue;
+              if (!isDayAllowedForSubject(grade, lowDay, cellHigh.subjectCode)) continue;
               const highTeachers = cellHigh.teacherCode.split('/').map((x) => x.trim()).filter(Boolean);
               if (!highTeachers.includes(targetT)) continue;
 
               for (const sLow of lowSlots) {
                 const cellLow = grid[grade]?.[lowDay]?.[sLow.slotId];
                 if (!cellLow || cellLow.isLocked || cellLow.subjectCode === 'PJ') continue;
+                if (!isDayAllowedForSubject(grade, highDay, cellLow.subjectCode)) continue;
                 const lowTeachers = cellLow.teacherCode.split('/').map((x) => x.trim()).filter(Boolean);
                 if (lowTeachers.some((lt) => highTeachers.includes(lt))) continue;
 
@@ -6374,7 +6473,6 @@ function runSingleScheduleAttempt(
                   unbookSlots(grade, lowDay, [sLow]);
                   bookSlots(grade, lowDay, [sLow], cellLow);
                 }
-                if (highPerm) highPerm.restore();
               }
             }
 
@@ -6639,7 +6737,6 @@ function runSingleScheduleAttempt(
                     bookSlots(grade, lowDay, [ls1], lc1);
                     bookSlots(grade, lowDay, [ls2], lc2);
                   }
-                  if (highPermB) highPermB.restore();
                 }
               }
             }
@@ -6674,6 +6771,7 @@ function runSingleScheduleAttempt(
                   const sHigh = highSlots[hi];
                   const cellHigh = grid[grade]?.[highDay]?.[sHigh.slotId];
                   if (!cellHigh || cellHigh.isLocked || cellHigh.subjectCode === 'PJ' || cellHigh.subjectCode === 'PM/PAI') continue;
+                  if (!isDayAllowedForSubject(grade, lowDay, cellHigh.subjectCode)) continue;
                   if (isKP2027Year1 && grade === 1 && sHigh.slotId === 'W4') continue;
                   const highTeachers = cellHigh.teacherCode.split('/').map((x) => x.trim()).filter(Boolean);
                   if (!highTeachers.includes(targetT)) continue;
@@ -6817,6 +6915,7 @@ function runSingleScheduleAttempt(
         for (const tDay of uDays) {
           if (uPlaced) break;
           if (block.subjectCode === 'PJ' && !canPlacePJOnDay(block.grade, tDay, false)) continue;
+          if (!isDayAllowedForSubject(block.grade, tDay, block.subjectCode)) continue;
           const tSlots = getGradeDaySlots(block.grade, tDay, academicYear).filter(
             (s) => !s.isRecess && s.slotId !== 'PKAR' && s.slotId !== 'MEMBACA' && s.slotId !== 'TASMIK'
           );
@@ -6883,6 +6982,8 @@ function runSingleScheduleAttempt(
                 const pCell = grid[block.grade][pDay][pSlot.slotId];
                 if (!pCell || pCell.isLocked || pCell.subjectCode === 'PJ' || pCell.subjectCode === 'PM/PAI') continue;
                 if (pCell.subjectCode.toUpperCase() === block.subjectCode.toUpperCase()) continue;
+                if (!isDayAllowedForSubject(block.grade, tDay, pCell.subjectCode)) continue;
+                if (!isDayAllowedForSubject(block.grade, pDay, block.subjectCode)) continue;
                 if (block.subjectCode === 'PJ') {
                   if (pSlot.slotId !== 'W1' && pSlot.slotId !== 'W2') continue;
                   if (!canPlacePJOnDay(block.grade, pDay, false)) continue;
@@ -7119,6 +7220,9 @@ function scoreCandidateAttempt(
   if (audit.pjConsecutiveViolations === 0 && audit.pjSlotViolations === 0) score += 2_000_000;
   else score -= (audit.pjConsecutiveViolations + audit.pjSlotViolations) * 200_000;
 
+  if (audit.pkNotSameDayAsPjViolations === 0) score += 2_500_000;
+  else score -= audit.pkNotSameDayAsPjViolations * 500_000;
+
   if (audit.pmPaiBlockViolations === 0) score += 2_500_000;
   else score -= audit.pmPaiBlockViolations * 400_000;
   score -= audit.pmPaiCrossRecessCount * 5_000;
@@ -7231,6 +7335,7 @@ export function generateAutoSchedule(
       candidate.unplaced.length === 0 &&
       candidate.clashes.length === 0 &&
       candidate.audit.isValidWorkload &&
+      candidate.audit.pkNotSameDayAsPjViolations === 0 &&
       candidate.audit.pmPaiBlockViolations === 0 &&
       candidate.audit.pmPaiCrossRecessCount === 0 &&
       candidate.audit.tahap2SubjectCapViolations === 0 &&
