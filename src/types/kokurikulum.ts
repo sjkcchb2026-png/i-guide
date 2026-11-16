@@ -23,8 +23,85 @@ export type StudentCommitteeRole =
   | 'AJK' 
   | 'Ahli Biasa';
 
+export type SumbanganKategori =
+  | 'Sumbangan Lembaga Pengurus Sekolah (LPS / 董事会)'
+  | 'Sumbangan PIBG (家教协会)'
+  | 'Sumbangan YB / Wakil Rakyat'
+  | 'Sumbangan Ibu Bapa / Individu Prihatin'
+  | 'Sumbangan Syarikat Swasta / NGO / Komuniti'
+  | 'Sumbangan Guru / Tanggungan Sendiri'
+  | 'Tiada Kos (RM 0.00)'
+  | 'Lain-lain / Bantuan Sekolah (BKK/BSS)';
+
+export const SUMBANGAN_KATEGORI_OPTIONS: SumbanganKategori[] = [
+  'Sumbangan Lembaga Pengurus Sekolah (LPS / 董事会)',
+  'Sumbangan PIBG (家教协会)',
+  'Sumbangan YB / Wakil Rakyat',
+  'Sumbangan Ibu Bapa / Individu Prihatin',
+  'Sumbangan Syarikat Swasta / NGO / Komuniti',
+  'Sumbangan Guru / Tanggungan Sendiri',
+  'Tiada Kos (RM 0.00)',
+  'Lain-lain / Bantuan Sekolah (BKK/BSS)',
+];
+
+export const COMMUNITY_SUMBANGAN_CATEGORIES: SumbanganKategori[] = [
+  'Sumbangan Lembaga Pengurus Sekolah (LPS / 董事会)',
+  'Sumbangan PIBG (家教协会)',
+  'Sumbangan YB / Wakil Rakyat',
+  'Sumbangan Ibu Bapa / Individu Prihatin',
+  'Sumbangan Syarikat Swasta / NGO / Komuniti',
+];
+
+export function isSumbanganCommunityLinked(
+  kategori?: string,
+  list?: string[],
+  jumlahSumbanganRM?: number
+): boolean {
+  const candidates = [kategori, ...(list || [])]
+    .filter(Boolean)
+    .map((x) => String(x));
+  if (
+    candidates.some((c) =>
+      COMMUNITY_SUMBANGAN_CATEGORIES.some((comm) => comm === c) ||
+      /LPS|PIBG|YB|IBU BAPA|SWASTA|NGO|KOMUNITI/i.test(c)
+    )
+  ) {
+    return true;
+  }
+  return Boolean(
+    jumlahSumbanganRM &&
+      jumlahSumbanganRM > 0 &&
+      !candidates.some((c) => /TIADA KOS/i.test(c))
+  );
+}
+
+export function computeTotalPerbelanjaan(costs: {
+  kosMakanMinum?: number;
+  kosPengangkutan?: number;
+  kosYuranBahan?: number;
+  kosLain?: number;
+}): number {
+  const sum =
+    (Number(costs.kosMakanMinum) || 0) +
+    (Number(costs.kosPengangkutan) || 0) +
+    (Number(costs.kosYuranBahan) || 0) +
+    (Number(costs.kosLain) || 0);
+  return Math.round(sum * 100) / 100;
+}
+
+export interface SumberPeruntukanEntry {
+  sumber: string;
+  namaPenyumbang?: string;
+  jumlahRM: number;
+  noBaucarResit?: string;
+}
+
 export interface KokoActivity {
   id?: string;
+  status?: 'DRAF_PRA_PERTANDINGAN' | 'SELESAI';
+  sppkGeneratedAt?: string;
+  dutyRegisteredToRelief?: boolean;
+
   jenis: 'pertandingan' | 'aktiviti';
   programName: string;
   organizer: string;
@@ -45,26 +122,28 @@ export interface KokoActivity {
   unit?: string;
   masa?: string;
 
-  // SKPM Kualiti@Sekolah (SKAS) Standard 3.2 & Standard 5 Linkage
+  // SKPM Kualiti@Sekolah (SKAS) Standard 3.2, Standard 5 & Dual-Link Std 2 (Aspek 2.7.1 / A9)
   skpmStandardCode?: string;
   skpmStandardTitle?: string;
   skpmAspekTitle?: string;
   skpmKualitiStatement?: string;
   skpmStandard5Code?: string;
   skpmStandard5Label?: string;
+  skpmAspek271Linked?: boolean;
+  skpmAspek271Label?: string;
   linkedMaklumanTaskId?: string;
-  
+
   // Teacher roles separation
   jurulatih: string[];        // Coach / Trainer names
   guruPengiring: string[];    // Accompanying Chaperone names
   officers?: string;          // Legacy text
   teacherName?: string;       // Legacy single teacher
-  
+
   // Student participation (Supports Zero-Student Rule: participantCount === 0)
   participantCount: number;
   studentIds?: string[];
   studentNames?: string[];
-  
+
   // Conditional for 'pertandingan'
   pencapaian?: KokoPencapaianTier | string;
   pengiktirafan?: (KokoPengiktirafanType | string)[];
@@ -75,6 +154,20 @@ export interface KokoActivity {
     achievement: string;
     prize?: string;
   }[];
+
+  // Financial Tracking: Sumbangan / Penaja & Pecahan Perbelanjaan (RM)
+  kategoriSumbangan?: SumbanganKategori | string;
+  kategoriSumbanganList?: string[];
+  namaPenyumbang?: string;
+  jumlahSumbanganRM?: number;
+  kosMakanMinum?: number;
+  kosPengangkutan?: number;
+  kosYuranBahan?: number;
+  kosLain?: number;
+  jumlahPerbelanjaanRM?: number;
+  paparAmaunPadaOPR?: boolean;
+  noBaucarResit?: string;
+  sumberPeruntukanList?: SumberPeruntukanEntry[];
 
   // Documentation & Summary
   objective1?: string;
@@ -88,7 +181,7 @@ export interface KokoActivity {
   kelemahanCadangan?: string;
   tindakanSusulan?: string;
   images: string[];
-  
+
   // Metadata
   createdBy: string;
   academicYear: string;

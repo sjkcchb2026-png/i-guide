@@ -112,6 +112,19 @@ function buildStandaloneHtml(
         box-shadow: none !important;
         border: none !important;
       }
+      .print-portrait-page {
+        page-break-after: always;
+        break-after: page;
+        box-shadow: none !important;
+        border: none !important;
+        margin: 0 !important;
+        max-width: none !important;
+        width: 100% !important;
+      }
+      .print-portrait-page:last-child {
+        page-break-after: auto;
+        break-after: auto;
+      }
     }
   </style>
 </head>

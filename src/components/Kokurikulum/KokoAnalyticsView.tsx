@@ -2,11 +2,12 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   BarChart3, Users, Award, Calendar, Trophy, 
   TrendingUp, Shield, ChevronRight, X, Filter,
-  CheckCircle2, ArrowUpRight, School, Sparkles
+  CheckCircle2, ArrowUpRight, School, Sparkles, HeartHandshake
 } from 'lucide-react';
 import { db } from '../../lib/firebase';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { Student, UserProfile } from '../../types';
+import KokoAnnualSumbanganReport from './KokoAnnualSumbanganReport';
 import { 
   KokoActivity, 
   KokoGroup, 
@@ -58,7 +59,7 @@ interface DrillDownModalData {
 
 export default function KokoAnalyticsView({ profile }: Props) {
   const { schoolCode: activeSchoolCode } = useSchoolTenant();
-  const [activePillar, setActivePillar] = useState<'guru' | 'murid' | 'kehadiran' | 'pencapaian'>('guru');
+  const [activePillar, setActivePillar] = useState<'guru' | 'murid' | 'kehadiran' | 'pencapaian' | 'sumbangan'>('guru');
 
   const [activities, setActivities] = useState<KokoActivity[]>([]);
   const [groups, setGroups] = useState<KokoGroup[]>([]);
@@ -416,8 +417,8 @@ export default function KokoAnalyticsView({ profile }: Props) {
         </div>
       </div>
 
-      {/* 4 Pillars Nav Tabs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {/* 5 Pillars Nav Tabs */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
           {
             id: 'guru' as const,
@@ -446,6 +447,13 @@ export default function KokoAnalyticsView({ profile }: Props) {
             sub: 'Johan hingga Penyertaan',
             icon: Trophy,
             color: 'amber'
+          },
+          {
+            id: 'sumbangan' as const,
+            label: '5. Sumbangan & Penaja',
+            sub: 'LPS / PIBG / YB & Audit',
+            icon: HeartHandshake,
+            color: 'emerald'
           }
         ].map(pillar => {
           const isSelected = activePillar === pillar.id;
@@ -727,6 +735,14 @@ export default function KokoAnalyticsView({ profile }: Props) {
             })}
           </div>
         </div>
+      )}
+
+      {/* ================= PILLAR 5: SUMBANGAN & KEWANGAN PERTANDINGAN ================= */}
+      {activePillar === 'sumbangan' && (
+        <KokoAnnualSumbanganReport
+          activities={activities}
+          preparedByName={profile?.name}
+        />
       )}
 
       {/* ================= DRILL-DOWN MODAL ================= */}

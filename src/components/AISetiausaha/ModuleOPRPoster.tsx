@@ -154,16 +154,14 @@ export const ModuleOPRPoster: React.FC<ModuleOPRPosterProps> = ({
       'Std 5': 0,
     };
     savedDocs.forEach((d) => {
-      if (d.skpmBucket && counts[d.skpmBucket] !== undefined) {
-        counts[d.skpmBucket] += 1;
-      }
-      if (
-        d.secondarySkpmBucket &&
-        d.secondarySkpmBucket !== d.skpmBucket &&
-        counts[d.secondarySkpmBucket] !== undefined
-      ) {
-        counts[d.secondarySkpmBucket] += 1;
-      }
+      const buckets = new Set<SKPMRadarBucket>();
+      if (d.skpmBucket) buckets.add(d.skpmBucket);
+      if (d.secondarySkpmBucket) buckets.add(d.secondarySkpmBucket);
+      (d.additionalSkpmBuckets || []).forEach((b) => buckets.add(b));
+      if (d.skpmAspek271Linked) buckets.add('Std 2');
+      buckets.forEach((b) => {
+        if (counts[b] !== undefined) counts[b] += 1;
+      });
     });
     return counts;
   }, [savedDocs]);
@@ -171,7 +169,11 @@ export const ModuleOPRPoster: React.FC<ModuleOPRPosterProps> = ({
   const filteredSavedDocs = useMemo(() => {
     if (radarFilter === 'ALL') return savedDocs;
     return savedDocs.filter(
-      (d) => d.skpmBucket === radarFilter || d.secondarySkpmBucket === radarFilter
+      (d) =>
+        d.skpmBucket === radarFilter ||
+        d.secondarySkpmBucket === radarFilter ||
+        (d.additionalSkpmBuckets || []).includes(radarFilter) ||
+        (d.skpmAspek271Linked && radarFilter === 'Std 2')
     );
   }, [savedDocs, radarFilter]);
 
@@ -875,6 +877,11 @@ export const ModuleOPRPoster: React.FC<ModuleOPRPosterProps> = ({
                     {doc.secondarySkpmBucket && (
                       <span className="px-1.5 py-0.5 rounded bg-amber-950/90 text-amber-300 border border-amber-800/60">
                         + {doc.secondarySkpmBucket}
+                      </span>
+                    )}
+                    {(doc.skpmAspek271Linked || (doc.additionalSkpmBuckets || []).includes('Std 2')) && (
+                      <span className="px-1.5 py-0.5 rounded bg-sky-950/90 text-sky-300 border border-sky-800/60">
+                        + A9 / 2.7.1 Sumbangan
                       </span>
                     )}
                     {doc.sourceModule === 'KOKURIKULUM_OPR' && (

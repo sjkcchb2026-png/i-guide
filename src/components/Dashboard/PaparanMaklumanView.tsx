@@ -27,7 +27,8 @@ import {
   BarChart2,
   Cake,
   Gift,
-  Heart
+  Heart,
+  ClipboardList
 } from 'lucide-react';
 import {
   collection,
@@ -47,6 +48,7 @@ import { filterStaffBirthdays, StaffBirthdayInfo } from '../../utils/birthdayUti
 import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 import type { MaklumanOPRPrefill } from '../Kokurikulum/KokoSmartOPRManager';
+import SPPKCompetitionFormsModal, { SPPKInitialData } from '../Kokurikulum/SPPKCompetitionFormsModal';
 
 export type MaklumanDomain = 'KURIKULUM' | 'HEM' | 'KOKURIKULUM' | 'PENTADBIRAN' | 'CUTI';
 
@@ -248,10 +250,18 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
   const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName, isLegacySchool } = useSchoolTenant();
   const [items, setItems] = useState<MaklumanTaskItem[]>([]);
   const [kokoActivities, setKokoActivities] = useState<
-    Array<{ id: string; programName?: string; date?: string; linkedMaklumanTaskId?: string; skpmStandardCode?: string }>
+    Array<{
+      id: string;
+      status?: string;
+      programName?: string;
+      date?: string;
+      linkedMaklumanTaskId?: string;
+      skpmStandardCode?: string;
+    }>
   >([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [uploadingTakwim, setUploadingTakwim] = useState<boolean>(false);
+  const [sppkPrefill, setSppkPrefill] = useState<SPPKInitialData | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Internal Toast for graceful fallback if addToast prop is omitted
@@ -557,6 +567,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
           .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
           .map((d) => ({
             id: d.id,
+            status: String(d.data().status || ''),
             programName: String(d.data().programName || ''),
             date: String(d.data().date || ''),
             linkedMaklumanTaskId: String(d.data().linkedMaklumanTaskId || ''),
@@ -1796,6 +1807,28 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                           });
 
                           const existingOprId = linkedOprId || matchedOpr?.id;
+                          const isPraDraft = matchedOpr?.status === 'DRAF_PRA_PERTANDINGAN';
+                          if (existingOprId && isPraDraft) {
+                            return (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenKokoOPR({
+                                    maklumanTaskId: item.id,
+                                    openEditId: existingOprId,
+                                    programName: item.title,
+                                    date: item.dueDate,
+                                    venue: item.location || '',
+                                  })
+                                }
+                                className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/50 text-xs font-black flex items-center gap-1.5 transition cursor-pointer"
+                                title="Lengkapkan Keputusan, Sumbangan & OPR (Fasa 2)"
+                              >
+                                <Award className="w-3.5 h-3.5" />
+                                <span>🟡 Kemas Kini OPR (Fasa 2)</span>
+                              </button>
+                            );
+                          }
                           if (existingOprId) {
                             return (
                               <button
@@ -1844,6 +1877,28 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                             </button>
                           );
                         })()}
+
+                        {item.category === 'PERTANDINGAN' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSppkPrefill({
+                                programName: item.title,
+                                date: item.dueDate,
+                                masa: item.dueTime || '',
+                                venue: item.location || '',
+                                guruPengiring: resolvedCurrentTeacher?.fullName
+                                  ? [resolvedCurrentTeacher.fullName]
+                                  : undefined,
+                              })
+                            }
+                            className="px-3 py-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                            title="Jana Pakej Borang SPPK 1, SPPK 2 & SPPK 3 (Auto-APDM)"
+                          >
+                            <ClipboardList className="w-3.5 h-3.5" />
+                            <span>Borang SPPK 1-3</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -2145,6 +2200,26 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
           </div>
         </div>
       )}
+      <SPPKCompetitionFormsModal
+        isOpen={Boolean(sppkPrefill)}
+        onClose={() => setSppkPrefill(null)}
+        schoolCode={activeSchoolCode}
+        schoolName={schoolProfile?.schoolName || tenantSchoolName}
+        schoolLogo={schoolProfile?.schoolLogo || schoolProfile?.logoUrl}
+        schoolSettings={schoolProfile || null}
+        currentUser={
+          resolvedCurrentTeacher
+            ? ({
+                uid: resolvedCurrentTeacher.teacherId,
+                name: resolvedCurrentTeacher.fullName,
+                email: resolvedCurrentTeacher.email || '',
+                role: (resolvedCurrentTeacher.role as any) || 'GURU',
+                schoolCode: activeSchoolCode,
+              } as UserProfile)
+            : null
+        }
+        initialData={sppkPrefill}
+      />
     </div>
   );
 };

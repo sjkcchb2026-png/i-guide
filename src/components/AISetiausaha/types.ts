@@ -32,6 +32,8 @@ export interface OPRPosterDocument {
   sourceModule?: 'AI_SETIAUSAHA' | 'KOKURIKULUM_OPR' | 'KOKURIKULUM_MEETING';
   sourceActivityId?: string;
   secondarySkpmBucket?: SKPMRadarBucket;
+  additionalSkpmBuckets?: SKPMRadarBucket[];
+  skpmAspek271Linked?: boolean;
   skpmCodeBadge?: string;
   peringkat?: string;
   pencapaian?: string;

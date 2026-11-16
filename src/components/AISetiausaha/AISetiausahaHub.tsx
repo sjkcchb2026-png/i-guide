@@ -50,6 +50,7 @@ import { ModuleOPRPoster } from './ModuleOPRPoster';
 import { ModuleMemoMesyuarat } from './ModuleMemoMesyuarat';
 import { ModuleMinitMesyuarat } from './ModuleMinitMesyuarat';
 import { ModuleSuratLantikan } from './ModuleSuratLantikan';
+import SPPKCompetitionFormsModal from '../Kokurikulum/SPPKCompetitionFormsModal';
 
 enum OperationType {
   CREATE = 'create',
@@ -146,6 +147,7 @@ export const AISetiausahaHub: React.FC<AISetiausahaHubProps> = ({
 
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showSppkModal, setShowSppkModal] = useState<boolean>(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -344,6 +346,17 @@ export const AISetiausahaHub: React.FC<AISetiausahaHubProps> = ({
               manualCode: act.skpmStandardCode,
             });
             const hasStd5 = Boolean(skpmSpec.standard5Code || act.jenis === 'pertandingan');
+            const hasSumbangan271 = Boolean(
+              act.skpmAspek271Linked ||
+                (act.kategoriSumbangan &&
+                  !/TIADA KOS/i.test(act.kategoriSumbangan) &&
+                  /LPS|PIBG|YB|IBU BAPA|SWASTA|NGO|KOMUNITI/i.test(act.kategoriSumbangan)) ||
+                (act.jumlahSumbanganRM && act.jumlahSumbanganRM > 0)
+            );
+            const badgeParts: string[] = [skpmSpec.code];
+            if (skpmSpec.standard5Code) badgeParts.push(`Std ${skpmSpec.standard5Code}`);
+            if (hasSumbangan271) badgeParts.push('2.7.1 / A9');
+
             const synthesizedOpr: OPRPosterDocument = {
               id: `koko_legacy_${d.id}`,
               docKind: 'OPR',
@@ -360,9 +373,9 @@ export const AISetiausahaHub: React.FC<AISetiausahaHubProps> = ({
                   : 'Jurulatih / Guru Penasihat Kokurikulum',
               skpmBucket: 'Std 3.2',
               secondarySkpmBucket: hasStd5 ? 'Std 5' : undefined,
-              skpmCodeBadge: skpmSpec.standard5Code
-                ? `${skpmSpec.code} + Std ${skpmSpec.standard5Code}`
-                : skpmSpec.code,
+              additionalSkpmBuckets: hasSumbangan271 ? ['Std 2'] : undefined,
+              skpmAspek271Linked: hasSumbangan271,
+              skpmCodeBadge: badgeParts.join(' + '),
               skpmStandard: act.skpmStandardTitle || skpmSpec.standardTitle,
               skpmAspek: act.skpmAspekTitle || skpmSpec.aspekTitle,
               skpmStandardKualiti: act.skpmKualitiStatement || skpmSpec.kualitiStatement,
@@ -674,6 +687,14 @@ export const AISetiausahaHub: React.FC<AISetiausahaHubProps> = ({
             </div>
             <button
               type="button"
+              onClick={() => setShowSppkModal(true)}
+              className="px-4 py-2.5 rounded-2xl bg-indigo-600/25 hover:bg-indigo-600 text-indigo-200 hover:text-white text-xs font-bold flex items-center gap-1.5 border border-indigo-500/40 cursor-pointer transition"
+            >
+              <ClipboardList className="w-3.5 h-3.5" />
+              <span>Borang SPPK 1-3</span>
+            </button>
+            <button
+              type="button"
               onClick={loadWorkspaceData}
               disabled={loading}
               className="px-4 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 border border-slate-700 cursor-pointer disabled:opacity-50"
@@ -959,6 +980,15 @@ export const AISetiausahaHub: React.FC<AISetiausahaHubProps> = ({
           onDeleteDoc={handleDeleteDoc}
         />
       )}
+      <SPPKCompetitionFormsModal
+        isOpen={showSppkModal}
+        onClose={() => setShowSppkModal(false)}
+        schoolCode={activeSchoolCode}
+        schoolName={schoolName}
+        schoolLogo={schoolLogo}
+        schoolSettings={schoolSettings}
+        currentUser={currentUser}
+      />
     </div>
   );
 };
