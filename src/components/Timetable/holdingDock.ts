@@ -15,6 +15,7 @@ import {
   getGradeDaySlots,
 } from './types';
 import { auditScheduleWorkload, autoPairPKARInGrid } from './autoScheduler';
+import { getAllCellTeacherCodes } from '../../utils/lampiranData';
 
 export interface UnscheduledLessonCard {
   id: string;
@@ -37,6 +38,9 @@ export interface DragLessonCandidate {
   teacherCode: string;
   secondaryTeacherCode?: string;
   isCoTeaching?: boolean;
+  isPemulihan?: boolean;
+  pemulihanTeacherCode?: string;
+  pemulihanManualOverride?: boolean;
   fromSlot?: {
     grade: number;
     day: DayOfWeek;
@@ -220,17 +224,14 @@ function findMinuteLevelClash(
   grade: number,
   day: DayOfWeek,
   slotId: string,
-  subjectCode: string,
-  teacherCode: string,
-  academicYear: string
+  cell: TimetableCell,
+  academicYear: string,
+  guruPemulihanCode?: string
 ): string | null {
-  const sCode = (subjectCode || '').toUpperCase();
+  const sCode = (cell.subjectCode || '').toUpperCase();
   if (sCode === 'PN' || slotId === 'MEMBACA') return null;
 
-  const teachers = (teacherCode || '')
-    .split('/')
-    .map((c) => c.trim())
-    .filter(Boolean);
+  const teachers = getAllCellTeacherCodes(cell, guruPemulihanCode);
   if (teachers.length === 0) return null;
 
   const targetSlot = getGradeDaySlots(grade, day, academicYear).find((s) => s.slotId === slotId);
@@ -242,7 +243,7 @@ function findMinuteLevelClash(
     for (const os of otherSlots) {
       if (os.isRecess || os.slotId === 'MEMBACA') continue;
       const otherCell = grid[otherGrade]?.[day]?.[os.slotId];
-      if (!otherCell || !otherCell.teacherCode) continue;
+      if (!otherCell) continue;
 
       const otherSub = (otherCell.subjectCode || '').toUpperCase();
       if (otherSub === 'PN') continue;
@@ -257,10 +258,7 @@ function findMinuteLevelClash(
         continue;
       }
 
-      const otherTeachers = otherCell.teacherCode
-        .split('/')
-        .map((c) => c.trim())
-        .filter(Boolean);
+      const otherTeachers = getAllCellTeacherCodes(otherCell, guruPemulihanCode);
       const clashTeacher = teachers.find((t) => otherTeachers.includes(t));
       if (clashTeacher) {
         return `Bertembung (${clashTeacher}): Tahun ${otherGrade} ${otherCell.subjectCode} (${os.startTime}-${os.endTime})`;
@@ -282,7 +280,8 @@ export function evaluateSlotDropRadar(
   targetDay: DayOfWeek,
   targetSlotId: string,
   academicYear: string = '2027',
-  extraTeachers: string[] = []
+  extraTeachers: string[] = [],
+  guruPemulihanCode?: string
 ): SlotRadarStatus {
   if (
     targetSlotId === 'REHAT' ||
@@ -456,9 +455,9 @@ export function evaluateSlotDropRadar(
     targetGrade,
     targetDay,
     targetSlotId,
-    movedCell.subjectCode,
-    movedCell.teacherCode,
-    academicYear
+    movedCell,
+    academicYear,
+    guruPemulihanCode
   );
   if (targetClash) {
     return {
@@ -477,9 +476,9 @@ export function evaluateSlotDropRadar(
       candidate.fromSlot.grade,
       candidate.fromSlot.day,
       candidate.fromSlot.slotId,
-      existingTargetCell.subjectCode,
-      existingTargetCell.teacherCode,
-      academicYear
+      existingTargetCell,
+      academicYear,
+      guruPemulihanCode
     );
     if (srcClash) {
       return {
@@ -492,19 +491,17 @@ export function evaluateSlotDropRadar(
     }
   }
 
-  // 3. Check <= 8.0 daily hard cap for affected teachers (incl. Year 1 W4 +0.5 PKAR)
+  // 3. Check <= 8.0 daily hard cap for affected teachers (incl. Year 1 W4 +0.5 PKAR & Pemulihan)
   const affectedTeachers = new Set<string>(extraTeachers);
-  [movedCell.teacherCode, existingTargetCell?.teacherCode]
-    .filter(Boolean)
-    .forEach((tc) =>
-      String(tc)
-        .split('/')
-        .map((c) => c.trim())
-        .filter(Boolean)
-        .forEach((c) => affectedTeachers.add(c))
-    );
+  getAllCellTeacherCodes(movedCell, guruPemulihanCode).forEach((c) => affectedTeachers.add(c));
+  getAllCellTeacherCodes(existingTargetCell, guruPemulihanCode).forEach((c) => affectedTeachers.add(c));
 
-  const report = auditScheduleWorkload(simGrid, Array.from(affectedTeachers), academicYear);
+  const report = auditScheduleWorkload(
+    simGrid,
+    Array.from(affectedTeachers),
+    academicYear,
+    guruPemulihanCode
+  );
   for (const tCode of affectedTeachers) {
     const summary = report.teachers[tCode];
     if (!summary) continue;

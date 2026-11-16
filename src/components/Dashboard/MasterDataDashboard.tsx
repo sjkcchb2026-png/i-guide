@@ -714,6 +714,7 @@ export default function MasterDataDashboard({
   const [showTeacherModal, setShowTeacherModal] = useState(false);
   const [teacherForm, setTeacherForm] = useState<Partial<PersonnelProfile>>({
     name: '', ic: '', gender: 'L', email: '', phone: '', employmentStatus: 'Tetap', teachingStatus: 'Aktif',
+    isGuruPemulihan: false,
     portfolios: [], committees: [], coordinators: [], additionalResponsibilities: []
   });
 
@@ -726,7 +727,7 @@ export default function MasterDataDashboard({
   const openTeacherModal = (teacher: PersonnelProfile | null) => {
     if (teacher) {
       setEditingTeacher(teacher);
-      setTeacherForm(teacher);
+      setTeacherForm({ ...teacher, isGuruPemulihan: Boolean((teacher as any).isGuruPemulihan) });
       // Load their governance assignments for the selected academic year
       const matching = governanceAssignments.filter(ga => ga.personnelId === teacher.id);
       setTeacherAssignments(matching.map(ga => ({
@@ -743,6 +744,7 @@ export default function MasterDataDashboard({
       setEditingTeacher(null);
       setTeacherForm({
         name: '', ic: '', gender: 'L', email: '', phone: '', employmentStatus: 'Tetap', teachingStatus: 'Aktif',
+        isGuruPemulihan: false,
         portfolios: [], committees: [], coordinators: [], additionalResponsibilities: []
       });
       setTeacherAssignments([]);
@@ -792,6 +794,7 @@ export default function MasterDataDashboard({
         apcReceived: teacherForm.apcReceived || '',
         employmentStatus: teacherForm.employmentStatus || 'Tetap',
         teachingStatus: teacherForm.teachingStatus || 'Aktif',
+        isGuruPemulihan: Boolean(teacherForm.isGuruPemulihan),
         portfolios: pNames,
         committees: cNames,
         coordinators: coNames,
@@ -2622,7 +2625,14 @@ export default function MasterDataDashboard({
                       {personnel.map((p, idx) => (
                         <tr key={`${p.id}_${idx}`} className="hover:bg-slate-50/50 transition-colors">
                           <td className="px-6 py-4 text-slate-900 uppercase">
-                            <div>{p.name}</div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span>{p.name}</span>
+                              {Boolean((p as any).isGuruPemulihan) && (
+                                <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                  Guru Pemulihan (PBM/PMT)
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[10px] text-slate-400 italic mt-0.5">{p.employmentStatus} ({p.gender})</div>
                           </td>
                           <td className="px-6 py-4 font-mono text-slate-500">{p.ic}</td>
@@ -4737,6 +4747,26 @@ export default function MasterDataDashboard({
                     <option value="Sambilan">Sambilan</option>
                   </select>
                 </div>
+              </div>
+
+              {/* Peranan Guru Pemulihan Khas (PBM / PMT) */}
+              <div className="border-t border-slate-100 pt-4">
+                <label className="flex items-start gap-3 p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 cursor-pointer hover:bg-emerald-50 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(teacherForm.isGuruPemulihan)}
+                    onChange={(e) => setTeacherForm({ ...teacherForm, isGuruPemulihan: e.target.checked })}
+                    className="mt-0.5 w-4 h-4 rounded border-emerald-400 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <div>
+                    <div className="text-xs font-black uppercase text-emerald-900">
+                      Guru Pemulihan Khas (PBM / PMT)
+                    </div>
+                    <p className="text-[11px] font-semibold text-emerald-700 mt-0.5 leading-snug">
+                      Tandakan jika guru ini memegang jawatan Guru Pemulihan Khas. Waktu Pemulihan Bahasa Melayu (PBM) &amp; Pemulihan Matematik (PMT) dalam Jadual Waktu akan dipautkan secara automatik ke jadual peribadi guru ini.
+                    </p>
+                  </div>
+                </label>
               </div>
 
               {/* Tagging / Responsibilities */}

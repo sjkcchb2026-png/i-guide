@@ -147,7 +147,8 @@
         "email": { "type": "string", "maxLength": 100 },
         "phone": { "type": "string", "maxLength": 30 },
         "employmentStatus": { "type": "string", "maxLength": 30 },
-        "teachingStatus": { "type": "string", "maxLength": 30 }
+        "teachingStatus": { "type": "string", "maxLength": 30 },
+        "isGuruPemulihan": { "type": "boolean" }
       },
       "required": ["name", "category"]
     },
@@ -160,7 +161,8 @@
         "schoolCode": { "type": "string", "maxLength": 30 },
         "name": { "type": "string", "maxLength": 100 },
         "email": { "type": "string", "maxLength": 100 },
-        "role": { "type": "string", "maxLength": 50 }
+        "role": { "type": "string", "maxLength": 50 },
+        "isGuruPemulihan": { "type": "boolean" }
       },
       "required": ["name"]
     },

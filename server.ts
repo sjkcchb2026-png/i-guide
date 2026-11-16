@@ -2584,6 +2584,7 @@ async function startServer() {
       majorOption,
       minorOption,
       phone,
+      isGuruPemulihan,
     } = req.body;
 
     if (!name || (!email && !ic)) {
@@ -2645,6 +2646,7 @@ async function startServer() {
         committees: committees || [],
         coordinators: coordinators || [],
         additionalResponsibilities: additionalResponsibilities || [],
+        isGuruPemulihan: Boolean(isGuruPemulihan),
         updatedAt: FieldValue.serverTimestamp(),
       };
       if (cleanIc) payload.ic = cleanIc;
@@ -2663,6 +2665,7 @@ async function startServer() {
         gender: payload.gender,
         grade: payload.grade,
         role: payload.position || 'GURU',
+        isGuruPemulihan: Boolean(isGuruPemulihan),
         status: 'Aktif',
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });

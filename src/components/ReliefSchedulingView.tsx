@@ -31,6 +31,7 @@ import {
   orderBy,
   updateDoc,
   setDoc,
+  getDoc,
   getDocs
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
@@ -44,9 +45,13 @@ import { OFFICIAL_TEACHERS, generateTeacherShortCode } from '../constants/offici
 import {
   AbsenceSyncSourceRecord,
   AutoReliefSlotItem,
+  StaffDirectoryRecord,
+  buildTeacherIdentifierIndex,
   dateStrToDayOfWeek,
   detectAbsentTeachersForDate,
+  formatCleanAbsentTeacherNames,
   generateAutoReliefPlan,
+  sanitizeAbsentTeacherInput,
 } from '../utils/autoReliefEngine';
 import {
   PrasekolahTimetableDoc,
@@ -56,6 +61,7 @@ import {
 export interface ReliefAlertRecord {
   id: string;
   suratId?: string;
+  reliefScheduleId?: string;
   perkara: string;
   noRujukanLuar: string;
   startDate: string;
@@ -111,11 +117,23 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
   const isLegacySchool = isLegacyDefaultSchool(activeSchoolCode);
 
   // Teachers directory
-  const [teacherList, setTeacherList] = useState<Array<{ id: string; name: string; email: string; code: string; phone?: string }>>([]);
+  const [teacherList, setTeacherList] = useState<
+    Array<{
+      id: string;
+      uid?: string;
+      masterStaffId?: string;
+      aliasIds: string[];
+      name: string;
+      email: string;
+      code: string;
+      phone?: string;
+    }>
+  >([]);
   const [scheduleGrid, setScheduleGrid] = useState<ScheduleGrid>(createEmptyScheduleGrid());
   const [prasekolahTimetable, setPrasekolahTimetable] = useState<PrasekolahTimetableDoc | null>(null);
   const [activeAcademicYear, setActiveAcademicYear] = useState<string>('2027');
   const [absenceRecords, setAbsenceRecords] = useState<AbsenceSyncSourceRecord[]>([]);
+  const [unavailabilityRecords, setUnavailabilityRecords] = useState<AbsenceSyncSourceRecord[]>([]);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   // Modal for Scheduling
@@ -172,33 +190,99 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
     let isMounted = true;
     async function loadDirectoryAndSchedule() {
       try {
-        const [usersSnap, personnelSnap, timetableSnap, absSnap, praSnap] = await Promise.all([
+        const [
+          usersSnap,
+          personnelSnap,
+          masterTeachersSnap,
+          staffDirSnap,
+          timetableSnap,
+          absSnap,
+          unavailSnap,
+          praSnap,
+        ] = await Promise.all([
           getDocs(collection(db, 'users')).catch(() => ({ docs: [] })),
           getDocs(collection(db, 'personnel')).catch(() => ({ docs: [] })),
+          getDocs(collection(db, 'master_teachers')).catch(() => ({ docs: [] })),
+          getDocs(collection(db, 'staff_directory')).catch(() => ({ docs: [] })),
           getDocs(collection(db, 'school_timetables')).catch(() => ({ docs: [] })),
           getDocs(collection(db, 'absence_records')).catch(() => ({ docs: [] })),
+          getDocs(collection(db, 'staff_unavailability')).catch(() => ({ docs: [] })),
           getDocs(collection(db, 'prasekolah_timetables')).catch(() => ({ docs: [] })),
         ]);
 
-        const map = new Map<string, { id: string; name: string; email: string; code: string; phone?: string }>();
+        type MergedTeacher = {
+          id: string;
+          uid?: string;
+          masterStaffId?: string;
+          aliasIds: string[];
+          name: string;
+          email: string;
+          code: string;
+          phone?: string;
+        };
+        const map = new Map<string, MergedTeacher>();
         const seenCodes = new Set<string>();
 
-        const addUniqueTeacher = (entry: { id: string; name: string; email: string; code: string; phone?: string }) => {
+        const addOrMergeTeacher = (entry: {
+          id: string;
+          uid?: string;
+          masterStaffId?: string;
+          aliasIds?: string[];
+          name: string;
+          email: string;
+          code: string;
+          phone?: string;
+        }) => {
           const cleanCode = (entry.code || '').trim().toUpperCase();
           const cleanEmail = (entry.email || '').trim().toLowerCase();
-          const cleanNameUpper = (entry.name || '').trim().toUpperCase();
-          if (!cleanCode || seenCodes.has(cleanCode)) return;
-          const alreadyExists = Array.from(map.values()).some(
+          const cleanNameUpper = (entry.name || '').replace(/\s+/g, ' ').trim().toUpperCase();
+          const incomingAliases = [
+            entry.id,
+            entry.uid,
+            entry.masterStaffId,
+            entry.code,
+            ...(entry.aliasIds || []),
+          ]
+            .filter(Boolean)
+            .map((a) => String(a).trim());
+
+          const existing = Array.from(map.values()).find(
             (p) =>
+              (cleanCode && p.code === cleanCode) ||
               (cleanEmail && p.email.trim().toLowerCase() === cleanEmail) ||
+              (entry.id && (p.id === entry.id || p.aliasIds.includes(entry.id))) ||
+              (entry.uid && (p.uid === entry.uid || p.aliasIds.includes(entry.uid))) ||
               (cleanNameUpper &&
+                cleanNameUpper.length >= 3 &&
                 (p.name.toUpperCase() === cleanNameUpper ||
                   p.name.toUpperCase().includes(cleanNameUpper) ||
                   cleanNameUpper.includes(p.name.toUpperCase())))
           );
-          if (alreadyExists) return;
+
+          if (existing) {
+            const aliasSet = new Set<string>([...existing.aliasIds, ...incomingAliases]);
+            existing.aliasIds = Array.from(aliasSet);
+            if (!existing.uid && entry.uid) existing.uid = entry.uid;
+            if (!existing.masterStaffId && entry.masterStaffId) {
+              existing.masterStaffId = entry.masterStaffId;
+            }
+            if (!existing.email && entry.email) existing.email = entry.email;
+            if (!existing.phone && entry.phone) existing.phone = entry.phone;
+            return;
+          }
+
+          if (!cleanCode || seenCodes.has(cleanCode)) return;
           seenCodes.add(cleanCode);
-          map.set(entry.id, { ...entry, code: cleanCode });
+          map.set(entry.id, {
+            id: entry.id,
+            uid: entry.uid,
+            masterStaffId: entry.masterStaffId,
+            aliasIds: Array.from(new Set(incomingAliases)),
+            name: entry.name,
+            email: entry.email,
+            code: cleanCode,
+            phone: entry.phone,
+          });
         };
 
         personnelSnap.docs.forEach((d) => {
@@ -206,8 +290,45 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
           if (!belongsToSchool(data, activeSchoolCode)) return;
           const cleanName = (data.name || data.fullName || d.id).replace(/\s+/g, ' ').trim();
           const code = data.code || generateTeacherShortCode(cleanName);
-          addUniqueTeacher({
+          addOrMergeTeacher({
             id: d.id,
+            uid: data.uid || data.userId || undefined,
+            masterStaffId: data.masterStaffId || data.staffId || undefined,
+            aliasIds: [d.id, data.uid, data.userId, data.teacherId, data.masterStaffId, data.staffId].filter(Boolean),
+            name: cleanName,
+            email: data.email || '',
+            code,
+            phone: data.phone || data.mobilePhone || '',
+          });
+        });
+
+        masterTeachersSnap.docs.forEach((d) => {
+          const data = d.data();
+          if (!belongsToSchool(data, activeSchoolCode)) return;
+          const cleanName = (data.name || data.fullName || d.id).replace(/\s+/g, ' ').trim();
+          const code = data.code || data.shortCode || generateTeacherShortCode(cleanName);
+          addOrMergeTeacher({
+            id: d.id,
+            uid: data.uid || data.userId || undefined,
+            masterStaffId: d.id,
+            aliasIds: [d.id, data.uid, data.userId, data.teacherId, data.staffId].filter(Boolean),
+            name: cleanName,
+            email: data.email || '',
+            code,
+            phone: data.phone || data.mobilePhone || '',
+          });
+        });
+
+        staffDirSnap.docs.forEach((d) => {
+          const data = d.data();
+          if (!belongsToSchool(data, activeSchoolCode)) return;
+          const cleanName = (data.name || data.fullName || d.id).replace(/\s+/g, ' ').trim();
+          const code = data.code || data.shortCode || generateTeacherShortCode(cleanName);
+          addOrMergeTeacher({
+            id: d.id,
+            uid: data.uid || data.userId || undefined,
+            masterStaffId: data.masterStaffId || d.id,
+            aliasIds: [d.id, data.uid, data.userId, data.teacherId, data.masterStaffId].filter(Boolean),
             name: cleanName,
             email: data.email || '',
             code,
@@ -218,22 +339,25 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
         usersSnap.docs.forEach((d) => {
           const data = d.data();
           if (!belongsToSchool(data, activeSchoolCode)) return;
-          if (!map.has(d.id)) {
-            const cleanName = (data.name || d.id).replace(/\s+/g, ' ').trim();
-            addUniqueTeacher({
-              id: d.id,
-              name: cleanName,
-              email: data.email || '',
-              code: data.code || generateTeacherShortCode(cleanName),
-              phone: data.phone || '',
-            });
-          }
+          const cleanName = (data.name || data.fullName || d.id).replace(/\s+/g, ' ').trim();
+          addOrMergeTeacher({
+            id: d.id,
+            uid: data.uid || d.id,
+            masterStaffId: data.masterStaffId || data.staffId || undefined,
+            aliasIds: [d.id, data.uid, data.teacherId, data.masterStaffId, data.staffId].filter(Boolean),
+            name: cleanName,
+            email: data.email || '',
+            code: data.code || generateTeacherShortCode(cleanName),
+            phone: data.phone || '',
+          });
         });
 
         if (isLegacySchool) {
           OFFICIAL_TEACHERS.forEach((ot) => {
-            addUniqueTeacher({
+            addOrMergeTeacher({
               id: ot.id,
+              masterStaffId: ot.id,
+              aliasIds: [ot.id, ot.code, ot.name],
               name: ot.name,
               email: ot.email,
               code: ot.code,
@@ -250,13 +374,29 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
           }
         });
 
-        // Load timetable schedule scoped to active school if exists
+        const unavailList: AbsenceSyncSourceRecord[] = [];
+        unavailSnap.docs.forEach((d) => {
+          const data = d.data() as any;
+          if (belongsToSchool(data, activeSchoolCode)) {
+            unavailList.push({ id: d.id, ...data });
+          }
+        });
+
+        // Load timetable schedule scoped to active school if exists (prefer schedule_2027, then schedule_*)
         let loadedSchedule: ScheduleGrid = createEmptyScheduleGrid();
         let resolvedYr = '2027';
         const scopedTimetableDocs = timetableSnap.docs.filter((d) => belongsToSchool(d.data(), activeSchoolCode));
         if (scopedTimetableDocs.length > 0) {
+          const hasSchedulePayload = (d: any) => {
+            const data = d.data();
+            return Boolean(data && 'schedule' in data && data.schedule && Object.keys(data.schedule).length > 0);
+          };
           const tDoc =
-            scopedTimetableDocs.find((d) => d.id.includes('schedule_2027') || d.id.includes('schedule_')) ||
+            scopedTimetableDocs.find((d) => d.id.includes('schedule_2027') && hasSchedulePayload(d)) ||
+            scopedTimetableDocs.find((d) => d.id.includes('schedule_') && hasSchedulePayload(d)) ||
+            scopedTimetableDocs.find((d) => hasSchedulePayload(d)) ||
+            scopedTimetableDocs.find((d) => d.id.includes('schedule_2027')) ||
+            scopedTimetableDocs.find((d) => d.id.includes('schedule_')) ||
             scopedTimetableDocs[0];
           const tData = tDoc.data();
           if (tData && 'schedule' in tData && tData.schedule) {
@@ -291,6 +431,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
           setPrasekolahTimetable(loadedPraDoc);
           setActiveAcademicYear(resolvedYr);
           setAbsenceRecords(absList);
+          setUnavailabilityRecords(unavailList);
         }
       } catch (err) {
         console.warn('Load teachers/schedule error in ReliefSchedulingView:', err);
@@ -309,13 +450,26 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
 
   const teacherMappingList = useMemo(() => {
     const seen = new Set<string>();
-    const list: Array<{ id: string; num: number; code: string; name: string }> = [];
+    const list: Array<{
+      id: string;
+      uid?: string;
+      masterStaffId?: string;
+      aliasIds: string[];
+      email: string;
+      num: number;
+      code: string;
+      name: string;
+    }> = [];
     teacherList.forEach((t) => {
       const code = (t.code || '').trim().toUpperCase();
       if (!code || seen.has(code)) return;
       seen.add(code);
       list.push({
         id: t.id,
+        uid: t.uid,
+        masterStaffId: t.masterStaffId,
+        aliasIds: t.aliasIds,
+        email: t.email,
         num: list.length + 1,
         code,
         name: t.name,
@@ -326,6 +480,56 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       list,
     };
   }, [teacherList]);
+
+  const resolveAbsentCodesForAlert = (alertItem: ReliefAlertRecord): string[] => {
+    const staffDir: StaffDirectoryRecord[] = teacherList;
+    const identifierIndex = buildTeacherIdentifierIndex(teacherMappingList.list, staffDir);
+    const codeSet = new Set<string>();
+
+    const detected = detectAbsentTeachersForDate({
+      dateStr: alertItem.startDate,
+      teacherMapping: teacherMappingList,
+      staffDirectory: staffDir,
+      absenceRecords,
+      unavailabilityRecords,
+      suratAlerts: [alertItem],
+    });
+    detected.forEach((d) => codeSet.add(d.teacherCode.toUpperCase()));
+
+    // Also resolve directly from alertItem.absentTeacherIds regardless of date bounds
+    const rawIdentifiers = [
+      ...(alertItem.absentTeacherIds || []),
+      ...(alertItem.affectedClasses || []).map((c) => c.teacherId).filter(Boolean),
+    ];
+
+    rawIdentifiers.forEach((raw) => {
+      const parsed = sanitizeAbsentTeacherInput(raw);
+      const candidates = [
+        ...parsed.extractedCodes,
+        ...parsed.extractedUids,
+        ...parsed.extractedIds,
+        ...parsed.extractedEmails,
+        ...parsed.cleanNames,
+        ...parsed.cleanNames.map((n) => generateTeacherShortCode(n)),
+      ];
+      candidates.forEach((cand) => {
+        const upper = cand.trim().toUpperCase();
+        if (!upper) return;
+        const mapped = identifierIndex.get(upper) || identifierIndex.get(upper.replace(/^STAFF_/, ''));
+        if (mapped) {
+          codeSet.add(mapped);
+        } else if (cand.length >= 3) {
+          const bySubstr = teacherMappingList.list.find((t) => {
+            const tn = t.name.replace(/\s+/g, ' ').trim().toUpperCase();
+            return tn === upper || tn.includes(upper) || upper.includes(tn);
+          });
+          if (bySubstr) codeSet.add(bySubstr.code.toUpperCase());
+        }
+      });
+    });
+
+    return Array.from(codeSet);
+  };
 
   // Handle opening 1-Click scheduling modal with REAL clock-overlap & Priority 1 Same-Class Lesson Swap + Prasekolah One-Way Relief
   const recomputeModalAutoSlots = (
@@ -338,9 +542,10 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       teacherMapping: teacherMappingList,
       staffDirectory: teacherList,
       absenceRecords,
+      unavailabilityRecords,
       suratAlerts: [alertItem],
     });
-    const absentCodes = detectedAbsent.map((d) => d.teacherCode);
+    const absentCodes = resolveAbsentCodesForAlert(alertItem);
     const plan = generateAutoReliefPlan({
       schedule: scheduleGrid,
       academicYear: activeAcademicYear,
@@ -348,11 +553,13 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
       dayOverride: dateStrToDayOfWeek(alertItem.startDate) || 'ISNIN',
       absentTeacherCodes: absentCodes,
       teacherMapping: teacherMappingList,
+      staffDirectory: teacherList,
       detectedAbsentTeachers: detectedAbsent,
       manualOverrides: overridesMap,
       repaymentDateOverrides: repaymentMap,
       prasekolahTimetable,
       absenceRecords,
+      unavailabilityRecords,
       suratAlerts: [alertItem],
     });
     setActiveAutoSlots(plan.slots);
@@ -366,6 +573,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
     setSlotRepaymentDates({});
 
     const plan = recomputeModalAutoSlots(alertItem, {}, {});
+    const resolvedAbsentCodes = new Set(resolveAbsentCodesForAlert(alertItem));
 
     const initialMap: Record<string, string> = {};
     const initialRepayMap: Record<string, string> = {};
@@ -379,7 +587,10 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
     } else {
       alertItem.affectedClasses.forEach((cls, i) => {
         const otherTeachers = teacherList.filter(
-          (t) => !alertItem.absentTeacherIds.includes(t.id) && !alertItem.absentTeacherIds.includes(t.name)
+          (t) =>
+            !resolvedAbsentCodes.has(t.code.toUpperCase()) &&
+            !alertItem.absentTeacherIds.includes(t.id) &&
+            !alertItem.absentTeacherIds.includes(t.name)
         );
         if (otherTeachers.length > 0) {
           const candidate = otherTeachers[i % otherTeachers.length];
@@ -472,14 +683,12 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
         updatedAt: new Date().toISOString(),
       });
 
-      // Prepare print slip data
-      const absentNames = activeAlertForSchedule.absentTeacherIds
-        .map((id) => teacherList.find((t) => t.id === id)?.name || id)
-        .join(', ');
+      // Prepare clean print slip data (never expose Firebase UID or role enums)
+      const absentNames = getAbsentTeacherNames(activeAlertForSchedule.absentTeacherIds);
 
       setPrintSlipData({
         date: activeAlertForSchedule.startDate,
-        absentTeacher: absentNames,
+        absentTeacher: absentNames || 'Guru Akademik',
         reason: activeAlertForSchedule.perkara,
         letterRef: activeAlertForSchedule.noRujukanLuar,
         assignments: assignments.map((a) => ({
@@ -503,9 +712,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
   };
 
   const getAbsentTeacherNames = (ids: string[]) => {
-    return ids
-      .map((id) => teacherList.find((t) => t.id === id)?.name || id)
-      .join(', ');
+    return formatCleanAbsentTeacherNames(ids || [], teacherMappingList.list, teacherList);
   };
 
   return (
@@ -780,7 +987,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                               </span>
                             ) : (
                               <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-extrabold uppercase">
-                                Selesai Dijadual
+                                SELESAI DIJADUALKAN
                               </span>
                             )}
                           </td>
@@ -797,20 +1004,71 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => {
+                                onClick={async () => {
                                   setSelectedAlert(item);
-                                  // Open view / slip
+                                  let slipAssignments: Array<{
+                                    period: string;
+                                    className: string;
+                                    subject: string;
+                                    substituteName: string;
+                                    reliefModeLabel?: string;
+                                    repaymentDetails?: string;
+                                  }> = [];
+
+                                  if (item.reliefScheduleId) {
+                                    try {
+                                      const savedSnap = await getDoc(
+                                        doc(db, 'relief_schedules', item.reliefScheduleId)
+                                      );
+                                      if (savedSnap.exists()) {
+                                        const savedData = savedSnap.data() as any;
+                                        if (Array.isArray(savedData.assignments) && savedData.assignments.length > 0) {
+                                          slipAssignments = savedData.assignments.map((a: any) => ({
+                                            period: a.period,
+                                            className: a.className,
+                                            subject: `${a.subjectCode} - ${a.subjectName}`,
+                                            substituteName: a.substituteName,
+                                            reliefModeLabel: a.reliefModeLabel,
+                                            repaymentDetails: a.repaymentDetails,
+                                          }));
+                                        }
+                                      }
+                                    } catch {
+                                      // Fallback to auto recompute below
+                                    }
+                                  }
+
+                                  if (slipAssignments.length === 0) {
+                                    const plan = recomputeModalAutoSlots(item, {}, {});
+                                    if (plan.slots.length > 0) {
+                                      slipAssignments = plan.slots.map((slot) => ({
+                                        period: `${slot.slotLabel} (${slot.timeLabel})`,
+                                        className: slot.classLabel,
+                                        subject: `${slot.subjectCode} - ${slot.subjectName}`,
+                                        substituteName:
+                                          slot.assignedSubstituteName || slot.assignedSubstituteCode || 'GURU GANTI',
+                                        reliefModeLabel: slot.reliefModeLabel,
+                                        repaymentDetails:
+                                          slot.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA' && slot.repaymentDate
+                                            ? `Pulang Balik: ${slot.repaymentDate}${slot.repaymentDay ? ` (${slot.repaymentDay})` : ''} · ${slot.repaymentSlotLabel || ''} (${slot.repaymentTimeLabel || ''})`
+                                            : 'Tidak Perlu Pulang Balik',
+                                      }));
+                                    } else {
+                                      slipAssignments = item.affectedClasses.map((c, i) => ({
+                                        period: `Waktu ${i + 1}`,
+                                        className: c.className,
+                                        subject: `${c.subjectCode} - ${c.subjectName}`,
+                                        substituteName: 'Guru Bertugas',
+                                      }));
+                                    }
+                                  }
+
                                   setPrintSlipData({
                                     date: item.startDate,
-                                    absentTeacher: absentNames,
+                                    absentTeacher: absentNames || 'Guru Akademik',
                                     reason: item.perkara,
                                     letterRef: item.noRujukanLuar,
-                                    assignments: item.affectedClasses.map((c, i) => ({
-                                      period: `Waktu ${i + 1}`,
-                                      className: c.className,
-                                      subject: `${c.subjectCode} - ${c.subjectName}`,
-                                      substituteName: 'Guru Bertugas',
-                                    })),
+                                    assignments: slipAssignments,
                                   });
                                 }}
                                 className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold inline-flex items-center gap-1 transition cursor-pointer"
@@ -889,11 +1147,21 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
 
             {/* List of affected classes & substitute selector */}
             <div className="space-y-3">
-              <div className="font-bold text-white text-xs uppercase tracking-wider flex items-center justify-between">
+              <div className="font-bold text-white text-xs uppercase tracking-wider flex items-center justify-between flex-wrap gap-2">
                 <span>Senarai Kelas & Penugasan Guru Ganti</span>
-                <span className="text-[11px] text-emerald-400">
-                  ✔ Dicadangkan secara automatik daripada guru yang berkelapangan
-                </span>
+                {activeAutoSlots.length > 0 ? (
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-extrabold uppercase">
+                    ✔ SELESAI DIJADUALKAN ({activeAutoSlots.length} Slot)
+                  </span>
+                ) : activeAlertForSchedule.affectedClasses.length > 0 ? (
+                  <span className="text-[11px] text-emerald-400">
+                    ✔ Dicadangkan secara automatik daripada guru yang berkelapangan
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-extrabold uppercase">
+                    TIADA JADUAL / Tiada Kelas Dijadualkan Pada Hari Ini
+                  </span>
+                )}
               </div>
 
               <div className="space-y-2.5">
@@ -1020,8 +1288,10 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                   activeAlertForSchedule.affectedClasses.map((cls, idx) => {
                     const key = `${cls.classId}_${cls.subjectCode}`;
                     const currentAssigned = slotAssignments[key] || '';
+                    const resolvedCodes = new Set(resolveAbsentCodesForAlert(activeAlertForSchedule));
                     const otherTeachers = teacherList.filter(
                       (t) =>
+                        !resolvedCodes.has(t.code.toUpperCase()) &&
                         !activeAlertForSchedule.absentTeacherIds.includes(t.id) &&
                         !activeAlertForSchedule.absentTeacherIds.includes(t.name)
                     );
@@ -1258,7 +1528,7 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
                 <div>
                   Disediakan oleh:<br /><br /><br />
                   ____________________________<br />
-                  (Penyelaras Jadual Waktu / PO)
+                  (Penyelaras Jadual Waktu / PKP)
                 </div>
                 <div>
                   Disahkan oleh:<br /><br /><br />

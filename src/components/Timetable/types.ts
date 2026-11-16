@@ -31,6 +31,7 @@ export interface TimetableCell {
   clashDetails?: string;
   isPemulihan?: boolean; // Flagged if Pemulihan (PBM / PMT) attaches to mainstream BM/MT
   pemulihanTeacherCode?: string;
+  pemulihanManualOverride?: boolean;
   isManualSlot?: boolean;
   isAutoPKAR?: boolean;
 }

@@ -42,6 +42,11 @@ import {
   detectScheduleClashes, 
   generateAutoSchedule 
 } from './autoScheduler';
+import {
+  TeacherDirectoryEntry,
+  getDesignatedPemulihanTeacherCode,
+  hydrateSchedulePemulihanLinks,
+} from '../../utils/lampiranData';
 import { 
   Table, 
   Layers, 
@@ -260,8 +265,18 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
               loadedGrid = repairedGrid;
             }
 
+            const loadedPemTeacher = teachers.find((t) => Boolean((t as any).isGuruPemulihan));
+            const loadedPemCode = loadedPemTeacher
+              ? (
+                  (loadedPemTeacher as any).code ||
+                  generateTeacherShortCode((loadedPemTeacher.name || '').replace(/\s+/g, ' ').trim())
+                )
+                  .trim()
+                  .toUpperCase()
+              : '';
+            hydrateSchedulePemulihanLinks(loadedGrid, loadedPemCode);
             setSchedule(loadedGrid);
-            const foundClashes = detectScheduleClashes(loadedGrid);
+            const foundClashes = detectScheduleClashes(loadedGrid, selectedYear, loadedPemCode);
             setClashes(foundClashes);
           }
         } else if (isMounted) {
@@ -342,7 +357,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
 
     const seenCodes = new Set<string>();
     const seenIds = new Set<string>();
-    const dedupedList: Array<{ id: string; num: number; code: string; name: string }> = [];
+    const dedupedList: TeacherDirectoryEntry[] = [];
 
     sourceList.forEach((t) => {
       let cleanName = (t.name || '').replace(/\s+/g, ' ').trim();
@@ -370,16 +385,39 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
         num: dedupedList.length + 1,
         code,
         name: cleanName,
+        isGuruPemulihan: Boolean((t as any).isGuruPemulihan),
       });
     });
 
     return { list: dedupedList.slice(0, 50) };
   }, [personnelList, isLegacySchool]);
 
+  const guruPemulihanCode = useMemo(
+    () => getDesignatedPemulihanTeacherCode(teacherMapping.list),
+    [teacherMapping.list]
+  );
+
+  // Re-evaluate minute-level clashes (including Guru Pemulihan) whenever schedule, year, or Guru Pemulihan changes
+  useEffect(() => {
+    setClashes(detectScheduleClashes(schedule, selectedYear, guruPemulihanCode));
+  }, [schedule, selectedYear, guruPemulihanCode]);
+
+  // Auto-sync Pemulihan links on non-overridden Pemulihan cells when Guru Pemulihan changes
+  useEffect(() => {
+    if (!guruPemulihanCode) return;
+    setSchedule((prev) =>
+      hydrateSchedulePemulihanLinks(JSON.parse(JSON.stringify(prev)), guruPemulihanCode)
+    );
+  }, [guruPemulihanCode]);
+
   // Update schedule handler (with automatic Firestore persistence)
   const handleUpdateSchedule = (newSchedule: ScheduleGrid) => {
-    setSchedule(newSchedule);
-    const foundClashes = detectScheduleClashes(newSchedule, selectedYear);
+    const hydrated = hydrateSchedulePemulihanLinks(
+      JSON.parse(JSON.stringify(newSchedule)),
+      guruPemulihanCode
+    );
+    setSchedule(hydrated);
+    const foundClashes = detectScheduleClashes(hydrated, selectedYear, guruPemulihanCode);
     setClashes(foundClashes);
 
     const docId = scopedDocId(activeSchoolCode, `schedule_${selectedYear}`);
@@ -424,6 +462,20 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
     if ((!currentClassTeachers || Object.values(currentClassTeachers).filter(Boolean).length === 0) && isLegacySchool) {
       currentClassTeachers = getDefaultClassTeachers(true);
       setClassTeachers(currentClassTeachers);
+    }
+
+    if (guruPemulihanCode) {
+      currentMatrix = currentMatrix.map((row) => {
+        const sCode = (row.subjectCode || '').toUpperCase();
+        if (sCode !== 'KLIBM' && sCode !== 'KLIMT') return row;
+        const updatedTeachers = { ...row.teachers };
+        [1, 2, 3, 4, 5, 6].forEach((g) => {
+          if ((row.periods[g] || 0) > 0 && !updatedTeachers[g]?.trim()) {
+            updatedTeachers[g] = guruPemulihanCode;
+          }
+        });
+        return { ...row, teachers: updatedTeachers };
+      });
     }
 
     try {
@@ -473,7 +525,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
         });
       });
 
-      const newClashes = detectScheduleClashes(grid, selectedYear);
+      hydrateSchedulePemulihanLinks(grid, guruPemulihanCode);
+      const newClashes = detectScheduleClashes(grid, selectedYear, guruPemulihanCode);
       setSchedule(grid);
       setClashes(newClashes);
 
@@ -955,6 +1008,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
               academicYear={selectedYear}
               teacher={teacher}
               schoolName={activeSchoolName}
+              guruPemulihanCode={guruPemulihanCode}
               pageBreakClass="print-landscape-page"
             />
           ))}

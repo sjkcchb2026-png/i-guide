@@ -14,8 +14,10 @@ import {
   buildTeacherOptionAMatrix,
   formatKemaskiniDate,
   formatPenggalSesi,
+  getDesignatedPemulihanTeacherCode,
   isKP2027Year1Active,
   parseTeacherCodes,
+  resolveCellPemulihanTeacher,
 } from './lampiranData';
 
 const DOUBLE_BORDER: Partial<ExcelJS.Border> = { style: 'double', color: { argb: 'FF000000' } };
@@ -137,6 +139,9 @@ export function buildJadualIndukSheet(
   const masterMembacaHeader =
     t1MorningCodes.length === 1 ? `${t1MorningCodes[0]} (T1)` : 'PROG. PAGI (T1)';
 
+  const isT1Shifted = isKP2027Year1Active(academicYear);
+  const guruPemulihanCode = getDesignatedPemulihanTeacherCode(teacherMapping.list);
+
   const masterHeaders = [
     'KELAS',
     'GURU KELAS',
@@ -158,8 +163,33 @@ export function buildJadualIndukSheet(
   ];
   const totalCols = masterHeaders.length;
 
+  const formatMasterExcelHeader = (h: string, day: DayOfWeek) => {
+    if (h === masterMembacaHeader) return `${masterMembacaHeader}\n07:15 - 07:30`;
+    if (h === 'W1') return isT1Shifted ? 'W1\n07:15 - 07:45\n(T1: 07:30 - 08:00)' : 'W1\n07:15 - 07:45';
+    if (h === 'W2') return isT1Shifted ? 'W2\n07:45 - 08:15\n(T1: 08:00 - 08:30)' : 'W2\n07:45 - 08:15';
+    if (h === 'W3') return isT1Shifted ? 'W3\n08:15 - 08:45\n(T1: 08:30 - 09:00)' : 'W3\n08:15 - 08:45';
+    if (h === 'W4') return isT1Shifted ? 'W4\n08:45 - 09:15\n(T1: 09:00 - 09:30)' : 'W4\n08:45 - 09:15';
+    if (h === 'W5') return 'W5\n09:15 - 09:45';
+    if (h === 'PKAR (T1)') return 'PKAR\n(T1: PKAR 09:30 - 09:45)';
+    if (h === 'REHAT') return 'REHAT\n09:45 - 10:15';
+    if (h === 'W6 / W5') return isT1Shifted ? 'W6 (T1:W5)\n10:15 - 10:45' : 'W6\n10:15 - 10:45';
+    if (h === 'W7 / W6') return isT1Shifted ? 'W7 (T1:W6)\n10:45 - 11:15' : 'W7\n10:45 - 11:15';
+    if (h === 'W8 / W7') return isT1Shifted ? 'W8 (T1:W7)\n11:15 - 11:45' : 'W8\n11:15 - 11:45';
+    if (h === 'W9 / W8') {
+      const top = isT1Shifted ? 'W9 (T1:W8)' : 'W9';
+      return day === 'JUMAAT' ? `${top}\n11:45 - 12:15\n(T4-6 TASMIK)` : `${top}\n11:45 - 12:15`;
+    }
+    if (h === 'W10 / W9') return isT1Shifted ? 'W10 (T1:W9)\n12:15 - 12:45' : 'W10\n12:15 - 12:45';
+    if (h === 'W11 / W10') {
+      const top = isT1Shifted ? 'W11 (T1:W10)' : 'W11';
+      return day === 'RABU' || day === 'KHAMIS' ? `${top}\n12:45 - 13:15\n(TASMIK)` : `${top}\n12:45 - 13:15`;
+    }
+    if (h === 'TASMIK') return 'TASMIK\n13:15 - 13:45';
+    return h;
+  };
+
   ws.columns = masterHeaders.map((_, idx) => ({
-    width: idx === 0 ? 12 : idx === 1 ? 22 : idx === 9 ? 7 : 12,
+    width: idx === 0 ? 12 : idx === 1 ? 22 : idx === 9 ? 9 : 14.5,
   }));
 
   // Header
@@ -231,13 +261,8 @@ export function buildJadualIndukSheet(
     const headerRowIdx = rowCursor;
     masterHeaders.forEach((h, i) => {
       const c = ws.getCell(headerRowIdx, i + 1);
-      c.value =
-        (day === 'RABU' || day === 'KHAMIS') && h === 'W11 / W10'
-          ? 'W11 / W10\n(TASMIK)'
-          : day === 'JUMAAT' && h === 'W9 / W8'
-          ? 'W9 / W8\n(T4-6 TASMIK)'
-          : h;
-      c.font = { bold: true, size: 9, color: { argb: 'FF000000' } };
+      c.value = formatMasterExcelHeader(h, day);
+      c.font = { bold: true, size: 8, color: { argb: 'FF000000' } };
       c.fill = {
         type: 'pattern',
         pattern: 'solid',
@@ -246,14 +271,15 @@ export function buildJadualIndukSheet(
             h === 'REHAT'
               ? 'FFB8CCE4'
               : ((day === 'RABU' || day === 'KHAMIS') && h === 'W11 / W10') ||
-                (day === 'JUMAAT' && h === 'W9 / W8')
+                (day === 'JUMAAT' && h === 'W9 / W8') ||
+                h === 'PKAR (T1)'
               ? 'FFBBF7D0'
               : 'FFCCFFCC',
         },
       };
       c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     });
-    ws.getRow(headerRowIdx).height = 24;
+    ws.getRow(headerRowIdx).height = 38;
     rowCursor++;
 
     const startBodyRow = rowCursor;
@@ -293,12 +319,20 @@ export function buildJadualIndukSheet(
           entry.subjectCode === 'PN'
             ? 'SEMUA'
             : resolveTeacherDisplay(entry.teacherCode, displayMode, teacherMapping.list);
-        cell.value = tLabel ? `${entry.subjectCode}\n${tLabel}` : entry.subjectCode;
-        cell.font = { bold: true, size: 9 };
+        const pemCode = entry.isPemulihan ? resolveCellPemulihanTeacher(entry, guruPemulihanCode) : '';
+        const pemTag = entry.isPemulihan
+          ? `\n${entry.subjectCode.toUpperCase() === 'MT' ? 'PMT' : 'PBM'}${
+              pemCode ? ` (${resolveTeacherDisplay(pemCode, displayMode, teacherMapping.list)})` : ''
+            }`
+          : '';
+        cell.value = (tLabel ? `${entry.subjectCode}\n${tLabel}` : entry.subjectCode) + pemTag;
+        cell.font = { bold: true, size: 8.5 };
         if (grade === 1 && ['W1', 'W2', 'W3', 'W4'].includes(slotId || '')) {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF9C3' } };
         } else if (slotId === 'PKAR') {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+        } else if (entry.isPemulihan) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFECFDF5' } };
         }
       });
       rowCursor++;
@@ -335,10 +369,12 @@ export function buildLampiranBTeacherSheet(
     schedule,
     academicYear,
     schoolName,
+    teacherMapping,
     kemaskiniDate = formatKemaskiniDate(),
   } = params;
 
-  const bundle = buildTeacherOptionAMatrix(schedule, teacher.code, academicYear);
+  const guruPemulihanCode = getDesignatedPemulihanTeacherCode(teacherMapping.list);
+  const bundle = buildTeacherOptionAMatrix(schedule, teacher.code, academicYear, guruPemulihanCode);
   const totalCols = 13; // Day col + 12 Option A columns
 
   ws.columns = [
@@ -395,7 +431,7 @@ export function buildLampiranBTeacherSheet(
 
   // Row 6: Option A Dual-Time Header (#CCFFCC pale green)
   const headerRow = 6;
-  ws.getRow(headerRow).height = 36;
+  ws.getRow(headerRow).height = 44;
 
   const dayHdr = ws.getCell(headerRow, 1);
   dayHdr.value = 'HARI / WAKTU';
@@ -409,27 +445,31 @@ export function buildLampiranBTeacherSheet(
     cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
 
     if (col.isRecess) {
-      cell.value = `REHAT\n${col.t2To6Time}`;
-      cell.font = { bold: true, size: 9, color: { argb: 'FF000000' } };
+      cell.value = `REHAT\n${col.displayTime}`;
+      cell.font = { bold: true, size: 8.5, color: { argb: 'FF000000' } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB8CCE4' } };
     } else if (col.t1ShiftedTime) {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCFFCC' } };
       cell.value = {
         richText: [
           {
-            text: `${col.t2To6Time}\n`,
-            font: { bold: true, size: 9, color: { argb: 'FFCC00CC' } },
+            text: `${col.headerLabel}\n`,
+            font: { bold: true, size: 9, color: { argb: 'FF000000' } },
+          },
+          {
+            text: `${col.displayTime}\n`,
+            font: { bold: true, size: 8.5, color: { argb: 'FFCC00CC' } },
           },
           {
             text: col.t1ShiftedTime,
-            font: { bold: true, size: 8, color: { argb: 'FF0F766E' } },
+            font: { bold: true, size: 7.5, color: { argb: 'FF0F766E' } },
           },
         ],
       };
     } else {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCFFCC' } };
-      cell.value = `W${col.periodLabel}\n${col.t2To6Time}`;
-      cell.font = { bold: true, size: 9, color: { argb: 'FF000000' } };
+      cell.value = `${col.headerLabel}\n${col.displayTime}`;
+      cell.font = { bold: true, size: 8.5, color: { argb: 'FF000000' } };
     }
   });
 
@@ -516,8 +556,12 @@ export function buildLampiranBTeacherSheet(
         return;
       }
 
-      // 3. Regular Tahun 2-6 or synchronized post-recess lesson (White background, bold black text)
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+      // 3. Regular Tahun 2-6 or synchronized post-recess lesson (White background, or soft emerald #ECFDF5 for PBM/PMT Pemulihan)
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: entry.isPemulihanSlot ? 'FFECFDF5' : 'FFFFFFFF' },
+      };
       if (entry.hasMembacaT1 && entry.subjectCode) {
         cell.value = {
           richText: [
@@ -542,8 +586,10 @@ export function buildLampiranBTeacherSheet(
           ],
         };
       } else {
-        cell.value = `${entry.subjectCode}\n${entry.gradeLabel || `T.${entry.grade}`}`;
-        cell.font = { bold: true, size: 10, color: { argb: 'FF000000' } };
+        cell.value = `${entry.subjectCode}\n${entry.gradeLabel || `T.${entry.grade}`}${
+          entry.isPemulihanSlot ? '\nPEMULIHAN' : ''
+        }`;
+        cell.font = { bold: true, size: 9.5, color: { argb: 'FF000000' } };
       }
     });
   });
@@ -749,6 +795,8 @@ export function buildLampiranAClassSheet(
     }
   });
 
+  const guruPemulihanCode = getDesignatedPemulihanTeacherCode(teacherMapping.list);
+
   // Days Rows
   const firstDayRow = headerRow + 1;
   DAYS_OF_WEEK.forEach((day, dIdx) => {
@@ -762,23 +810,18 @@ export function buildLampiranAClassSheet(
     dCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
     dCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    const isWedThu = day === 'RABU' || day === 'KHAMIS';
-    const isFriT46 = day === 'JUMAAT' && grade >= 4;
-    const wedThuW11HeaderId = isT1Shifted ? 'W10' : 'W11';
-
     headerSlots.forEach((hs, idx) => {
       const cell = ws.getCell(rIdx, idx + 2);
       cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
 
       const matchedSlot =
-        isWedThu && hs.slotId === wedThuW11HeaderId
-          ? daySlots.find((ds) => ds.slotId === 'TASMIK')
-          : isWedThu && hs.slotId === 'TASMIK'
-          ? undefined
-          : isFriT46 && hs.slotId === 'W9'
-          ? daySlots.find((ds) => ds.slotId === 'TASMIK')
-          : isFriT46 && hs.slotId === 'TASMIK'
-          ? undefined
+        hs.startMinutes >= 615
+          ? daySlots.find(
+              (ds) =>
+                !ds.isRecess &&
+                ds.startMinutes === hs.startMinutes &&
+                ds.endMinutes === hs.endMinutes
+            )
           : daySlots.find((ds) => ds.slotId === hs.slotId);
       if (!matchedSlot) {
         cell.value = '';
@@ -803,13 +846,23 @@ export function buildLampiranAClassSheet(
         entry.subjectCode === 'PN'
           ? 'SEMUA'
           : resolveTeacherDisplay(entry.teacherCode, displayMode, teacherMapping.list);
-      cell.value = tDisplay ? `${entry.subjectCode}\n${tDisplay}` : entry.subjectCode;
-      cell.font = { bold: true, size: 10, color: { argb: 'FF000000' } };
+      const pemCode = entry.isPemulihan ? resolveCellPemulihanTeacher(entry, guruPemulihanCode) : '';
+      const pemTag = entry.isPemulihan
+        ? `\n${entry.subjectCode.toUpperCase() === 'MT' ? 'PMT' : 'PBM'}${
+            pemCode ? ` (${resolveTeacherDisplay(pemCode, displayMode, teacherMapping.list)})` : ''
+          }`
+        : '';
+      cell.value = (tDisplay ? `${entry.subjectCode}\n${tDisplay}` : entry.subjectCode) + pemTag;
+      cell.font = { bold: true, size: 9.5, color: { argb: 'FF000000' } };
 
       if (matchedSlot.slotId === 'PKAR') {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
       } else if (isT1Shifted && ['W1', 'W2', 'W3', 'W4'].includes(matchedSlot.slotId)) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF9C3' } };
+      } else if (entry.isPemulihan) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFECFDF5' } };
+      } else if (matchedSlot.slotId === 'TASMIK' && entry.teacherCode?.trim()) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDF4' } };
       } else {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
       }

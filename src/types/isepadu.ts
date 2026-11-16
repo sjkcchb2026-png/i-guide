@@ -150,6 +150,7 @@ export interface PersonnelProfile {
   coordinators?: string[];
   additionalResponsibilities?: string[];
   category?: 'GURU' | 'AKP' | string;
+  isGuruPemulihan?: boolean;
   importedAt?: any;
   importSessionId?: string;
 }

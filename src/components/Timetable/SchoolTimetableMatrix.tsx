@@ -17,6 +17,10 @@ import {
   normalizeActiveSchoolCode,
   scopedDocId,
 } from '../../utils/schoolTenant';
+import {
+  TeacherDirectoryEntry,
+  getDesignatedPemulihanTeacherCode,
+} from '../../utils/lampiranData';
 import { 
   Users, 
   Save, 
@@ -591,7 +595,7 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
 
     const seenCodes = new Set<string>();
     const seenIds = new Set<string>();
-    const dedupedList: Array<{ id: string; num: number; code: string; name: string }> = [];
+    const dedupedList: TeacherDirectoryEntry[] = [];
 
     sourceList.forEach((t) => {
       let cleanName = (t.name || '').replace(/\s+/g, ' ').trim();
@@ -620,11 +624,43 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
         num: dedupedList.length + 1,
         code,
         name: cleanName,
+        isGuruPemulihan: Boolean((t as any).isGuruPemulihan),
       });
     });
 
     return { list: dedupedList.slice(0, 50) };
   }, [personnelList, isLegacySchool]);
+
+  const guruPemulihanCode = useMemo(
+    () => getDesignatedPemulihanTeacherCode(dynamicTeacherMapping.list),
+    [dynamicTeacherMapping.list]
+  );
+
+  // Auto-link unassigned Klinik BM (KLIBM) & Klinik MT (KLIMT) to the designated Guru Pemulihan Khas
+  useEffect(() => {
+    if (!guruPemulihanCode) return;
+    setMatrixData((prev) => {
+      let changed = false;
+      const next = prev.map((row) => {
+        const sCode = (row.subjectCode || '').toUpperCase();
+        if (sCode !== 'KLIBM' && sCode !== 'KLIMT') return row;
+        const updatedTeachers = { ...row.teachers };
+        let rowChanged = false;
+        [1, 2, 3, 4, 5, 6].forEach((g) => {
+          if ((row.periods[g] || 0) > 0 && !updatedTeachers[g]?.trim()) {
+            updatedTeachers[g] = guruPemulihanCode;
+            rowChanged = true;
+          }
+        });
+        if (rowChanged) {
+          changed = true;
+          return { ...row, teachers: updatedTeachers };
+        }
+        return row;
+      });
+      return changed ? next : prev;
+    });
+  }, [guruPemulihanCode]);
 
   // 修改各科节数（完全不锁死）
   const handlePeriodChange = (rowId: string, grade: number, val: number) => {
@@ -1197,7 +1233,12 @@ export const SchoolTimetableMatrix: React.FC<SchoolTimetableMatrixProps> = ({
                             className="p-2 font-sans truncate max-w-[110px] text-slate-200 text-[11px]"
                             title={t.name}
                           >
-                            {t.name}
+                            <div className="truncate">{t.name}</div>
+                            {t.isGuruPemulihan && (
+                              <span className="inline-block mt-0.5 px-1.5 py-0.2 rounded text-[8px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                Guru Pemulihan (PBM/PMT)
+                              </span>
+                            )}
                           </td>
                           <td className="p-2 text-right">
                             <div className="inline-flex flex-col items-end gap-0.5">

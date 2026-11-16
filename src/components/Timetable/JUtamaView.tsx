@@ -8,8 +8,10 @@ import {
   TeacherDirectoryEntry,
   formatKemaskiniDate,
   formatPenggalSesi,
+  getDesignatedPemulihanTeacherCode,
   isKP2027Year1Active,
   parseTeacherCodes,
+  resolveCellPemulihanTeacher,
 } from '../../utils/lampiranData';
 import { exportMasterTimetableToExcel } from '../../utils/timetableExport';
 import { Printer, RotateCw, FileSpreadsheet, Download } from 'lucide-react';
@@ -39,6 +41,7 @@ export const JUtamaPrintableSheet: React.FC<JUtamaPrintableSheetProps> = ({
   pageBreakClass = '',
 }) => {
   const isT1Shifted = isKP2027Year1Active(academicYear);
+  const guruPemulihanCode = getDesignatedPemulihanTeacherCode(teacherMapping.list);
 
   const getTeacherLabel = (code: string) => {
     const parts = parseTeacherCodes(code);
@@ -50,6 +53,109 @@ export const JUtamaPrintableSheet: React.FC<JUtamaPrintableSheetProps> = ({
         return found ? String(found.num) : trimmed;
       })
       .join(' / ');
+  };
+
+  const getMasterHeaderClock = (slot: string, isFri: boolean, isWedThu: boolean) => {
+    switch (slot) {
+      case 'W1':
+        return {
+          title: 'W1',
+          time: '07:15 - 07:45',
+          t1Time: isT1Shifted ? '(T1: 07:30 - 08:00)' : '',
+        };
+      case 'W2':
+        return {
+          title: 'W2',
+          time: '07:45 - 08:15',
+          t1Time: isT1Shifted ? '(T1: 08:00 - 08:30)' : '',
+        };
+      case 'W3':
+        return {
+          title: 'W3',
+          time: '08:15 - 08:45',
+          t1Time: isT1Shifted ? '(T1: 08:30 - 09:00)' : '',
+        };
+      case 'W4':
+        return {
+          title: 'W4',
+          time: '08:45 - 09:15',
+          t1Time: isT1Shifted ? '(T1: 09:00 - 09:30)' : '',
+        };
+      case 'W5':
+        return {
+          title: 'W5',
+          time: '09:15 - 09:45',
+          t1Time: '',
+        };
+      case 'PKAR':
+        return {
+          title: 'PKAR',
+          time: '09:30 - 09:45',
+          t1Time: '(T1: PKAR)',
+        };
+      case 'REHAT':
+        return {
+          title: 'REHAT',
+          time: '09:45 - 10:15',
+          t1Time: '',
+        };
+      case 'W6':
+        return {
+          title: isT1Shifted ? 'W6 (T1:W5)' : 'W6',
+          time: '10:15 - 10:45',
+          t1Time: '',
+        };
+      case 'W7':
+        return {
+          title: isT1Shifted ? 'W7 (T1:W6)' : 'W7',
+          time: '10:45 - 11:15',
+          t1Time: '',
+        };
+      case 'W8':
+        return {
+          title: isT1Shifted ? 'W8 (T1:W7)' : 'W8',
+          time: '11:15 - 11:45',
+          t1Time: '',
+        };
+      case 'W9':
+        return {
+          title: isFri
+            ? isT1Shifted
+              ? 'W9 (T1:W8) (T4–6 TASMIK)'
+              : 'W9 (T4–6 TASMIK)'
+            : isT1Shifted
+            ? 'W9 (T1:W8)'
+            : 'W9',
+          time: '11:45 - 12:15',
+          t1Time: '',
+        };
+      case 'W10':
+        return {
+          title: isT1Shifted ? 'W10 (T1:W9)' : 'W10',
+          time: '12:15 - 12:45',
+          t1Time: '',
+        };
+      case 'W11':
+        return {
+          title: isWedThu
+            ? isT1Shifted
+              ? 'W11 (T1:W10) (TASMIK)'
+              : 'W11 (TASMIK)'
+            : isT1Shifted
+            ? 'W11 (T1:W10)'
+            : 'W11',
+          time: '12:45 - 13:15',
+          t1Time: '',
+        };
+      case 'TASMIK':
+        return {
+          title: 'TASMIK',
+          time: '13:15 - 13:45',
+          t1Time: '',
+        };
+      default:
+        return { title: slot, time: '', t1Time: '' };
+    }
   };
 
   return (
@@ -119,29 +225,39 @@ export const JUtamaPrintableSheet: React.FC<JUtamaPrintableSheetProps> = ({
                     <tr style={{ backgroundColor: '#CCFFCC' }}>
                       <th className="p-1.5 w-20 font-black text-black">Kelas</th>
                       <th className="p-1.5 w-32 font-black text-black text-left">Guru Kelas</th>
-                      {dayHeaders.map((slot) => (
-                        <th
-                          key={slot}
-                          className={`p-1 font-black text-black ${
-                            slot === 'REHAT' ? 'w-10' : slot === 'PKAR' ? 'w-14' : ''
-                          }`}
-                          style={
-                            slot === 'REHAT'
-                              ? { backgroundColor: '#B8CCE4' }
-                              : slot === 'PKAR' || (isWedThu && slot === 'W11') || (isFri && slot === 'W9')
-                              ? { backgroundColor: '#DCFCE7' }
-                              : undefined
-                          }
-                        >
-                          <div className="text-[9px] font-black">
-                            {isWedThu && slot === 'W11'
-                              ? 'W11 (TASMIK)'
-                              : isFri && slot === 'W9'
-                              ? 'W9 (T4–6 TASMIK)'
-                              : slot}
-                          </div>
-                        </th>
-                      ))}
+                      {dayHeaders.map((slot) => {
+                        const hdr = getMasterHeaderClock(slot, isFri, isWedThu);
+                        return (
+                          <th
+                            key={slot}
+                            className={`p-1 font-black text-black align-middle ${
+                              slot === 'REHAT' ? 'w-11' : slot === 'PKAR' ? 'w-16' : ''
+                            }`}
+                            style={
+                              slot === 'REHAT'
+                                ? { backgroundColor: '#B8CCE4' }
+                                : slot === 'PKAR' || (isWedThu && slot === 'W11') || (isFri && slot === 'W9')
+                                ? { backgroundColor: '#DCFCE7' }
+                                : undefined
+                            }
+                          >
+                            <div className="text-[9px] font-black leading-tight">{hdr.title}</div>
+                            {hdr.time && (
+                              <div className="text-[7.5px] font-bold leading-tight text-slate-800">
+                                {hdr.time}
+                              </div>
+                            )}
+                            {hdr.t1Time && (
+                              <div
+                                className="text-[7px] font-extrabold leading-tight"
+                                style={{ color: '#0F766E' }}
+                              >
+                                {hdr.t1Time}
+                              </div>
+                            )}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
@@ -206,7 +322,13 @@ export const JUtamaPrintableSheet: React.FC<JUtamaPrintableSheetProps> = ({
                               ['W1', 'W2', 'W3', 'W4'].includes(targetSlotId || '')
                             ) {
                               cellBg = '#FEF9C3';
+                            } else if (cell?.isPemulihan) {
+                              cellBg = '#ECFDF5';
                             }
+
+                            const pemulihanTeacher = cell?.isPemulihan
+                              ? resolveCellPemulihanTeacher(cell, guruPemulihanCode)
+                              : '';
 
                             return (
                               <td
@@ -222,6 +344,15 @@ export const JUtamaPrintableSheet: React.FC<JUtamaPrintableSheetProps> = ({
                                     {cell.subjectCode !== 'PN' && (
                                       <div className="text-[9px] text-blue-800 font-bold leading-tight">
                                         {getTeacherLabel(cell.teacherCode)}
+                                      </div>
+                                    )}
+                                    {cell.isPemulihan && (
+                                      <div
+                                        className="text-[7.5px] font-black leading-tight"
+                                        style={{ color: '#047857' }}
+                                      >
+                                        {cell.subjectCode.toUpperCase() === 'MT' ? 'PMT' : 'PBM'}
+                                        {pemulihanTeacher ? ` (${getTeacherLabel(pemulihanTeacher)})` : ''}
                                       </div>
                                     )}
                                   </div>

@@ -111,6 +111,9 @@ export interface TeacherProfile {
   fullName: string;
   email?: string;
   phone?: string;
+  ic?: string;
+  nric?: string;
+  noKP?: string;
   role?: string;
   status?: string;
   subRole?: string;
@@ -257,87 +260,186 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
   const [fetchedTeachers, setFetchedTeachers] = useState<TeacherProfile[]>([]);
 
   useEffect(() => {
+    let isMounted = true;
+
+    const extractIcFields = (obj: any) => {
+      const rawIc = String(obj?.ic || obj?.nric || obj?.noKP || obj?.icNumber || obj?.kp || '').trim();
+      return {
+        ic: rawIc,
+        nric: String(obj?.nric || rawIc).trim(),
+        noKP: String(obj?.noKP || rawIc).trim(),
+      };
+    };
+
     const dedupeTeachers = (rawList: TeacherProfile[]): TeacherProfile[] => {
-      const seenIds = new Set<string>();
-      const seenEmails = new Set<string>();
-      const seenNames = new Set<string>();
+      const byId = new Map<string, TeacherProfile>();
+      const byEmail = new Map<string, TeacherProfile>();
+      const byName = new Map<string, TeacherProfile>();
       const result: TeacherProfile[] = [];
+
       for (const t of rawList) {
         const idKey = (t.teacherId || '').trim();
         const emailKey = (t.email || '').toLowerCase().trim();
         const nameKey = (t.fullName || '').toUpperCase().replace(/\s+/g, ' ').trim();
         if (!nameKey || nameKey === 'GURU') continue;
-        if ((idKey && seenIds.has(idKey)) || (emailKey && seenEmails.has(emailKey)) || seenNames.has(nameKey)) {
+
+        const existing =
+          (idKey ? byId.get(idKey) : undefined) ||
+          (emailKey ? byEmail.get(emailKey) : undefined) ||
+          byName.get(nameKey);
+
+        if (existing) {
+          const mergedIc = existing.ic || t.ic || t.nric || t.noKP || '';
+          existing.ic = mergedIc;
+          existing.nric = existing.nric || t.nric || mergedIc;
+          existing.noKP = existing.noKP || t.noKP || mergedIc;
+          existing.phone = existing.phone || t.phone || '';
+          existing.email = existing.email || t.email || '';
+          existing.role = existing.role || t.role || '';
+          existing.position = existing.position || t.position || '';
+          if (idKey && !byId.has(idKey)) byId.set(idKey, existing);
+          if (emailKey && !byEmail.has(emailKey)) byEmail.set(emailKey, existing);
           continue;
         }
-        if (idKey) seenIds.add(idKey);
-        if (emailKey) seenEmails.add(emailKey);
-        seenNames.add(nameKey);
-        result.push(t);
+
+        const icVal = t.ic || t.nric || t.noKP || '';
+        const normalized: TeacherProfile = {
+          ...t,
+          ic: icVal,
+          nric: t.nric || icVal,
+          noKP: t.noKP || icVal,
+          phone: t.phone || '',
+        };
+        if (idKey) byId.set(idKey, normalized);
+        if (emailKey) byEmail.set(emailKey, normalized);
+        byName.set(nameKey, normalized);
+        result.push(normalized);
       }
       return result;
     };
 
+    const mapPropTeachers = (): TeacherProfile[] =>
+      (propTeachers || []).map((t, idx) => {
+        const icFields = extractIcFields(t);
+        return {
+          teacherId: t.teacherId || t.id || t.uid || `teacher_${idx}`,
+          fullName: t.fullName || t.name || 'Guru',
+          email: t.email || '',
+          phone: t.phone || t.mobilePhone || '',
+          ...icFields,
+          role: t.role || t.position || '',
+          status: t.status || (t.active === false ? 'INACTIVE' : 'ACTIVE'),
+        };
+      });
+
     if (propTeachers && propTeachers.length > 0) {
-      setFetchedTeachers(
-        dedupeTeachers(
-          propTeachers.map((t, idx) => ({
-            teacherId: t.teacherId || t.id || t.uid || `teacher_${idx}`,
-            fullName: t.fullName || t.name || 'Guru',
-            email: t.email || '',
-            phone: t.phone || '',
-            role: t.role || '',
-            status: t.status || 'ACTIVE',
-          }))
-        )
-      );
-      return;
+      setFetchedTeachers(dedupeTeachers(mapPropTeachers()));
     }
 
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        try {
-          const snap = await getDocs(collection(db, 'personnel'));
-          const scopedPersonnel = snap.docs.filter((docSnap) => belongsToSchool(docSnap.data(), activeSchoolCode));
-          if (scopedPersonnel.length > 0) {
-            const list: TeacherProfile[] = scopedPersonnel.map((docSnap) => {
-              const d = docSnap.data();
-              return {
-                teacherId: docSnap.id,
-                fullName: d.name || d.fullName || 'Guru',
-                email: d.email || '',
-                phone: d.phone || '',
-                role: d.position || d.role || '',
-                status: 'ACTIVE',
-              };
-            });
-            setFetchedTeachers(dedupeTeachers(list));
-          } else {
-            const usersSnap = await getDocs(collection(db, 'users'));
-            const list: TeacherProfile[] = usersSnap.docs
-              .filter((docSnap) => belongsToSchool(docSnap.data(), activeSchoolCode))
-              .map((docSnap) => {
-                const d = docSnap.data();
+      if (!user) return;
+      try {
+        const [personnelSnap, usersSnap] = await Promise.all([
+          getDocs(collection(db, 'personnel')).catch(() => ({ docs: [] })),
+          getDocs(collection(db, 'users')).catch(() => ({ docs: [] })),
+        ]);
+
+        const personnelList: TeacherProfile[] = personnelSnap.docs
+          .filter((docSnap) => belongsToSchool(docSnap.data(), activeSchoolCode))
+          .map((docSnap) => {
+            const d = docSnap.data();
+            const icFields = extractIcFields(d);
+            return {
+              teacherId: docSnap.id,
+              fullName: d.name || d.fullName || 'Guru',
+              email: d.email || '',
+              phone: d.phone || d.mobilePhone || '',
+              ...icFields,
+              role: d.position || d.role || '',
+              status: d.active === false ? 'INACTIVE' : 'ACTIVE',
+            };
+          });
+
+        const usersList: TeacherProfile[] = usersSnap.docs
+          .filter((docSnap) => belongsToSchool(docSnap.data(), activeSchoolCode))
+          .map((docSnap) => {
+            const d = docSnap.data();
+            const icFields = extractIcFields(d);
+            return {
+              teacherId: docSnap.id,
+              fullName: d.name || d.fullName || 'Guru',
+              email: d.email || '',
+              phone: d.phone || d.mobilePhone || '',
+              ...icFields,
+              role: d.role || d.position || '',
+              status: d.active !== false ? 'ACTIVE' : 'INACTIVE',
+            };
+          })
+          .filter((t) => t.status === 'ACTIVE');
+
+        let officialRosterList: TeacherProfile[] = [];
+        const hasMissingIcInCombined = [...personnelList, ...usersList].some((t) => !t.ic);
+        if (isLegacySchool && (personnelList.length === 0 || hasMissingIcInCombined)) {
+          try {
+            const res = await fetch(
+              `/api/personnel/official-roster?schoolCode=${encodeURIComponent(activeSchoolCode)}`
+            ).catch(() => null);
+            if (res && res.ok) {
+              const rData = await res.json();
+              const roster = Array.isArray(rData.roster) ? rData.roster : [];
+              officialRosterList = roster.map((r: any, idx: number) => {
+                const icFields = extractIcFields(r);
                 return {
-                  teacherId: docSnap.id,
-                  fullName: d.name || 'Guru',
-                  email: d.email || '',
-                  phone: d.phone || '',
-                  role: d.role || '',
-                  status: d.active !== false ? 'ACTIVE' : 'INACTIVE',
+                  teacherId: r.id || `roster_${idx}`,
+                  fullName: r.name || r.fullName || 'Guru',
+                  email: r.email || '',
+                  phone: r.phone || r.mobilePhone || '',
+                  ...icFields,
+                  role: r.position || r.role || '',
+                  status: 'ACTIVE',
                 };
-              })
-              .filter((t) => t.status === 'ACTIVE');
-            setFetchedTeachers(dedupeTeachers(list));
+              });
+            }
+          } catch {
+            // ignore optional roster fetch failure
           }
-        } catch (e) {
-          console.warn('Could not auto-fetch personnel:', e);
         }
+
+        if (!isMounted) return;
+
+        if (propTeachers && propTeachers.length > 0) {
+          // Preserve propTeachers list, merging any missing ic/phone from personnel/users/official-roster
+          const enrichedProps = mapPropTeachers();
+          const supplement = [...personnelList, ...usersList, ...officialRosterList];
+          const combined = dedupeTeachers([...enrichedProps, ...supplement]);
+          // Keep only teachers matching propTeachers if propTeachers already contains the roster
+          const propKeys = new Set(
+            enrichedProps.flatMap((p) => [
+              (p.teacherId || '').trim(),
+              (p.email || '').toLowerCase().trim(),
+              (p.fullName || '').toUpperCase().replace(/\s+/g, ' ').trim(),
+            ]).filter(Boolean)
+          );
+          const filtered = combined.filter(
+            (t) =>
+              propKeys.has((t.teacherId || '').trim()) ||
+              propKeys.has((t.email || '').toLowerCase().trim()) ||
+              propKeys.has((t.fullName || '').toUpperCase().replace(/\s+/g, ' ').trim())
+          );
+          setFetchedTeachers(filtered.length > 0 ? filtered : combined);
+        } else {
+          setFetchedTeachers(dedupeTeachers([...personnelList, ...usersList, ...officialRosterList]));
+        }
+      } catch (e) {
+        console.warn('Could not auto-fetch personnel:', e);
       }
     });
 
-    return () => unsubAuth();
-  }, [propTeachers, activeSchoolCode]);
+    return () => {
+      isMounted = false;
+      unsubAuth();
+    };
+  }, [propTeachers, activeSchoolCode, isLegacySchool]);
 
   const [viewMode, setViewMode] = useState<'PEMBANTU_SAYA' | 'PEMANTAUAN_GB'>('PEMBANTU_SAYA');
   const [timeHorizon, setTimeHorizon] = useState<TimeHorizonFilter>('BULAN_INI');
@@ -1322,12 +1424,29 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                 {staffBirthdays.thisMonth.map((b, idx) => (
                   <div
                     key={`${b.teacherId}_month_${idx}`}
-                    className="bg-slate-950/50 border border-slate-800/80 rounded-xl p-2 flex items-center justify-between gap-2"
+                    className={`rounded-xl p-2.5 flex items-center justify-between gap-2 border ${
+                      b.isBirthdayToday
+                        ? 'bg-pink-950/50 border-pink-500/50'
+                        : 'bg-slate-950/50 border-slate-800/80'
+                    }`}
                   >
-                    <div className="min-w-0">
+                    <div className="min-w-0 space-y-0.5">
                       <div className="font-bold text-white text-xs truncate">{b.fullName}</div>
-                      <div className="text-[10px] text-pink-300/80 font-mono">
-                        {b.formattedBirthDate.split(' ')[0]} ({b.ageThisYear} tahun)
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] text-pink-300/80 font-mono">
+                          {b.formattedBirthDate.split(' ')[0]} ({b.ageThisYear} tahun)
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[9px] font-extrabold ${
+                            b.isBirthdayToday
+                              ? 'bg-pink-500 text-white'
+                              : b.statusLabel.startsWith('Telah Berlalu')
+                              ? 'bg-slate-800 text-slate-400'
+                              : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          }`}
+                        >
+                          {b.statusLabel}
+                        </span>
                       </div>
                     </div>
                     <button

@@ -3,6 +3,7 @@ import {
   DayOfWeek,
   DAYS_OF_WEEK,
   ScheduleGrid,
+  TimetableCell,
   getGradeDaySlots,
 } from '../components/Timetable/types';
 
@@ -11,13 +12,16 @@ export interface TeacherDirectoryEntry {
   num: number;
   code: string;
   name: string;
+  isGuruPemulihan?: boolean;
 }
 
 export interface OptionAColumnDef {
   colIndex: number; // 1..12 (excluding Day column)
   slotId: string; // 'W1'..'W5', 'REHAT', 'W6'..'W11'
+  headerLabel: string; // e.g. 'W1', 'W6 (T1:W5)', 'REHAT'
   periodLabel: string;
   t2To6Time: string;
+  displayTime: string; // Spaced clock format e.g. '07:15 - 07:45'
   t1ShiftedTime?: string; // Present on Cols 1..5
   t1BracketTime?: string; // '[07:30-08:00]' etc. on Cols 1..4
   isPreRecess: boolean;
@@ -29,9 +33,11 @@ export const OPTION_A_COLUMNS: OptionAColumnDef[] = [
   {
     colIndex: 1,
     slotId: 'W1',
+    headerLabel: 'W1',
     periodLabel: '1',
     t2To6Time: '07:15-07:45',
-    t1ShiftedTime: '(T1: 07:30-08:00)',
+    displayTime: '07:15 - 07:45',
+    t1ShiftedTime: '(T1: 07:30 - 08:00)',
     t1BracketTime: '[07:30-08:00]',
     isPreRecess: true,
     isRecess: false,
@@ -39,9 +45,11 @@ export const OPTION_A_COLUMNS: OptionAColumnDef[] = [
   {
     colIndex: 2,
     slotId: 'W2',
+    headerLabel: 'W2',
     periodLabel: '2',
     t2To6Time: '07:45-08:15',
-    t1ShiftedTime: '(T1: 08:00-08:30)',
+    displayTime: '07:45 - 08:15',
+    t1ShiftedTime: '(T1: 08:00 - 08:30)',
     t1BracketTime: '[08:00-08:30]',
     isPreRecess: true,
     isRecess: false,
@@ -49,9 +57,11 @@ export const OPTION_A_COLUMNS: OptionAColumnDef[] = [
   {
     colIndex: 3,
     slotId: 'W3',
+    headerLabel: 'W3',
     periodLabel: '3',
     t2To6Time: '08:15-08:45',
-    t1ShiftedTime: '(T1: 08:30-09:00)',
+    displayTime: '08:15 - 08:45',
+    t1ShiftedTime: '(T1: 08:30 - 09:00)',
     t1BracketTime: '[08:30-09:00]',
     isPreRecess: true,
     isRecess: false,
@@ -59,9 +69,11 @@ export const OPTION_A_COLUMNS: OptionAColumnDef[] = [
   {
     colIndex: 4,
     slotId: 'W4',
+    headerLabel: 'W4',
     periodLabel: '4',
     t2To6Time: '08:45-09:15',
-    t1ShiftedTime: '(T1: 09:00-09:30)',
+    displayTime: '08:45 - 09:15',
+    t1ShiftedTime: '(T1: 09:00 - 09:30)',
     t1BracketTime: '[09:00-09:30]',
     isPreRecess: true,
     isRecess: false,
@@ -69,9 +81,11 @@ export const OPTION_A_COLUMNS: OptionAColumnDef[] = [
   {
     colIndex: 5,
     slotId: 'W5',
+    headerLabel: 'W5',
     periodLabel: '5',
     t2To6Time: '09:15-09:45',
-    t1ShiftedTime: '(T1: PKAR 15m)',
+    displayTime: '09:15 - 09:45',
+    t1ShiftedTime: '(T1: PKAR 09:30 - 09:45)',
     isPreRecess: true,
     isRecess: false,
     isPKARColumn: true,
@@ -79,56 +93,70 @@ export const OPTION_A_COLUMNS: OptionAColumnDef[] = [
   {
     colIndex: 6,
     slotId: 'REHAT',
+    headerLabel: 'REHAT',
     periodLabel: 'REHAT',
     t2To6Time: '09:45-10:15',
+    displayTime: '09:45 - 10:15',
     isPreRecess: false,
     isRecess: true,
   },
   {
     colIndex: 7,
     slotId: 'W6',
+    headerLabel: 'W6 (T1:W5)',
     periodLabel: '6',
     t2To6Time: '10:15-10:45',
+    displayTime: '10:15 - 10:45',
     isPreRecess: false,
     isRecess: false,
   },
   {
     colIndex: 8,
     slotId: 'W7',
+    headerLabel: 'W7 (T1:W6)',
     periodLabel: '7',
     t2To6Time: '10:45-11:15',
+    displayTime: '10:45 - 11:15',
     isPreRecess: false,
     isRecess: false,
   },
   {
     colIndex: 9,
     slotId: 'W8',
+    headerLabel: 'W8 (T1:W7)',
     periodLabel: '8',
     t2To6Time: '11:15-11:45',
+    displayTime: '11:15 - 11:45',
     isPreRecess: false,
     isRecess: false,
   },
   {
     colIndex: 10,
     slotId: 'W9',
+    headerLabel: 'W9 (T1:W8)',
     periodLabel: '9',
     t2To6Time: '11:45-12:15',
+    displayTime: '11:45 - 12:15',
     isPreRecess: false,
     isRecess: false,
   },
   {
     colIndex: 11,
     slotId: 'W10',
+    headerLabel: 'W10 (T1:W9)',
     periodLabel: '10',
     t2To6Time: '12:15-12:45',
+    displayTime: '12:15 - 12:45',
     isPreRecess: false,
     isRecess: false,
   },
   {
     colIndex: 12,
     slotId: 'W11',
+    headerLabel: 'W11 (T1:W10)',
     periodLabel: '11',
     t2To6Time: '12:45-13:15',
+    displayTime: '12:45 - 13:15',
     isPreRecess: false,
     isRecess: false,
   },
@@ -165,6 +193,8 @@ export const SUBJECT_FULL_NAMES: Record<string, string> = {
   PKAR: 'PROGRAM PEMBENTUKAN KARAKTER',
   MEMBACA: 'PROGRAM MEMBACA',
   TASMIK: 'PROGRAM TASMIK',
+  PBM: 'PEMULIHAN BAHASA MELAYU',
+  PMT: 'PEMULIHAN MATEMATIK',
   KLIBM: 'KLINIK BAHASA MELAYU',
   KLIBI: 'KLINIK BAHASA INGGERIS',
   KLIBC: 'KLINIK BAHASA CINA',
@@ -202,6 +232,64 @@ export function parseTeacherCodes(teacherCode?: string | null): string[] {
     .filter(Boolean);
 }
 
+export function getDesignatedPemulihanTeacherCode(
+  teacherList?: TeacherDirectoryEntry[]
+): string {
+  if (!Array.isArray(teacherList)) return '';
+  const found = teacherList.find((t) => Boolean(t.isGuruPemulihan));
+  return found ? found.code.trim().toUpperCase() : '';
+}
+
+export function resolveCellPemulihanTeacher(
+  cell: TimetableCell | null | undefined,
+  designatedPemulihanCode?: string
+): string {
+  if (!cell || !cell.isPemulihan) return '';
+  if (cell.pemulihanManualOverride && cell.pemulihanTeacherCode?.trim()) {
+    return cell.pemulihanTeacherCode.trim().toUpperCase();
+  }
+  const designated = (designatedPemulihanCode || '').trim().toUpperCase();
+  if (designated) return designated;
+  return (cell.pemulihanTeacherCode || '').trim().toUpperCase();
+}
+
+export function getAllCellTeacherCodes(
+  cell: TimetableCell | null | undefined,
+  designatedPemulihanCode?: string
+): string[] {
+  if (!cell) return [];
+  const codes = new Set<string>(parseTeacherCodes(cell.teacherCode));
+  const pemCode = resolveCellPemulihanTeacher(cell, designatedPemulihanCode);
+  if (pemCode) {
+    parseTeacherCodes(pemCode).forEach((c) => codes.add(c));
+  }
+  return Array.from(codes);
+}
+
+export function hydrateSchedulePemulihanLinks(
+  grid: ScheduleGrid,
+  designatedPemulihanCode?: string
+): ScheduleGrid {
+  const designated = (designatedPemulihanCode || '').trim().toUpperCase();
+  if (!designated) return grid;
+  [1, 2, 3, 4, 5, 6].forEach((grade) => {
+    DAYS_OF_WEEK.forEach((day) => {
+      const daySlots = grid[grade]?.[day];
+      if (!daySlots) return;
+      Object.values(daySlots).forEach((cell) => {
+        if (!cell) return;
+        const sCode = (cell.subjectCode || '').trim().toUpperCase();
+        if (cell.isPemulihan && !cell.pemulihanManualOverride) {
+          cell.pemulihanTeacherCode = designated;
+        } else if ((sCode === 'KLIBM' || sCode === 'KLIMT' || sCode === 'PBM' || sCode === 'PMT') && !cell.teacherCode?.trim()) {
+          cell.teacherCode = designated;
+        }
+      });
+    });
+  });
+  return grid;
+}
+
 export function isKP2027Year1Active(academicYear?: string): boolean {
   if (!academicYear) return true;
   const yr = parseInt(academicYear, 10);
@@ -220,6 +308,7 @@ export interface OptionACellEntry {
   isPKAR?: boolean; // Col 5 on Tahun 1 -> #DCFCE7 + '09:30-09:45 (+0.5 Waktu)' in #15803D
   isPN?: boolean;
   isTasmik?: boolean;
+  isPemulihanSlot?: boolean; // Linked PBM / PMT slot for Guru Pemulihan Khas
   hasMembacaT1?: boolean; // Top badge on Col 1: e.g. 'MEMBACA T.1 [07:15-07:30]' or 'AGAMA T.1 [07:15-07:30]'
   membacaLabel?: string; // Dynamic customized label for Year 1 07:15-07:30 morning program badge
 }
@@ -276,9 +365,10 @@ function resolveTeacherSubjectForCell(
 export function buildTeacherOptionAMatrix(
   schedule: ScheduleGrid,
   teacherCode: string,
-  academicYear: string = '2027'
+  academicYear: string = '2027',
+  guruPemulihanCode?: string
 ): TeacherOptionABundle {
-  const tCode = (teacherCode || '').trim();
+  const tCode = (teacherCode || '').trim().toUpperCase();
   const isT1Shifted = isKP2027Year1Active(academicYear);
 
   const grid: Record<DayOfWeek, Record<string, OptionACellEntry | null>> = {
@@ -384,14 +474,28 @@ export function buildTeacherOptionAMatrix(
         if (gs.isRecess || gs.slotId === 'PKAR' || gs.slotId === 'MEMBACA') return;
         const cell = schedule[grade]?.[day]?.[gs.slotId];
         if (!cell || !cell.subjectCode || cell.subjectCode.toUpperCase() === 'PN') return;
-        if (!parseTeacherCodes(cell.teacherCode).includes(tCode)) return;
 
-        const { code: subjCode, name: subjName } = resolveTeacherSubjectForCell(
-          tCode,
-          cell.subjectCode,
-          cell.subjectName,
-          cell.teacherCode
-        );
+        const mainstreamMatch = parseTeacherCodes(cell.teacherCode).includes(tCode);
+        const pemulihanTeacher = resolveCellPemulihanTeacher(cell, guruPemulihanCode);
+        const pemulihanMatch = Boolean(cell.isPemulihan && pemulihanTeacher === tCode && !mainstreamMatch);
+
+        if (!mainstreamMatch && !pemulihanMatch) return;
+
+        const baseUpper = (cell.subjectCode || '').trim().toUpperCase();
+        const { code: subjCode, name: subjName } = pemulihanMatch
+          ? {
+              code: baseUpper === 'MT' ? 'PMT' : 'PBM',
+              name:
+                baseUpper === 'MT'
+                  ? 'PEMULIHAN MATEMATIK'
+                  : 'PEMULIHAN BAHASA MELAYU',
+            }
+          : resolveTeacherSubjectForCell(
+              tCode,
+              cell.subjectCode,
+              cell.subjectName,
+              cell.teacherCode
+            );
         const len = cell.periodLength ?? 1;
 
         // Handle Tasmik (post-school or Friday slot)
@@ -447,6 +551,7 @@ export function buildTeacherOptionAMatrix(
           year1ClockBracket: isY1MorningCol
             ? colDef?.t1BracketTime || `[${gs.startTime}-${gs.endTime}]`
             : undefined,
+          isPemulihanSlot: pemulihanMatch || subjCode === 'PBM' || subjCode === 'PMT',
           hasMembacaT1: colSlotId === 'W1' ? (prevEntry?.hasMembacaT1 || hasMembacaT1Today) : undefined,
           membacaLabel:
             colSlotId === 'W1' && (prevEntry?.hasMembacaT1 || hasMembacaT1Today)

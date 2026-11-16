@@ -11,8 +11,10 @@ import {
   buildClassLampiranAAnalysis,
   formatKemaskiniDate,
   formatPenggalSesi,
+  getDesignatedPemulihanTeacherCode,
   isKP2027Year1Active,
   parseTeacherCodes,
+  resolveCellPemulihanTeacher,
 } from '../../utils/lampiranData';
 import { exportSingleClassToExcel } from '../../utils/timetableExport';
 import { Printer, FileSpreadsheet, Download } from 'lucide-react';
@@ -47,6 +49,10 @@ export const LampiranAPrintableSheet: React.FC<LampiranAPrintableSheetProps> = (
 }) => {
   const isT1Shifted = grade === 1 && isKP2027Year1Active(academicYear);
   const currentClassTeacher = classTeachers[grade] || 'Belum Ditetapkan';
+  const guruPemulihanCode = useMemo(
+    () => getDesignatedPemulihanTeacherCode(teacherMapping.list),
+    [teacherMapping.list]
+  );
   const headerSlots = useMemo(
     () => getGradeDaySlots(grade, 'ISNIN', academicYear),
     [grade, academicYear]
@@ -174,22 +180,17 @@ export const LampiranAPrintableSheet: React.FC<LampiranAPrintableSheetProps> = (
                     {day}
                   </td>
                   {headerSlots.map((headerSlot) => {
-                    const isWedThu = day === 'RABU' || day === 'KHAMIS';
-                    const isFriT46 = day === 'JUMAAT' && grade >= 4;
-                    const lastPeriodId = isT1Shifted ? 'W10' : 'W11';
-                    const slot = isWedThu
-                      ? headerSlot.slotId === lastPeriodId
-                        ? daySlots.find((s) => s.slotId === 'TASMIK')
-                        : headerSlot.slotId === 'TASMIK'
-                        ? undefined
-                        : daySlots.find((s) => s.slotId === headerSlot.slotId)
-                      : isFriT46
-                      ? headerSlot.slotId === 'W9'
-                        ? daySlots.find((s) => s.slotId === 'TASMIK')
-                        : headerSlot.slotId === 'TASMIK'
-                        ? undefined
-                        : daySlots.find((s) => s.slotId === headerSlot.slotId)
-                      : daySlots.find((s) => s.slotId === headerSlot.slotId);
+                    // Align all post-recess columns (>= 10:15 / 615 min) strictly by exact clock interval
+                    // so TASMIK lands seamlessly right after the final academic period across JT1-JT6
+                    const slot =
+                      headerSlot.startMinutes >= 615
+                        ? daySlots.find(
+                            (s) =>
+                              !s.isRecess &&
+                              s.startMinutes === headerSlot.startMinutes &&
+                              s.endMinutes === headerSlot.endMinutes
+                          )
+                        : daySlots.find((s) => s.slotId === headerSlot.slotId);
                     if (!slot) {
                       return (
                         <td
@@ -224,10 +225,20 @@ export const LampiranAPrintableSheet: React.FC<LampiranAPrintableSheetProps> = (
                         const target = newSchedule[grade]?.[day]?.[slot.slotId];
                         if (target) {
                           target.isPemulihan = !target.isPemulihan;
+                          if (target.isPemulihan && guruPemulihanCode && !target.pemulihanManualOverride) {
+                            target.pemulihanTeacherCode = guruPemulihanCode;
+                          } else if (!target.isPemulihan) {
+                            target.pemulihanTeacherCode = '';
+                            target.pemulihanManualOverride = false;
+                          }
                           onUpdateSchedule(newSchedule);
                         }
                       }
                     };
+
+                    const pemulihanTeacher = cell?.isPemulihan
+                      ? resolveCellPemulihanTeacher(cell, guruPemulihanCode)
+                      : '';
 
                     let cellBg = '#FFFFFF';
                     if (slot.slotId === 'PKAR') {
@@ -236,6 +247,8 @@ export const LampiranAPrintableSheet: React.FC<LampiranAPrintableSheetProps> = (
                       cellBg = '#FEF9C3';
                     } else if (cell?.isPemulihan) {
                       cellBg = '#ECFDF5';
+                    } else if (slot.slotId === 'TASMIK' && cell?.teacherCode?.trim()) {
+                      cellBg = '#F0FDF4';
                     }
 
                     return (
@@ -276,7 +289,8 @@ export const LampiranAPrintableSheet: React.FC<LampiranAPrintableSheetProps> = (
                             {cell.isPemulihan && (
                               <div className="pt-0.5">
                                 <span className="inline-block px-1 py-0.2 rounded text-[7px] font-black uppercase bg-emerald-700 text-white">
-                                  {cell.subjectCode === 'BM' ? 'PBM' : 'PMT'}
+                                  {cell.subjectCode.toUpperCase() === 'BM' ? 'PBM' : 'PMT'}
+                                  {pemulihanTeacher ? ` (${getTeacherDisplay(pemulihanTeacher)})` : ''}
                                 </span>
                               </div>
                             )}

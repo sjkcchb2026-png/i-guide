@@ -32,8 +32,10 @@ import {
 } from './types';
 import {
   TeacherDirectoryEntry,
+  getDesignatedPemulihanTeacherCode,
   isKP2027Year1Active,
   parseTeacherCodes,
+  resolveCellPemulihanTeacher,
 } from '../../utils/lampiranData';
 import {
   AbsenceSyncSourceRecord,
@@ -191,13 +193,43 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
     const unsubStaff = onSnapshot(
       collection(db, 'staff_directory'),
       (snap) => {
-        setStaffDirectory(
-          snap.docs
-            .map((d) => ({ id: d.id, ...(d.data() as Record<string, any>) }))
-            .filter((d) => belongsToSchool(d, activeSchoolCode))
-        );
+        setStaffDirectory((prev) => {
+          const filteredPrev = prev.filter((item: any) => item.__src !== 'staff_directory');
+          const next = snap.docs
+            .map((d) => ({ id: d.id, __src: 'staff_directory', ...(d.data() as Record<string, any>) }))
+            .filter((d) => belongsToSchool(d, activeSchoolCode));
+          return [...filteredPrev, ...next];
+        });
       },
       (err) => console.warn('BilikGuruReliefView staff_directory listener warning:', err)
+    );
+
+    const unsubUsers = onSnapshot(
+      collection(db, 'users'),
+      (snap) => {
+        setStaffDirectory((prev) => {
+          const filteredPrev = prev.filter((item: any) => item.__src !== 'users');
+          const next = snap.docs
+            .map((d) => ({ id: d.id, uid: d.id, __src: 'users', ...(d.data() as Record<string, any>) }))
+            .filter((d) => belongsToSchool(d, activeSchoolCode));
+          return [...filteredPrev, ...next];
+        });
+      },
+      (err) => console.warn('BilikGuruReliefView users listener warning:', err)
+    );
+
+    const unsubPersonnel = onSnapshot(
+      collection(db, 'personnel'),
+      (snap) => {
+        setStaffDirectory((prev) => {
+          const filteredPrev = prev.filter((item: any) => item.__src !== 'personnel');
+          const next = snap.docs
+            .map((d) => ({ id: d.id, __src: 'personnel', ...(d.data() as Record<string, any>) }))
+            .filter((d) => belongsToSchool(d, activeSchoolCode));
+          return [...filteredPrev, ...next];
+        });
+      },
+      (err) => console.warn('BilikGuruReliefView personnel listener warning:', err)
     );
 
     const unsubCalendar = onSnapshot(
@@ -251,6 +283,8 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
       unsubUnavail();
       unsubAlerts();
       unsubStaff();
+      unsubUsers();
+      unsubPersonnel();
       unsubCalendar();
       unsubPrasekolah();
     };
@@ -326,6 +360,7 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
       dayOverride: selectedDay,
       absentTeacherCodes: effectiveAbsentCodes,
       teacherMapping,
+      staffDirectory,
       detectedAbsentTeachers: autoDetectedTeachers,
       manualOverrides: manualSubstituteOverrides,
       repaymentDateOverrides,
@@ -342,6 +377,7 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
     selectedDay,
     effectiveAbsentCodes,
     teacherMapping,
+    staffDirectory,
     autoDetectedTeachers,
     manualSubstituteOverrides,
     repaymentDateOverrides,
@@ -451,11 +487,17 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
   const isFriday = selectedDay === 'JUMAAT';
   const isMonTue = selectedDay === 'ISNIN' || selectedDay === 'SELASA';
 
+  const guruPemulihanCode = useMemo(
+    () => getDesignatedPemulihanTeacherCode(teacherMapping.list),
+    [teacherMapping.list]
+  );
+
   const masterColumns = useMemo(() => {
     const cols: {
       id: string;
       headerTop: string;
       headerSub: string;
+      headerT1Sub?: string;
       t1SlotId?: string;
       t26SlotId?: string;
       isRecess?: boolean;
@@ -468,25 +510,62 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
       cols.push({
         id: 'MEMBACA',
         headerTop: 'MEMBACA',
-        headerSub: '07:15 (T1)',
+        headerSub: '07:15 - 07:30',
+        headerT1Sub: '(T1)',
         t1SlotId: 'MEMBACA',
         isMembaca: true,
       });
     }
 
     cols.push(
-      { id: 'COL_1', headerTop: 'W1', headerSub: isT1Shifted ? '07:15 / 07:30' : '07:15', t1SlotId: 'W1', t26SlotId: 'W1' },
-      { id: 'COL_2', headerTop: 'W2', headerSub: isT1Shifted ? '07:45 / 08:00' : '07:45', t1SlotId: 'W2', t26SlotId: 'W2' },
-      { id: 'COL_3', headerTop: 'W3', headerSub: isT1Shifted ? '08:15 / 08:30' : '08:15', t1SlotId: 'W3', t26SlotId: 'W3' },
-      { id: 'COL_4', headerTop: 'W4', headerSub: isT1Shifted ? '08:45 / 09:00' : '08:45', t1SlotId: 'W4', t26SlotId: 'W4' },
-      { id: 'COL_5', headerTop: 'W5', headerSub: '09:15 (T2-6)', t1SlotId: isT1Shifted ? undefined : 'W5', t26SlotId: 'W5' }
+      {
+        id: 'COL_1',
+        headerTop: 'W1',
+        headerSub: '07:15 - 07:45',
+        headerT1Sub: isT1Shifted ? '(T1: 07:30 - 08:00)' : undefined,
+        t1SlotId: 'W1',
+        t26SlotId: 'W1',
+      },
+      {
+        id: 'COL_2',
+        headerTop: 'W2',
+        headerSub: '07:45 - 08:15',
+        headerT1Sub: isT1Shifted ? '(T1: 08:00 - 08:30)' : undefined,
+        t1SlotId: 'W2',
+        t26SlotId: 'W2',
+      },
+      {
+        id: 'COL_3',
+        headerTop: 'W3',
+        headerSub: '08:15 - 08:45',
+        headerT1Sub: isT1Shifted ? '(T1: 08:30 - 09:00)' : undefined,
+        t1SlotId: 'W3',
+        t26SlotId: 'W3',
+      },
+      {
+        id: 'COL_4',
+        headerTop: 'W4',
+        headerSub: '08:45 - 09:15',
+        headerT1Sub: isT1Shifted ? '(T1: 09:00 - 09:30)' : undefined,
+        t1SlotId: 'W4',
+        t26SlotId: 'W4',
+      },
+      {
+        id: 'COL_5',
+        headerTop: 'W5',
+        headerSub: '09:15 - 09:45',
+        headerT1Sub: isT1Shifted ? '(T2–T6)' : undefined,
+        t1SlotId: isT1Shifted ? undefined : 'W5',
+        t26SlotId: 'W5',
+      }
     );
 
     if (isT1Shifted) {
       cols.push({
         id: 'PKAR',
         headerTop: 'PKAR',
-        headerSub: '09:30 (T1)',
+        headerSub: '09:30 - 09:45',
+        headerT1Sub: '(T1: PKAR 09:30 - 09:45)',
         t1SlotId: 'PKAR',
         isPkar: true,
       });
@@ -495,36 +574,36 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
     cols.push({
       id: 'REHAT',
       headerTop: 'REHAT',
-      headerSub: '09:45-10:15',
+      headerSub: '09:45 - 10:15',
       t1SlotId: 'REHAT',
       t26SlotId: 'REHAT',
       isRecess: true,
     });
 
     cols.push(
-      { id: 'COL_6', headerTop: isT1Shifted ? 'W6 / W5' : 'W6', headerSub: '10:15', t1SlotId: isT1Shifted ? 'W5' : 'W6', t26SlotId: 'W6' },
-      { id: 'COL_7', headerTop: isT1Shifted ? 'W7 / W6' : 'W7', headerSub: '10:45', t1SlotId: isT1Shifted ? 'W6' : 'W7', t26SlotId: 'W7' }
+      { id: 'COL_6', headerTop: isT1Shifted ? 'W6 (T1:W5)' : 'W6', headerSub: '10:15 - 10:45', t1SlotId: isT1Shifted ? 'W5' : 'W6', t26SlotId: 'W6' },
+      { id: 'COL_7', headerTop: isT1Shifted ? 'W7 (T1:W6)' : 'W7', headerSub: '10:45 - 11:15', t1SlotId: isT1Shifted ? 'W6' : 'W7', t26SlotId: 'W7' }
     );
 
     if (isFriday) {
       cols.push({
         id: 'COL_8',
-        headerTop: isT1Shifted ? 'W8 / W7' : 'W8',
-        headerSub: '11:15',
+        headerTop: isT1Shifted ? 'W8 (T1:W7)' : 'W8',
+        headerSub: '11:15 - 11:45',
         t1SlotId: isT1Shifted ? 'W7' : undefined,
         t26SlotId: 'W8',
       });
     } else {
       cols.push(
-        { id: 'COL_8', headerTop: isT1Shifted ? 'W8 / W7' : 'W8', headerSub: '11:15', t1SlotId: isT1Shifted ? 'W7' : 'W8', t26SlotId: 'W8' },
-        { id: 'COL_9', headerTop: isT1Shifted ? 'W9 / W8' : 'W9', headerSub: '11:45', t1SlotId: isT1Shifted ? 'W8' : 'W9', t26SlotId: 'W9' },
-        { id: 'COL_10', headerTop: isT1Shifted ? 'W10 / W9' : 'W10', headerSub: '12:15', t1SlotId: isT1Shifted ? 'W9' : 'W10', t26SlotId: 'W10' }
+        { id: 'COL_8', headerTop: isT1Shifted ? 'W8 (T1:W7)' : 'W8', headerSub: '11:15 - 11:45', t1SlotId: isT1Shifted ? 'W7' : 'W8', t26SlotId: 'W8' },
+        { id: 'COL_9', headerTop: isT1Shifted ? 'W9 (T1:W8)' : 'W9', headerSub: '11:45 - 12:15', t1SlotId: isT1Shifted ? 'W8' : 'W9', t26SlotId: 'W9' },
+        { id: 'COL_10', headerTop: isT1Shifted ? 'W10 (T1:W9)' : 'W10', headerSub: '12:15 - 12:45', t1SlotId: isT1Shifted ? 'W9' : 'W10', t26SlotId: 'W10' }
       );
       if (isMonTue) {
         cols.push({
           id: 'COL_11',
-          headerTop: isT1Shifted ? 'W11 / W10' : 'W11',
-          headerSub: '12:45',
+          headerTop: isT1Shifted ? 'W11 (T1:W10)' : 'W11',
+          headerSub: '12:45 - 13:15',
           t1SlotId: isT1Shifted ? 'W10' : 'W11',
           t26SlotId: 'W11',
         });
@@ -534,7 +613,7 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
     cols.push({
       id: 'TASMIK',
       headerTop: 'TASMIK',
-      headerSub: 'SELEPAS SEKOLAH',
+      headerSub: isFriday ? '11:15 / 11:45' : isMonTue ? '13:15 - 13:45' : '12:45 - 13:15',
       t1SlotId: 'TASMIK',
       t26SlotId: 'TASMIK',
       isTasmik: true,
@@ -1260,7 +1339,10 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                   }`}
                 >
                   <div className="font-bold">{col.headerTop}</div>
-                  <div className="text-[9px] text-slate-400 print:text-black font-normal">{col.headerSub}</div>
+                  <div className="text-[9px] text-slate-300 print:text-black font-semibold leading-tight">{col.headerSub}</div>
+                  {col.headerT1Sub && (
+                    <div className="text-[8px] text-teal-300 print:text-black font-bold leading-tight">{col.headerT1Sub}</div>
+                  )}
                 </th>
               ))}
             </tr>
@@ -1389,6 +1471,15 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                             )}
                             {!hasAbsentTeacher && cellTeachers.length > 1 && (
                               <div className="text-[8px] text-slate-400">Co-Teach</div>
+                            )}
+                            {cell.isPemulihan && (
+                              <div className="text-[8px] font-black text-emerald-300 print:text-black">
+                                {cell.subjectCode.toUpperCase() === 'MT' ? 'PMT' : 'PBM'}
+                                {(() => {
+                                  const pemT = resolveCellPemulihanTeacher(cell, guruPemulihanCode);
+                                  return pemT ? ` (${pemT})` : '';
+                                })()}
+                              </div>
                             )}
                           </div>
                         ) : (

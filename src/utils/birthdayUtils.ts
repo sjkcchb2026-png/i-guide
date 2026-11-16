@@ -8,10 +8,11 @@ export interface StaffBirthdayInfo {
   birthDay: number;   // 1..31
   formattedBirthDate: string; // e.g. "17.09.1985 (1985年9月17日)"
   ageThisYear: number;
-  daysUntilBirthday: number;  // 0 = 今天生日!
+  daysUntilBirthday: number;  // 0 = Hari Ini!
   isBirthdayToday: boolean;
   isBirthdayThisMonth: boolean;
   upcomingIn7Days: boolean;
+  statusLabel: string; // 'Hari Ini!' | 'Lagi X hari' | 'Telah Berlalu DD/MM'
 }
 
 export function extractBirthdayFromNric(
@@ -26,12 +27,24 @@ export function extractBirthdayFromNric(
     nric?: string;
     ic?: string;
     noKP?: string;
+    icNumber?: string;
+    kp?: string;
     [key: string]: any;
   },
   referenceDate: Date = new Date()
 ): StaffBirthdayInfo | null {
-  const rawIc = staff.nric || staff.ic || staff.noKP || (staff as any).myKad || '';
-  const digits = String(rawIc).replace(/\D/g, '');
+  const rawIc =
+    staff.nric ||
+    staff.ic ||
+    staff.noKP ||
+    staff.icNumber ||
+    staff.kp ||
+    (staff as any).myKad ||
+    '';
+  let digits = String(rawIc).replace(/\D/g, '');
+  if (digits.length >= 10 && digits.length < 12) {
+    digits = digits.padStart(12, '0');
+  }
   if (digits.length < 6) return null;
 
   const yy = parseInt(digits.slice(0, 2), 10);
@@ -69,6 +82,15 @@ export function extractBirthdayFromNric(
 
   const pad = (n: number) => String(n).padStart(2, '0');
 
+  let statusLabel = `Lagi ${daysUntil} hari`;
+  if (isToday) {
+    statusLabel = 'Hari Ini!';
+  } else if (isThisMonth && dd < today.getDate()) {
+    statusLabel = `Telah Berlalu ${pad(dd)}/${pad(mm)}`;
+  } else if (isThisMonth && dd > today.getDate()) {
+    statusLabel = `Lagi ${dd - today.getDate()} hari`;
+  }
+
   const teacherId = staff.teacherId || staff.id || staff.uid || staff.fullName || 'STAFF';
   const fullName = staff.fullName || staff.name || 'Guru';
   const phone = staff.phone || staff.mobilePhone || '';
@@ -77,7 +99,7 @@ export function extractBirthdayFromNric(
     teacherId,
     fullName,
     phone,
-    nric: rawIc,
+    nric: digits,
     birthYear,
     birthMonth: mm,
     birthDay: dd,
@@ -87,6 +109,7 @@ export function extractBirthdayFromNric(
     isBirthdayToday: isToday,
     isBirthdayThisMonth: isThisMonth,
     upcomingIn7Days,
+    statusLabel,
   };
 }
 
@@ -111,7 +134,9 @@ export function filterStaffBirthdays(
 
   const today = all.filter((s) => s.isBirthdayToday);
   const upcoming7Days = all.filter((s) => s.upcomingIn7Days);
-  const thisMonth = all.filter((s) => s.isBirthdayThisMonth);
+  const thisMonth = all
+    .filter((s) => s.isBirthdayThisMonth)
+    .sort((a, b) => a.birthDay - b.birthDay);
 
   return { today, upcoming7Days, thisMonth, all };
 }

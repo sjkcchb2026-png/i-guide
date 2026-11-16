@@ -17,6 +17,11 @@ import {
   SlotRadarStatus,
   UnscheduledLessonCard,
 } from './holdingDock';
+import {
+  TeacherDirectoryEntry,
+  getDesignatedPemulihanTeacherCode,
+  resolveCellPemulihanTeacher,
+} from '../../utils/lampiranData';
 import { 
   Sparkles, 
   AlertTriangle, 
@@ -40,7 +45,7 @@ interface JKeyinGridProps {
   onAutoSchedule: () => void;
   clashes: TimetableClash[];
   matrixData: SubjectAllocationRow[];
-  teacherMapping: { list: Array<{ id: string; num: number; code: string; name: string }> };
+  teacherMapping: { list: TeacherDirectoryEntry[] };
   displayMode: 'NUMBER' | 'CODE';
   classTeachers: Record<number, string>;
   academicYear: string;
@@ -76,6 +81,12 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
   const [editMembacaTeachers, setEditMembacaTeachers] = useState<[string, string, string]>(['', '', '']);
   const [applyMembacaNameAllDays, setApplyMembacaNameAllDays] = useState<boolean>(true);
   const [editIsPemulihan, setEditIsPemulihan] = useState<boolean>(false);
+  const [editPemulihanTeacherCode, setEditPemulihanTeacherCode] = useState<string>('');
+
+  const guruPemulihanCode = useMemo(
+    () => getDesignatedPemulihanTeacherCode(teacherMapping.list),
+    [teacherMapping.list]
+  );
 
   const defaultTasmikTeacher = useMemo(() => {
     const tRow = matrixData.find((r) => (r.subjectCode || '').toUpperCase() === 'TASMIK');
@@ -99,8 +110,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
   );
 
   const workloadAudit = useMemo(
-    () => auditScheduleWorkload(schedule, teacherCodesList, academicYear),
-    [schedule, teacherCodesList, academicYear]
+    () => auditScheduleWorkload(schedule, teacherCodesList, academicYear, guruPemulihanCode),
+    [schedule, teacherCodesList, academicYear, guruPemulihanCode]
   );
 
   const unscheduledCards = useMemo(
@@ -139,14 +150,15 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
             d,
             s.slotId,
             academicYear,
-            teacherCodesList
+            teacherCodesList,
+            guruPemulihanCode
           );
           map.set(`${g}_${d}_${s.slotId}`, status);
         }
       }
     }
     return map;
-  }, [activeDragLesson, schedule, academicYear, teacherCodesList]);
+  }, [activeDragLesson, schedule, academicYear, teacherCodesList, guruPemulihanCode]);
 
   const clearAllDragStates = () => {
     setDragSource(null);
@@ -160,7 +172,12 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     affectedTeachers: string[],
     affectedDays: DayOfWeek[]
   ): string | null => {
-    const report = auditScheduleWorkload(candidateGrid, teacherCodesList, academicYear);
+    const report = auditScheduleWorkload(
+      candidateGrid,
+      teacherCodesList,
+      academicYear,
+      guruPemulihanCode
+    );
     const uniqueTeachers = Array.from(new Set(affectedTeachers.flatMap((tc) => tc.split('/').map((c) => c.trim())).filter(Boolean)));
     const daysToCheck = affectedDays.length > 0 ? affectedDays : DAYS_OF_WEEK;
 
@@ -207,6 +224,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
       setEditMembacaTeachers(['', '', '']);
     }
     setEditIsPemulihan(current?.isPemulihan || false);
+    setEditPemulihanTeacherCode(
+      current?.pemulihanManualOverride ? current.pemulihanTeacherCode || '' : ''
+    );
   };
 
   const deriveShortCodeFromProgramName = (name: string): string => {
@@ -305,6 +325,12 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
 
     const matchedRow = matrixData.find((r) => r.subjectCode === editSubjectCode);
     const isBmOrMt = editSubjectCode === 'BM' || editSubjectCode === 'MT';
+    const isManualPemOverride = Boolean(isBmOrMt && editIsPemulihan && editPemulihanTeacherCode.trim());
+    const resolvedPemTeacher =
+      isBmOrMt && editIsPemulihan
+        ? (editPemulihanTeacherCode.trim() || guruPemulihanCode || '')
+        : '';
+
     const newCell: TimetableCell | null = editSubjectCode
       ? {
           subjectId: matchedRow?.id || editSubjectCode.toLowerCase(),
@@ -315,6 +341,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
           teacherCode: editTeacherCode,
           periodLength: slotId === 'PKAR' ? 0.5 : 1,
           isPemulihan: isBmOrMt ? editIsPemulihan : false,
+          ...(resolvedPemTeacher ? { pemulihanTeacherCode: resolvedPemTeacher } : {}),
+          ...(isManualPemOverride ? { pemulihanManualOverride: true } : {}),
           isManualSlot: isTasmik,
         }
       : null;
@@ -324,7 +352,11 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     // Dynamically update/re-pair PKAR with pre-recess teacher
     autoPairPKARInGrid(newGrid, academicYear);
 
-    const violationMsg = checkDailyHardCapViolation(newGrid, [editTeacherCode], [day]);
+    const violationMsg = checkDailyHardCapViolation(
+      newGrid,
+      [editTeacherCode, resolvedPemTeacher].filter(Boolean),
+      [day]
+    );
     if (violationMsg) {
       setWorkloadAlert(violationMsg);
       return;
@@ -611,7 +643,12 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     // Dynamically re-bind PKAR teacher & +0.5 workload if pre-recess slot (W4) changed
     autoPairPKARInGrid(newGrid, academicYear);
 
-    const affectedTeachers = [cellA?.teacherCode || '', cellB?.teacherCode || ''].filter(Boolean);
+    const affectedTeachers = [
+      cellA?.teacherCode || '',
+      resolveCellPemulihanTeacher(cellA, guruPemulihanCode),
+      cellB?.teacherCode || '',
+      resolveCellPemulihanTeacher(cellB, guruPemulihanCode),
+    ].filter(Boolean);
     const violationMsg = checkDailyHardCapViolation(newGrid, affectedTeachers, [srcDay, targetDay]);
     if (violationMsg) {
       setWorkloadAlert(violationMsg);
@@ -696,28 +733,50 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
 
   const getMasterSlotLabel = (slotKey: string, day?: DayOfWeek) => {
     switch (slotKey) {
-      case 'MEMBACA': return { title: dynamicMembacaTitle, sub: '07:15 (T1)' };
-      case 'W1': return { title: 'W1', sub: '07:15 / 07:30' };
-      case 'W2': return { title: 'W2', sub: '07:45 / 08:00' };
-      case 'W3': return { title: 'W3', sub: '08:15 / 08:30' };
-      case 'W4': return { title: 'W4', sub: '08:45 / 09:00' };
-      case 'W5': return { title: 'W5', sub: '09:15 (T2–6)' };
-      case 'PKAR': return { title: 'PKAR', sub: '09:30 (T1)' };
-      case 'REHAT': return { title: 'REHAT', sub: '09:45–10:15' };
-      case 'W6': return { title: 'W6 / W5', sub: '10:15' };
-      case 'W7': return { title: 'W7 / W6', sub: '10:45' };
-      case 'W8': return { title: 'W8 / W7', sub: '11:15' };
+      case 'MEMBACA':
+        return { title: dynamicMembacaTitle, sub: '07:15 - 07:30 (T1)' };
+      case 'W1':
+        return { title: 'W1', sub: '07:15 - 07:45\n(T1: 07:30 - 08:00)' };
+      case 'W2':
+        return { title: 'W2', sub: '07:45 - 08:15\n(T1: 08:00 - 08:30)' };
+      case 'W3':
+        return { title: 'W3', sub: '08:15 - 08:45\n(T1: 08:30 - 09:00)' };
+      case 'W4':
+        return { title: 'W4', sub: '08:45 - 09:15\n(T1: 09:00 - 09:30)' };
+      case 'W5':
+        return { title: 'W5', sub: '09:15 - 09:45 (T2–6)' };
+      case 'PKAR':
+        return { title: 'PKAR', sub: '09:30 - 09:45 (T1)' };
+      case 'REHAT':
+        return { title: 'REHAT', sub: '09:45 - 10:15' };
+      case 'W6':
+        return { title: 'W6 (T1:W5)', sub: '10:15 - 10:45' };
+      case 'W7':
+        return { title: 'W7 (T1:W6)', sub: '10:45 - 11:15' };
+      case 'W8':
+        return {
+          title: 'W8 (T1:W7)',
+          sub: day === 'JUMAAT' ? '11:15 - 11:45\nT2–3: TASMIK' : '11:15 - 11:45',
+        };
       case 'W9':
-        return day === 'JUMAAT'
-          ? { title: 'W9 / W8', sub: '11:45 · T4–6 TASMIK' }
-          : { title: 'W9 / W8', sub: '11:45' };
-      case 'W10': return { title: 'W10 / W9', sub: '12:15' };
+        return {
+          title: 'W9 (T1:W8)',
+          sub: day === 'JUMAAT' ? '11:45 - 12:15\nT1/T4–6: TASMIK' : '11:45 - 12:15',
+        };
+      case 'W10':
+        return { title: 'W10 (T1:W9)', sub: '12:15 - 12:45' };
       case 'W11':
-        return day === 'RABU' || day === 'KHAMIS'
-          ? { title: 'W11 / W10', sub: '12:45 · TASMIK' }
-          : { title: 'W11 / W10', sub: '12:45' };
-      case 'TASMIK': return { title: 'TASMIK', sub: 'Selepas Sekolah' };
-      default: return { title: slotKey, sub: '' };
+        return {
+          title: 'W11 (T1:W10)',
+          sub:
+            day === 'RABU' || day === 'KHAMIS'
+              ? '12:45 - 13:15\nTASMIK'
+              : '12:45 - 13:15',
+        };
+      case 'TASMIK':
+        return { title: 'TASMIK', sub: '13:15 - 13:45' };
+      default:
+        return { title: slotKey, sub: '' };
     }
   };
 
@@ -1229,10 +1288,10 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                             <div className="font-bold text-slate-300">{title}</div>
                             {sub && (
                               <div
-                                className={`text-[8px] font-mono ${
+                                className={`text-[8px] font-mono leading-tight whitespace-pre-line ${
                                   isTasmikCol
                                     ? 'text-emerald-400 font-bold'
-                                    : 'text-slate-500 font-normal'
+                                    : 'text-slate-400 font-normal'
                                 }`}
                               >
                                 {sub}
@@ -1319,6 +1378,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                     teacherCode: cell.teacherCode,
                                     secondaryTeacherCode: cell.secondaryTeacherCode,
                                     isCoTeaching: cell.isCoTeaching,
+                                    isPemulihan: cell.isPemulihan,
+                                    pemulihanTeacherCode: cell.pemulihanTeacherCode,
+                                    pemulihanManualOverride: cell.pemulihanManualOverride,
                                     fromSlot: { grade, day, slotId: targetSlotId },
                                   });
                                   e.dataTransfer.setData('application/timetable-cell', JSON.stringify({ grade, day, slotId: targetSlotId }));
@@ -1379,13 +1441,17 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                         {teacherLabel}
                                       </div>
                                     )}
-                                    {cell.isPemulihan && (
-                                      <div>
-                                        <span className="inline-block px-1 py-0.2 rounded text-[7px] font-black uppercase tracking-tight bg-emerald-600 text-white">
-                                          {cell.subjectCode === 'BM' ? 'PBM' : 'PMT'}
-                                        </span>
-                                      </div>
-                                    )}
+                                    {cell.isPemulihan && (() => {
+                                      const pemTeacher = resolveCellPemulihanTeacher(cell, guruPemulihanCode);
+                                      return (
+                                        <div>
+                                          <span className="inline-block px-1 py-0.2 rounded text-[7px] font-black uppercase tracking-tight bg-emerald-600 text-white">
+                                            {cell.subjectCode === 'BM' ? 'PBM' : 'PMT'}
+                                            {pemTeacher ? ` (${getTeacherLabel(pemTeacher)})` : ''}
+                                          </span>
+                                        </div>
+                                      );
+                                    })()}
                                   </div>
                                 ) : (
                                   <span className="text-slate-600 text-xs">-</span>
@@ -1455,8 +1521,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                     <div className="font-bold text-slate-300">
                       {s.slotId === 'MEMBACA' && selectedGrade === 1 ? dynamicMembacaTitle : s.label}
                     </div>
-                    <div className="text-[9px] font-mono text-slate-500 font-normal">
-                      {s.startTime}
+                    <div className="text-[9px] font-mono text-slate-400 font-normal">
+                      {s.startTime} - {s.endTime}
                     </div>
                   </th>
                 ))}
@@ -1466,9 +1532,6 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
               {DAYS_OF_WEEK.map((day) => {
                 const headerSlots = getGradeDaySlots(selectedGrade, 'ISNIN', academicYear);
                 const daySlots = getGradeDaySlots(selectedGrade, day, academicYear);
-                const isWedThu = day === 'RABU' || day === 'KHAMIS';
-                const isFriT46 = day === 'JUMAAT' && selectedGrade >= 4;
-                const wedThuW11HeaderId = selectedGrade === 1 && isKP(1) ? 'W10' : 'W11';
                 return (
                   <tr key={day} className="hover:bg-slate-800/30 transition">
                     <td className="py-3 px-3 font-sans font-black text-white bg-slate-950/70 border-r border-slate-800">
@@ -1476,14 +1539,13 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                     </td>
                     {headerSlots.map((headerSlot) => {
                       const slot =
-                        isWedThu && headerSlot.slotId === wedThuW11HeaderId
-                          ? daySlots.find((s) => s.slotId === 'TASMIK')
-                          : isWedThu && headerSlot.slotId === 'TASMIK'
-                          ? undefined
-                          : isFriT46 && headerSlot.slotId === 'W9'
-                          ? daySlots.find((s) => s.slotId === 'TASMIK')
-                          : isFriT46 && headerSlot.slotId === 'TASMIK'
-                          ? undefined
+                        headerSlot.startMinutes >= 615
+                          ? daySlots.find(
+                              (s) =>
+                                !s.isRecess &&
+                                s.startMinutes === headerSlot.startMinutes &&
+                                s.endMinutes === headerSlot.endMinutes
+                            )
                           : daySlots.find((s) => s.slotId === headerSlot.slotId);
                       if (!slot) {
                         return (
@@ -1540,6 +1602,9 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                               teacherCode: cell.teacherCode,
                               secondaryTeacherCode: cell.secondaryTeacherCode,
                               isCoTeaching: cell.isCoTeaching,
+                              isPemulihan: cell.isPemulihan,
+                              pemulihanTeacherCode: cell.pemulihanTeacherCode,
+                              pemulihanManualOverride: cell.pemulihanManualOverride,
                               fromSlot: { grade: selectedGrade, day, slotId: slot.slotId },
                             });
                             e.dataTransfer.setData('application/timetable-cell', JSON.stringify({ grade: selectedGrade, day, slotId: slot.slotId }));
@@ -1596,13 +1661,17 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                   {teacherLabel}
                                 </div>
                               )}
-                              {cell.isPemulihan && (
-                                <div>
-                                  <span className="inline-block px-1 py-0.2 rounded text-[7px] font-black uppercase tracking-tight bg-emerald-600 text-white">
-                                    {cell.subjectCode === 'BM' ? 'PBM' : 'PMT'} PEMULIHAN
-                                  </span>
-                                </div>
-                              )}
+                              {cell.isPemulihan && (() => {
+                                const pemTeacher = resolveCellPemulihanTeacher(cell, guruPemulihanCode);
+                                return (
+                                  <div>
+                                    <span className="inline-block px-1 py-0.2 rounded text-[7px] font-black uppercase tracking-tight bg-emerald-600 text-white">
+                                      {cell.subjectCode === 'BM' ? 'PBM' : 'PMT'}
+                                      {pemTeacher ? ` (${getTeacherLabel(pemTeacher)})` : ''}
+                                    </span>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           ) : (
                             <span className="text-slate-600 text-xs">-</span>
@@ -1862,22 +1931,48 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                   </div>
 
                   {(editSubjectCode.toUpperCase() === 'BM' || editSubjectCode.toUpperCase() === 'MT') && (
-                    <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-800/60 text-emerald-300 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={editIsPemulihan}
-                        onChange={(e) => setEditIsPemulihan(e.target.checked)}
-                        className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 bg-slate-900 border-slate-700 cursor-pointer"
-                      />
-                      <div className="text-xs">
-                        <span className="font-bold text-white block">
-                          Lampirkan Pemulihan Khas ({editSubjectCode.toUpperCase() === 'BM' ? 'PBM' : 'PMT'})
-                        </span>
-                        <span className="text-[10px] text-emerald-400/80">
-                          Murid pemulihan ditarik keluar semasa waktu mata pelajaran ini
-                        </span>
-                      </div>
-                    </label>
+                    <div className="p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-800/60 space-y-2.5">
+                      <label className="flex items-center gap-2.5 text-emerald-300 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={editIsPemulihan}
+                          onChange={(e) => setEditIsPemulihan(e.target.checked)}
+                          className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 bg-slate-900 border-slate-700 cursor-pointer"
+                        />
+                        <div className="text-xs">
+                          <span className="font-bold text-white block">
+                            Lampirkan Pemulihan Khas ({editSubjectCode.toUpperCase() === 'BM' ? 'PBM' : 'PMT'})
+                          </span>
+                          <span className="text-[10px] text-emerald-400/80">
+                            Murid pemulihan ditarik keluar semasa waktu mata pelajaran ini
+                          </span>
+                        </div>
+                      </label>
+
+                      {editIsPemulihan && (
+                        <div className="pt-2 border-t border-emerald-800/50">
+                          <label className="block text-[10px] font-bold uppercase text-emerald-300 mb-1">
+                            Guru Pemulihan Khas Bertugas ({editSubjectCode.toUpperCase() === 'BM' ? 'PBM' : 'PMT'}):
+                          </label>
+                          <select
+                            value={editPemulihanTeacherCode}
+                            onChange={(e) => setEditPemulihanTeacherCode(e.target.value)}
+                            className="w-full p-2 rounded-xl bg-slate-950 border border-emerald-700/70 text-white text-xs font-bold outline-none focus:border-emerald-400 cursor-pointer"
+                          >
+                            <option value="">
+                              {guruPemulihanCode
+                                ? `Auto — Guru Pemulihan Master Data (${guruPemulihanCode})`
+                                : '-- Auto (Tiada Guru Pemulihan ditetapkan dalam Master Data) --'}
+                            </option>
+                            {teacherMapping.list.map((t, idx) => (
+                              <option key={`${t.code}_${t.id}_pem_${idx}`} value={t.code}>
+                                [{t.num}] {t.code} - {t.name}{t.isGuruPemulihan ? ' ★ Guru Pemulihan' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </>
               )}

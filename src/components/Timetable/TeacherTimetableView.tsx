@@ -11,6 +11,7 @@ import {
   buildTeacherOptionAMatrix,
   formatKemaskiniDate,
   formatPenggalSesi,
+  getDesignatedPemulihanTeacherCode,
 } from '../../utils/lampiranData';
 import { exportSingleTeacherToExcel } from '../../utils/timetableExport';
 import { Printer, FileSpreadsheet, Download } from 'lucide-react';
@@ -21,6 +22,7 @@ interface LampiranBPrintableSheetProps {
   academicYear: string;
   teacher: TeacherDirectoryEntry;
   schoolName: string;
+  guruPemulihanCode?: string;
   kemaskiniDate?: string;
   pageBreakClass?: string;
 }
@@ -30,12 +32,13 @@ export const LampiranBPrintableSheet: React.FC<LampiranBPrintableSheetProps> = (
   academicYear,
   teacher,
   schoolName,
+  guruPemulihanCode,
   kemaskiniDate = formatKemaskiniDate(),
   pageBreakClass = '',
 }) => {
   const bundle = useMemo(
-    () => buildTeacherOptionAMatrix(schedule, teacher.code, academicYear),
-    [schedule, teacher.code, academicYear]
+    () => buildTeacherOptionAMatrix(schedule, teacher.code, academicYear, guruPemulihanCode),
+    [schedule, teacher.code, academicYear, guruPemulihanCode]
   );
 
   return (
@@ -66,6 +69,7 @@ export const LampiranBPrintableSheet: React.FC<LampiranBPrintableSheetProps> = (
           <span className="uppercase shrink-0">NAMA GURU :</span>
           <span className="uppercase font-black">
             {teacher.name} ({teacher.code})
+            {teacher.isGuruPemulihan ? ' · GURU PEMULIHAN KHAS' : ''}
           </span>
         </div>
         <div className="border-b border-dotted border-black pb-0.5 flex items-baseline gap-1.5">
@@ -95,11 +99,11 @@ export const LampiranBPrintableSheet: React.FC<LampiranBPrintableSheetProps> = (
                   return (
                     <th
                       key={col.slotId}
-                      className="py-1 px-0.5 w-8 font-black text-black text-[9px]"
+                      className="py-1 px-0.5 w-10 font-black text-black text-[9px]"
                       style={{ backgroundColor: '#B8CCE4' }}
                     >
                       <div>REHAT</div>
-                      <div className="text-[8px] font-bold leading-tight">{col.t2To6Time}</div>
+                      <div className="text-[7.5px] font-bold leading-tight">{col.displayTime}</div>
                     </th>
                   );
                 }
@@ -108,17 +112,18 @@ export const LampiranBPrintableSheet: React.FC<LampiranBPrintableSheetProps> = (
                   <th key={col.slotId} className="py-1 px-0.5 align-middle">
                     {col.t1ShiftedTime ? (
                       <div className="leading-tight space-y-0.5">
-                        <div className="font-black text-[9px]" style={{ color: '#CC00CC' }}>
-                          {col.t2To6Time}
+                        <div className="font-black text-[9px] text-black">{col.headerLabel}</div>
+                        <div className="font-black text-[8px]" style={{ color: '#CC00CC' }}>
+                          {col.displayTime}
                         </div>
-                        <div className="font-black text-[8px]" style={{ color: '#0F766E' }}>
+                        <div className="font-black text-[7.5px]" style={{ color: '#0F766E' }}>
                           {col.t1ShiftedTime}
                         </div>
                       </div>
                     ) : (
                       <div className="leading-tight space-y-0.5 text-black">
-                        <div className="font-black text-[9px]">W{col.periodLabel}</div>
-                        <div className="font-bold text-[8px]">{col.t2To6Time}</div>
+                        <div className="font-black text-[9px]">{col.headerLabel}</div>
+                        <div className="font-bold text-[8px]">{col.displayTime}</div>
                       </div>
                     )}
                   </th>
@@ -220,14 +225,18 @@ export const LampiranBPrintableSheet: React.FC<LampiranBPrintableSheetProps> = (
                     );
                   }
 
-                  // Regular Tahun 2-6 or Post-Recess Synchronized Lesson -> White background, bold black text
+                  // Regular Tahun 2-6 or Post-Recess Synchronized Lesson -> White background (soft emerald if Pemulihan Khas PBM/PMT)
                   return (
                     <td
                       key={col.slotId}
                       className="p-0.5 align-middle"
                       style={{
                         backgroundColor:
-                          entry.hasMembacaT1 && !entry.subjectCode ? '#CCFBF1' : '#FFFFFF',
+                          entry.hasMembacaT1 && !entry.subjectCode
+                            ? '#CCFBF1'
+                            : entry.isPemulihanSlot
+                            ? '#ECFDF5'
+                            : '#FFFFFF',
                       }}
                     >
                       {entry.hasMembacaT1 && (
@@ -246,6 +255,14 @@ export const LampiranBPrintableSheet: React.FC<LampiranBPrintableSheetProps> = (
                           <div className="font-bold text-[9px] text-black leading-tight mt-0.5">
                             {entry.gradeLabel || `T.${entry.grade}`}
                           </div>
+                          {entry.isPemulihanSlot && (
+                            <div
+                              className="text-[7px] font-black leading-tight uppercase mt-0.5"
+                              style={{ color: '#047857' }}
+                            >
+                              Pemulihan
+                            </div>
+                          )}
                         </>
                       )}
                     </td>
@@ -407,6 +424,11 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
     return teacherMapping.list.find((t) => t.code === selectedTeacherCode) || teacherMapping.list[0];
   }, [teacherMapping, selectedTeacherCode]);
 
+  const guruPemulihanCode = useMemo(
+    () => getDesignatedPemulihanTeacherCode(teacherMapping.list),
+    [teacherMapping.list]
+  );
+
   const workloads = useMemo(() => {
     if (!selectedTeacher) {
       return {
@@ -416,8 +438,8 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
         daysOver8: 0,
       };
     }
-    return buildTeacherOptionAMatrix(schedule, selectedTeacher.code, academicYear);
-  }, [schedule, selectedTeacher, academicYear]);
+    return buildTeacherOptionAMatrix(schedule, selectedTeacher.code, academicYear, guruPemulihanCode);
+  }, [schedule, selectedTeacher, academicYear, guruPemulihanCode]);
 
   const isOptimal = workloads.totalWaktu >= 22 && workloads.totalWaktu <= 33;
   const isOverload = workloads.totalWaktu > 35;
@@ -569,6 +591,7 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
           academicYear={academicYear}
           teacher={selectedTeacher}
           schoolName={schoolName}
+          guruPemulihanCode={guruPemulihanCode}
         />
       )}
     </div>

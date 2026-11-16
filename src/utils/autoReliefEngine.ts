@@ -7,10 +7,340 @@ import {
 } from '../components/Timetable/types';
 import {
   TeacherDirectoryEntry,
+  getDesignatedPemulihanTeacherCode,
   isKP2027Year1Active,
   parseTeacherCodes,
+  resolveCellPemulihanTeacher,
 } from './lampiranData';
+import { generateTeacherShortCode } from '../constants/officialRoster';
 import { PrasekolahTimetableDoc } from './prasekolahTimetable';
+
+export interface StaffDirectoryRecord {
+  id?: string;
+  uid?: string;
+  masterStaffId?: string;
+  staffId?: string;
+  teacherId?: string;
+  aliasIds?: string[];
+  name?: string;
+  fullName?: string;
+  email?: string;
+  code?: string;
+}
+
+const ROLE_ENUM_TOKENS = new Set([
+  'PRINCIPAL',
+  'GURU_BESAR',
+  'GURU BESAR',
+  'PKP',
+  'PK_PENTADBIRAN',
+  'PK PENTADBIRAN',
+  'PK1',
+  'PK 1',
+  'PK_1',
+  'PKHEM',
+  'PK HEM',
+  'PK_HEM',
+  'PKKK',
+  'PK KK',
+  'PK_KK',
+  'ADMIN',
+  'SUPER_ADMIN',
+  'SUPERADMIN',
+  'STAFF',
+  'TEACHER',
+  'GURU',
+  'AKP',
+  'PENYELARAS',
+]);
+
+function isLikelyFirebaseUid(token: string): boolean {
+  const t = token.trim();
+  if (!t || /\s/.test(t)) return false;
+  if (!/^[A-Za-z0-9_-]{18,44}$/.test(t)) return false;
+  // Normal names aren't single 18+ char mixed alphanumeric tokens without spaces
+  const hasLower = /[a-z]/.test(t);
+  const hasUpper = /[A-Z]/.test(t);
+  const hasDigit = /\d/.test(t);
+  return (hasLower && hasUpper) || (hasDigit && (hasLower || hasUpper)) || t.length >= 24;
+}
+
+export interface SanitizedAbsentTokens {
+  cleanNames: string[];
+  extractedUids: string[];
+  extractedIds: string[];
+  extractedEmails: string[];
+  extractedCodes: string[];
+}
+
+/**
+ * Strips comma-separated Firebase UIDs, role enums (PRINCIPAL, GURU_BESAR, PKP, ADMIN, etc.),
+ * and extracts structured identifiers separately from clean human teacher names.
+ */
+export function sanitizeAbsentTeacherInput(raw?: string | null): SanitizedAbsentTokens {
+  const result: SanitizedAbsentTokens = {
+    cleanNames: [],
+    extractedUids: [],
+    extractedIds: [],
+    extractedEmails: [],
+    extractedCodes: [],
+  };
+  if (!raw || typeof raw !== 'string') return result;
+
+  const parts = raw
+    .split(/[,;\n|]+/)
+    .map((p) => p.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  parts.forEach((token) => {
+    const upper = token.toUpperCase();
+    if (ROLE_ENUM_TOKENS.has(upper)) {
+      return;
+    }
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(token)) {
+      result.extractedEmails.push(token.toLowerCase());
+      return;
+    }
+    if (isLikelyFirebaseUid(token)) {
+      result.extractedUids.push(token);
+      result.extractedIds.push(token);
+      return;
+    }
+    if (/^staff_/i.test(token)) {
+      result.extractedIds.push(token);
+      const stripped = token.replace(/^staff_/i, '').trim();
+      if (stripped) result.extractedIds.push(stripped);
+      return;
+    }
+    if (/^\d{4,}$/.test(token)) {
+      result.extractedIds.push(token);
+      return;
+    }
+    if (upper === 'GB') {
+      // Treat standalone 'GB' as possible short code only, never display as a full name
+      result.extractedCodes.push(upper);
+      return;
+    }
+    if (/^[A-Za-z0-9]{1,6}$/.test(token) && !/\s/.test(token)) {
+      result.extractedCodes.push(upper);
+      return;
+    }
+    result.cleanNames.push(token);
+  });
+
+  return result;
+}
+
+/**
+ * Resolves any array of raw absent teacher IDs, UIDs, concatenated strings, or names
+ * into clean, unique official teacher names (never exposing Firebase UIDs or role enums).
+ */
+export function formatCleanAbsentTeacherNames(
+  rawInputs: string[],
+  teacherDirectory: Array<TeacherDirectoryEntry | StaffDirectoryRecord> = [],
+  staffDirectory: StaffDirectoryRecord[] = []
+): string {
+  const combinedDir: StaffDirectoryRecord[] = [
+    ...teacherDirectory,
+    ...staffDirectory,
+  ];
+
+  const findCleanNameByToken = (token: string, kind: 'id' | 'email' | 'code' | 'name'): string | null => {
+    const trimmed = token.trim();
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
+    const lower = trimmed.toLowerCase();
+
+    for (const entry of combinedDir) {
+      const entryName = (entry.name || entry.fullName || '').replace(/\s+/g, ' ').trim();
+      if (!entryName || isLikelyFirebaseUid(entryName) || ROLE_ENUM_TOKENS.has(entryName.toUpperCase())) {
+        continue;
+      }
+
+      const ids = [
+        entry.id,
+        entry.uid,
+        entry.masterStaffId,
+        entry.staffId,
+        entry.teacherId,
+        ...(entry.aliasIds || []),
+      ]
+        .filter(Boolean)
+        .map((x) => String(x).trim());
+
+      if (kind === 'id') {
+        if (ids.some((i) => i === trimmed || i.replace(/^staff_/i, '') === trimmed.replace(/^staff_/i, ''))) {
+          return entryName;
+        }
+      } else if (kind === 'email') {
+        if ((entry.email || '').trim().toLowerCase() === lower) {
+          return entryName;
+        }
+      } else if (kind === 'code') {
+        const entryCode = (entry.code || '').trim().toUpperCase();
+        const derivedCode = generateTeacherShortCode(entryName).toUpperCase();
+        if ((entryCode && entryCode === upper) || derivedCode === upper) {
+          return entryName;
+        }
+      } else if (kind === 'name') {
+        const entryNameUpper = entryName.toUpperCase();
+        if (
+          entryNameUpper === upper ||
+          entryNameUpper.includes(upper) ||
+          upper.includes(entryNameUpper)
+        ) {
+          return entryName;
+        }
+      }
+    }
+    return null;
+  };
+
+  const resolvedNames: string[] = [];
+  const seenNamesUpper = new Set<string>();
+
+  const pushUniqueName = (name: string) => {
+    const clean = name.replace(/\s+/g, ' ').trim();
+    if (!clean) return;
+    const upper = clean.toUpperCase();
+    if (ROLE_ENUM_TOKENS.has(upper) || isLikelyFirebaseUid(clean) || /^staff_/i.test(clean)) {
+      return;
+    }
+    if (!seenNamesUpper.has(upper)) {
+      seenNamesUpper.add(upper);
+      resolvedNames.push(clean);
+    }
+  };
+
+  (rawInputs || []).forEach((raw) => {
+    const parsed = sanitizeAbsentTeacherInput(raw);
+    let matchedAnyForEntry = false;
+
+    for (const nm of parsed.cleanNames) {
+      const hit = findCleanNameByToken(nm, 'name');
+      pushUniqueName(hit || nm);
+      matchedAnyForEntry = true;
+    }
+
+    if (!matchedAnyForEntry) {
+      for (const em of parsed.extractedEmails) {
+        const hit = findCleanNameByToken(em, 'email');
+        if (hit) {
+          pushUniqueName(hit);
+          matchedAnyForEntry = true;
+        }
+      }
+    }
+
+    if (!matchedAnyForEntry) {
+      for (const uidOrId of [...parsed.extractedUids, ...parsed.extractedIds]) {
+        const hit = findCleanNameByToken(uidOrId, 'id');
+        if (hit) {
+          pushUniqueName(hit);
+          matchedAnyForEntry = true;
+        }
+      }
+    }
+
+    if (!matchedAnyForEntry) {
+      for (const cd of parsed.extractedCodes) {
+        const hit = findCleanNameByToken(cd, 'code');
+        if (hit) {
+          pushUniqueName(hit);
+          matchedAnyForEntry = true;
+        }
+      }
+    }
+  });
+
+  return resolvedNames.join(', ');
+}
+
+export function buildTeacherIdentifierIndex(
+  teacherList: TeacherDirectoryEntry[],
+  staffDirectory: StaffDirectoryRecord[] = []
+): Map<string, string> {
+  const index = new Map<string, string>();
+  const register = (rawKey: string | undefined | null, canonicalCode: string) => {
+    if (!rawKey) return;
+    const clean = String(rawKey).replace(/\s+/g, ' ').trim();
+    if (!clean) return;
+    const upper = clean.toUpperCase();
+    if (ROLE_ENUM_TOKENS.has(upper)) return;
+    if (!index.has(upper)) {
+      index.set(upper, canonicalCode);
+    }
+    if (/^staff_/i.test(clean)) {
+      const stripped = clean.replace(/^staff_/i, '').trim().toUpperCase();
+      if (stripped && !index.has(stripped)) {
+        index.set(stripped, canonicalCode);
+      }
+    }
+  };
+
+  teacherList.forEach((t) => {
+    const canonicalCode = (t.code || '').trim().toUpperCase();
+    if (!canonicalCode) return;
+    register(canonicalCode, canonicalCode);
+    register(t.id, canonicalCode);
+    register(t.name, canonicalCode);
+    if (t.name) {
+      register(generateTeacherShortCode(t.name), canonicalCode);
+    }
+    const extra = t as unknown as StaffDirectoryRecord;
+    register(extra.uid, canonicalCode);
+    register(extra.masterStaffId, canonicalCode);
+    register(extra.staffId, canonicalCode);
+    register(extra.teacherId, canonicalCode);
+    register(extra.email, canonicalCode);
+    (extra.aliasIds || []).forEach((aid) => register(aid, canonicalCode));
+  });
+
+  // Link any additional records in staffDirectory back to a canonical teacher code
+  staffDirectory.forEach((s) => {
+    const sName = (s.name || s.fullName || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const sEmail = (s.email || '').trim().toLowerCase();
+    const sCode = (s.code || '').trim().toUpperCase();
+    const sIds = [s.id, s.uid, s.masterStaffId, s.staffId, s.teacherId, ...(s.aliasIds || [])]
+      .filter(Boolean)
+      .map((x) => String(x).trim().toUpperCase());
+
+    let matchedCanonical: string | undefined;
+    if (sCode && index.has(sCode)) matchedCanonical = index.get(sCode);
+    if (!matchedCanonical && sEmail && index.has(sEmail.toUpperCase())) {
+      matchedCanonical = index.get(sEmail.toUpperCase());
+    }
+    if (!matchedCanonical) {
+      for (const sid of sIds) {
+        if (index.has(sid)) {
+          matchedCanonical = index.get(sid);
+          break;
+        }
+      }
+    }
+    if (!matchedCanonical && sName) {
+      if (index.has(sName)) {
+        matchedCanonical = index.get(sName);
+      } else {
+        const bySubstr = teacherList.find((t) => {
+          const tn = (t.name || '').replace(/\s+/g, ' ').trim().toUpperCase();
+          return tn && (tn === sName || tn.includes(sName) || sName.includes(tn));
+        });
+        if (bySubstr) matchedCanonical = bySubstr.code.trim().toUpperCase();
+      }
+    }
+
+    if (matchedCanonical) {
+      register(s.code, matchedCanonical);
+      register(s.email, matchedCanonical);
+      register(s.name, matchedCanonical);
+      register(s.fullName, matchedCanonical);
+      sIds.forEach((sid) => register(sid, matchedCanonical!));
+    }
+  });
+
+  return index;
+}
 
 export type ReliefAssignmentMode =
   | 'TUKAR_WAKTU_KELAS_SAMA'
@@ -200,7 +530,7 @@ export function isRecordActiveOnDate(rec: AbsenceSyncSourceRecord, targetDate: s
 export function detectAbsentTeachersForDate(params: {
   dateStr: string;
   teacherMapping: { list: TeacherDirectoryEntry[] };
-  staffDirectory?: Array<{ id?: string; uid?: string; name?: string; email?: string; code?: string }>;
+  staffDirectory?: StaffDirectoryRecord[];
   absenceRecords?: AbsenceSyncSourceRecord[];
   unavailabilityRecords?: AbsenceSyncSourceRecord[];
   suratAlerts?: Array<{
@@ -227,77 +557,77 @@ export function detectAbsentTeachersForDate(params: {
     { teacher: TeacherDirectoryEntry; sources: Set<string>; reasons: Set<string> }
   >();
 
-  const resolveTeacherEntry = (identifiers: {
+  const identifierIndex = buildTeacherIdentifierIndex(teacherMapping.list, staffDirectory);
+
+  const resolveBySingleToken = (token?: string): TeacherDirectoryEntry | undefined => {
+    if (!token) return undefined;
+    const clean = token.replace(/\s+/g, ' ').trim();
+    if (!clean) return undefined;
+    const upper = clean.toUpperCase();
+    if (ROLE_ENUM_TOKENS.has(upper)) return undefined;
+
+    const canonical = identifierIndex.get(upper) || identifierIndex.get(upper.replace(/^STAFF_/, ''));
+    if (canonical) {
+      const hit = teacherMapping.list.find((t) => t.code.toUpperCase() === canonical);
+      if (hit) return hit;
+    }
+
+    // Fallback substring match for human names
+    if (clean.length >= 3 && !isLikelyFirebaseUid(clean)) {
+      const bySubstr = teacherMapping.list.find((t) => {
+        const tn = t.name.replace(/\s+/g, ' ').trim().toUpperCase();
+        return tn === upper || tn.includes(upper) || upper.includes(tn);
+      });
+      if (bySubstr) return bySubstr;
+    }
+
+    return undefined;
+  };
+
+  const resolveTeacherEntries = (identifiers: {
     id?: string;
     name?: string;
     email?: string;
     code?: string;
-  }): TeacherDirectoryEntry | undefined => {
-    const cleanCode = (identifiers.code || '').trim().toUpperCase();
-    const cleanId = (identifiers.id || '').trim();
-    const cleanEmail = (identifiers.email || '').trim().toLowerCase();
-    const cleanName = (identifiers.name || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  }): TeacherDirectoryEntry[] => {
+    const matched = new Map<string, TeacherDirectoryEntry>();
+    const addMatch = (t?: TeacherDirectoryEntry) => {
+      if (t) matched.set(t.code.toUpperCase(), t);
+    };
 
-    if (cleanCode) {
-      const byCode = teacherMapping.list.find((t) => t.code.toUpperCase() === cleanCode);
-      if (byCode) return byCode;
+    if (identifiers.code) {
+      addMatch(resolveBySingleToken(identifiers.code));
     }
-
-    if (cleanId) {
-      const byId = teacherMapping.list.find((t) => t.id === cleanId);
-      if (byId) return byId;
-
-      const staffMatch = staffDirectory.find((s) => s.id === cleanId || s.uid === cleanId);
-      if (staffMatch) {
-        const staffEmail = (staffMatch.email || '').trim().toLowerCase();
-        const staffName = (staffMatch.name || '').replace(/\s+/g, ' ').trim().toUpperCase();
-        const staffCode = (staffMatch.code || '').trim().toUpperCase();
-        const matchedFromStaff = teacherMapping.list.find(
-          (t) =>
-            (staffCode && t.code.toUpperCase() === staffCode) ||
-            (staffName &&
-              (t.name.toUpperCase() === staffName ||
-                t.name.toUpperCase().includes(staffName) ||
-                staffName.includes(t.name.toUpperCase())))
-        );
-        if (matchedFromStaff) return matchedFromStaff;
-        if (staffEmail) {
-          const emailMatch = staffDirectory.find(
-            (s) => (s.email || '').toLowerCase() === staffEmail && s.name
-          );
-          if (emailMatch?.name) {
-            const upperEName = emailMatch.name.toUpperCase();
-            const byEName = teacherMapping.list.find(
-              (t) => t.name.toUpperCase().includes(upperEName) || upperEName.includes(t.name.toUpperCase())
-            );
-            if (byEName) return byEName;
-          }
+    if (identifiers.email) {
+      addMatch(resolveBySingleToken(identifiers.email));
+    }
+    if (identifiers.id) {
+      const parsedId = sanitizeAbsentTeacherInput(identifiers.id);
+      parsedId.cleanNames.forEach((n) => addMatch(resolveBySingleToken(n)));
+      parsedId.extractedEmails.forEach((e) => addMatch(resolveBySingleToken(e)));
+      parsedId.extractedUids.forEach((u) => addMatch(resolveBySingleToken(u)));
+      parsedId.extractedIds.forEach((i) => addMatch(resolveBySingleToken(i)));
+      parsedId.extractedCodes.forEach((c) => addMatch(resolveBySingleToken(c)));
+      addMatch(resolveBySingleToken(identifiers.id));
+    }
+    if (identifiers.name) {
+      const parsedName = sanitizeAbsentTeacherInput(identifiers.name);
+      parsedName.cleanNames.forEach((n) => {
+        const hit = resolveBySingleToken(n);
+        if (hit) {
+          addMatch(hit);
+        } else {
+          const shortHit = resolveBySingleToken(generateTeacherShortCode(n));
+          addMatch(shortHit);
         }
-      }
+      });
+      parsedName.extractedEmails.forEach((e) => addMatch(resolveBySingleToken(e)));
+      parsedName.extractedUids.forEach((u) => addMatch(resolveBySingleToken(u)));
+      parsedName.extractedIds.forEach((i) => addMatch(resolveBySingleToken(i)));
+      parsedName.extractedCodes.forEach((c) => addMatch(resolveBySingleToken(c)));
     }
 
-    if (cleanEmail) {
-      const staffByEmail = staffDirectory.find((s) => (s.email || '').trim().toLowerCase() === cleanEmail);
-      if (staffByEmail?.name) {
-        const sName = staffByEmail.name.replace(/\s+/g, ' ').trim().toUpperCase();
-        const match = teacherMapping.list.find(
-          (t) => t.name.toUpperCase() === sName || t.name.toUpperCase().includes(sName) || sName.includes(t.name.toUpperCase())
-        );
-        if (match) return match;
-      }
-    }
-
-    if (cleanName) {
-      const directName = teacherMapping.list.find(
-        (t) =>
-          t.name.toUpperCase() === cleanName ||
-          t.name.toUpperCase().includes(cleanName) ||
-          cleanName.includes(t.name.toUpperCase())
-      );
-      if (directName) return directName;
-    }
-
-    return undefined;
+    return Array.from(matched.values());
   };
 
   const addDetected = (teacher: TeacherDirectoryEntry, source: string, reason?: string) => {
@@ -317,28 +647,28 @@ export function detectAbsentTeachersForDate(params: {
   // 1. Kehadiran Staf absence_records
   absenceRecords.forEach((rec) => {
     if (!isRecordActiveOnDate(rec, dateStr)) return;
-    const matched = resolveTeacherEntry({
+    const matches = resolveTeacherEntries({
       id: rec.userId || rec.teacherId,
       name: rec.userName || rec.teacherName,
       email: rec.userEmail || rec.email,
     });
-    if (matched) {
-      const reasonText = [rec.category, rec.reason].filter(Boolean).join(': ');
+    const reasonText = [rec.category, rec.reason].filter(Boolean).join(': ');
+    matches.forEach((matched) => {
       addDetected(matched, 'Kehadiran Staf', reasonText || 'Tidak Hadir');
-    }
+    });
   });
 
   // 2. staff_unavailability (Surat Masuk / Takwim)
   unavailabilityRecords.forEach((rec) => {
     if (!isRecordActiveOnDate(rec, dateStr)) return;
-    const matched = resolveTeacherEntry({
+    const matches = resolveTeacherEntries({
       id: rec.teacherId || rec.userId,
       name: rec.teacherName || rec.userName,
       email: rec.email || rec.userEmail,
     });
-    if (matched) {
+    matches.forEach((matched) => {
       addDetected(matched, 'Surat Masuk', rec.perkara || rec.reason || 'Urusan Rasmi');
-    }
+    });
   });
 
   // 3. Active relief_alerts_from_surat covering dateStr
@@ -347,10 +677,10 @@ export function detectAbsentTeachersForDate(params: {
       return;
     }
     (alert.absentTeacherIds || []).forEach((tid) => {
-      const matched = resolveTeacherEntry({ id: tid, name: tid, code: tid });
-      if (matched) {
+      const matches = resolveTeacherEntries({ id: tid, name: tid, code: tid });
+      matches.forEach((matched) => {
         addDetected(matched, 'Relief Surat', alert.perkara || 'Surat Rasmi');
-      }
+      });
     });
   });
 
@@ -374,18 +704,59 @@ export function detectAbsentTeachersForDate(params: {
  * - SELASA W1 PN (+1.0 waktu)
  * - Isolated Prasekolah timetable blocks (when `prasekolahTimetable` is provided, marks the assigned Guru Prasekolah busy during Prasekolah teaching blocks)
  */
+function extractCellCanonicalTeacherCodes(
+  cell: any,
+  identifierIndex: Map<string, string>,
+  teacherList: TeacherDirectoryEntry[]
+): string[] {
+  if (!cell) return [];
+  const rawTokens: string[] = [
+    ...parseTeacherCodes(cell.teacherCode),
+    ...parseTeacherCodes(cell.secondaryTeacherCode),
+    ...(cell.teacherShortCode ? parseTeacherCodes(cell.teacherShortCode) : []),
+    ...(cell.teacherId ? [String(cell.teacherId).trim()] : []),
+    ...(cell.teacherName ? sanitizeAbsentTeacherInput(String(cell.teacherName)).cleanNames : []),
+  ];
+
+  const resolvedSet = new Set<string>();
+  rawTokens.forEach((tok) => {
+    const clean = tok.replace(/\s+/g, ' ').trim();
+    if (!clean) return;
+    const upper = clean.toUpperCase();
+    if (ROLE_ENUM_TOKENS.has(upper)) return;
+    const mapped =
+      identifierIndex.get(upper) ||
+      identifierIndex.get(upper.replace(/^STAFF_/, ''));
+    if (mapped) {
+      resolvedSet.add(mapped);
+    } else {
+      const bySubstr =
+        clean.length >= 3 && !isLikelyFirebaseUid(clean)
+          ? teacherList.find((t) => {
+              const tn = t.name.replace(/\s+/g, ' ').trim().toUpperCase();
+              return tn === upper || tn.includes(upper) || upper.includes(tn);
+            })
+          : undefined;
+      resolvedSet.add(bySubstr ? bySubstr.code : upper);
+    }
+  });
+  return Array.from(resolvedSet);
+}
+
 export function computeTeacherDaySchedulesAndLoads(
   schedule: ScheduleGrid,
   academicYear: string,
   teacherMapping: { list: TeacherDirectoryEntry[] },
   day: DayOfWeek,
-  prasekolahTimetable?: PrasekolahTimetableDoc | null
+  prasekolahTimetable?: PrasekolahTimetableDoc | null,
+  staffDirectory: StaffDirectoryRecord[] = []
 ): {
   busyIntervalsByTeacher: Record<string, BusyInterval[]>;
   baseLoadsByTeacher: Record<string, number>;
 } {
   const busyIntervalsByTeacher: Record<string, BusyInterval[]> = {};
   const baseLoadsByTeacher: Record<string, number> = {};
+  const identifierIndex = buildTeacherIdentifierIndex(teacherMapping.list, staffDirectory);
 
   teacherMapping.list.forEach((t) => {
     busyIntervalsByTeacher[t.code] = [];
@@ -412,6 +783,7 @@ export function computeTeacherDaySchedulesAndLoads(
   }
 
   const isT1Shifted = isKP2027Year1Active(academicYear);
+  const guruPemulihanCode = getDesignatedPemulihanTeacherCode(teacherMapping.list);
   const seenTasmikLoadKeys = new Set<string>();
 
   [1, 2, 3, 4, 5, 6].forEach((grade) => {
@@ -426,11 +798,12 @@ export function computeTeacherDaySchedulesAndLoads(
         if (!isT1Shifted || recordedPkarToday) return;
         const pkarCell = schedule[1]?.[day]?.['PKAR'];
         const w4Cell = schedule[1]?.[day]?.['W4'];
-        const rawTeacher =
-          pkarCell?.teacherCode?.trim() ||
-          (w4Cell && w4Cell.subjectCode?.toUpperCase() !== 'PN' ? w4Cell.teacherCode?.trim() : '') ||
-          '';
-        const pkarTeachers = parseTeacherCodes(rawTeacher);
+        const pkarTeachers =
+          pkarCell && (pkarCell.teacherCode?.trim() || (pkarCell as any).teacherId || pkarCell.teacherName)
+            ? extractCellCanonicalTeacherCodes(pkarCell, identifierIndex, teacherMapping.list)
+            : w4Cell && w4Cell.subjectCode?.toUpperCase() !== 'PN'
+            ? extractCellCanonicalTeacherCodes(w4Cell, identifierIndex, teacherMapping.list)
+            : [];
         if (pkarTeachers.length > 0) {
           recordedPkarToday = true;
           const pkarLen = pkarCell?.periodLength ?? 0.5;
@@ -454,8 +827,9 @@ export function computeTeacherDaySchedulesAndLoads(
       const upperSubj = cell.subjectCode.trim().toUpperCase();
       if (upperSubj === 'PN') return; // Handled globally above for SELASA W1
 
-      const tCodes = parseTeacherCodes(cell.teacherCode);
-      if (tCodes.length === 0) return;
+      const tCodes = extractCellCanonicalTeacherCodes(cell, identifierIndex, teacherMapping.list);
+      const pemTeacher = resolveCellPemulihanTeacher(cell, guruPemulihanCode);
+      if (tCodes.length === 0 && !pemTeacher) return;
 
       const isTasmikCell = gs.slotId === 'TASMIK' || upperSubj === 'TASMIK';
       const len = cell.periodLength ?? (gs.slotId === 'MEMBACA' ? 0.5 : 1);
@@ -475,6 +849,18 @@ export function computeTeacherDaySchedulesAndLoads(
         }
         baseLoadsByTeacher[tc] += len;
       });
+
+      if (pemTeacher && !tCodes.includes(pemTeacher)) {
+        ensureTeacher(pemTeacher);
+        busyIntervalsByTeacher[pemTeacher].push({
+          startMinutes: gs.startMinutes,
+          endMinutes: gs.endMinutes,
+          grade,
+          slotId: gs.slotId,
+          subjectCode: upperSubj === 'MT' ? 'PMT' : 'PBM',
+        });
+        baseLoadsByTeacher[pemTeacher] += len;
+      }
     });
   });
 
@@ -515,7 +901,9 @@ export function computeTeacherDaySchedulesAndLoads(
  */
 function buildClassWeeklyIndex(
   schedule: ScheduleGrid,
-  academicYear: string
+  academicYear: string,
+  identifierIndex: Map<string, string>,
+  teacherList: TeacherDirectoryEntry[]
 ): {
   teachersByGrade: Record<number, Map<string, Set<string>>>; // grade -> teacherCode -> Set<subjectCode (subjectName)>
   slotsByGradeAndDay: Record<number, Record<DayOfWeek, ClassWeeklyLessonSlot[]>>;
@@ -544,7 +932,7 @@ function buildClassWeeklyIndex(
         const upperSubj = cell.subjectCode.trim().toUpperCase();
         if (upperSubj === 'PN' || upperSubj === 'PKAR' || upperSubj === 'TASMIK') return;
 
-        const tCodes = parseTeacherCodes(cell.teacherCode);
+        const tCodes = extractCellCanonicalTeacherCodes(cell, identifierIndex, teacherList);
         if (tCodes.length === 0) return;
 
         tCodes.forEach((tc) => {
@@ -596,6 +984,7 @@ export function generateAutoReliefPlan(params: {
   dayOverride?: DayOfWeek;
   absentTeacherCodes: string[];
   teacherMapping: { list: TeacherDirectoryEntry[] };
+  staffDirectory?: StaffDirectoryRecord[];
   detectedAbsentTeachers?: DetectedAbsentTeacher[];
   manualOverrides?: Record<string, string>; // slotKey -> chosen substitute code
   repaymentDateOverrides?: Record<string, string>; // slotKey -> custom 'YYYY-MM-DD' Tarikh Pulang Balik
@@ -620,6 +1009,7 @@ export function generateAutoReliefPlan(params: {
     dayOverride,
     absentTeacherCodes,
     teacherMapping: rawTeacherMapping,
+    staffDirectory = [],
     detectedAbsentTeachers = [],
     manualOverrides = {},
     repaymentDateOverrides = {},
@@ -645,8 +1035,22 @@ export function generateAutoReliefPlan(params: {
   });
   const teacherMapping = { list: dedupedList };
 
+  const identifierIndex = buildTeacherIdentifierIndex(teacherMapping.list, staffDirectory);
+
   const day: DayOfWeek = dayOverride || dateStrToDayOfWeek(dateStr) || 'ISNIN';
-  const absentSet = new Set(absentTeacherCodes.map((c) => c.trim().toUpperCase()).filter(Boolean));
+  const absentSet = new Set<string>();
+  absentTeacherCodes.forEach((rawCode) => {
+    const clean = (rawCode || '').trim();
+    if (!clean) return;
+    const upper = clean.toUpperCase();
+    const mapped = identifierIndex.get(upper) || identifierIndex.get(upper.replace(/^STAFF_/, ''));
+    absentSet.add(mapped || upper);
+  });
+  detectedAbsentTeachers.forEach((d) => {
+    if (d.teacherCode) {
+      absentSet.add(d.teacherCode.trim().toUpperCase());
+    }
+  });
   const holidaySet = new Set(holidayDates.map((d) => d.trim()).filter(Boolean));
   const isT1Shifted = isKP2027Year1Active(academicYear);
 
@@ -658,15 +1062,15 @@ export function generateAutoReliefPlan(params: {
       baseLoadsByTeacher: Record<string, number>;
     }
   > = {
-    ISNIN: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'ISNIN', prasekolahTimetable),
-    SELASA: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'SELASA', prasekolahTimetable),
-    RABU: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'RABU', prasekolahTimetable),
-    KHAMIS: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'KHAMIS', prasekolahTimetable),
-    JUMAAT: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'JUMAAT', prasekolahTimetable),
+    ISNIN: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'ISNIN', prasekolahTimetable, staffDirectory),
+    SELASA: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'SELASA', prasekolahTimetable, staffDirectory),
+    RABU: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'RABU', prasekolahTimetable, staffDirectory),
+    KHAMIS: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'KHAMIS', prasekolahTimetable, staffDirectory),
+    JUMAAT: computeTeacherDaySchedulesAndLoads(schedule, academicYear, teacherMapping, 'JUMAAT', prasekolahTimetable, staffDirectory),
   };
 
   const { busyIntervalsByTeacher, baseLoadsByTeacher } = dayScheduleCache[day];
-  const { teachersByGrade, slotsByGradeAndDay } = buildClassWeeklyIndex(schedule, academicYear);
+  const { teachersByGrade, slotsByGradeAndDay } = buildClassWeeklyIndex(schedule, academicYear, identifierIndex, teacherMapping.list);
 
   // Cache of absent teacher codes on future dates D_return
   const futureAbsentCodesCache = new Map<string, Set<string>>();
@@ -686,6 +1090,7 @@ export function generateAutoReliefPlan(params: {
     const detected = detectAbsentTeachersForDate({
       dateStr: futureDateStr,
       teacherMapping,
+      staffDirectory,
       absenceRecords,
       unavailabilityRecords,
       suratAlerts,
@@ -718,6 +1123,47 @@ export function generateAutoReliefPlan(params: {
   }
 
   const flaggedLessons: RawFlaggedLesson[] = [];
+  const guruPemulihanCode = getDesignatedPemulihanTeacherCode(teacherMapping.list);
+
+  const extractCellCanonicalTeachers = (cell: any): string[] => {
+    if (!cell) return [];
+    const rawTokens: string[] = [
+      ...parseTeacherCodes(cell.teacherCode),
+      ...parseTeacherCodes(cell.secondaryTeacherCode),
+      ...(cell.teacherShortCode ? parseTeacherCodes(cell.teacherShortCode) : []),
+      ...(cell.teacherId ? [String(cell.teacherId).trim()] : []),
+      ...(cell.teacherName ? sanitizeAbsentTeacherInput(String(cell.teacherName)).cleanNames : []),
+    ];
+    const pemCode = resolveCellPemulihanTeacher(cell, guruPemulihanCode);
+    if (pemCode) {
+      rawTokens.push(...parseTeacherCodes(pemCode));
+    }
+
+    const resolvedSet = new Set<string>();
+    rawTokens.forEach((tok) => {
+      const clean = tok.replace(/\s+/g, ' ').trim();
+      if (!clean) return;
+      const upper = clean.toUpperCase();
+      if (ROLE_ENUM_TOKENS.has(upper)) return;
+      const mapped =
+        identifierIndex.get(upper) ||
+        identifierIndex.get(upper.replace(/^STAFF_/, ''));
+      if (mapped) {
+        resolvedSet.add(mapped);
+      } else {
+        // Fallback: check substring match for full teacher names in teacherName field
+        const bySubstr =
+          clean.length >= 3 && !isLikelyFirebaseUid(clean)
+            ? teacherMapping.list.find((t) => {
+                const tn = t.name.replace(/\s+/g, ' ').trim().toUpperCase();
+                return tn === upper || tn.includes(upper) || upper.includes(tn);
+              })
+            : undefined;
+        resolvedSet.add(bySubstr ? bySubstr.code : upper);
+      }
+    });
+    return Array.from(resolvedSet);
+  };
 
   if (absentSet.size > 0) {
     // 1. Mainstream Classes (Tahun 1 - Tahun 6)
@@ -734,11 +1180,12 @@ export function generateAutoReliefPlan(params: {
           checkedPkar = true;
           const pkarCell = schedule[1]?.[day]?.['PKAR'];
           const w4Cell = schedule[1]?.[day]?.['W4'];
-          const rawTeacher =
-            pkarCell?.teacherCode?.trim() ||
-            (w4Cell && w4Cell.subjectCode?.toUpperCase() !== 'PN' ? w4Cell.teacherCode?.trim() : '') ||
-            '';
-          const teachers = parseTeacherCodes(rawTeacher);
+          const teachers =
+            pkarCell && (pkarCell.teacherCode?.trim() || (pkarCell as any).teacherId || pkarCell.teacherName)
+              ? extractCellCanonicalTeachers(pkarCell)
+              : w4Cell && w4Cell.subjectCode?.toUpperCase() !== 'PN'
+              ? extractCellCanonicalTeachers(w4Cell)
+              : [];
           const absentHere = teachers.filter((tc) => absentSet.has(tc.toUpperCase()));
           if (absentHere.length > 0) {
             flaggedLessons.push({
@@ -770,7 +1217,7 @@ export function generateAutoReliefPlan(params: {
         const upperSubj = cell.subjectCode.trim().toUpperCase();
         if (upperSubj === 'PN') return;
 
-        const teachers = parseTeacherCodes(cell.teacherCode);
+        const teachers = extractCellCanonicalTeachers(cell);
         const absentHere = teachers.filter((tc) => absentSet.has(tc.toUpperCase()));
         if (absentHere.length === 0) return;
 

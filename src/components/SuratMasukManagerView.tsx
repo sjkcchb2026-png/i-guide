@@ -780,8 +780,21 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           })
         );
 
+        const reliefAbsentTeacherIds = Array.from(
+          new Set(
+            (selectedTeacherIds.length > 0
+              ? selectedTeacherIds
+              : effectiveTargetTeacherIds
+            ).filter((tid) => tid && tid !== 'PRINCIPAL' && tid !== 'GURU_BESAR')
+          )
+        );
+        const cleanReliefTargetIds =
+          reliefAbsentTeacherIds.length > 0
+            ? reliefAbsentTeacherIds
+            : effectiveTargetTeacherIds.filter((tid) => tid && tid !== 'PRINCIPAL' && tid !== 'GURU_BESAR');
+
         // Keberadaan Guru sync
-        effectiveTargetTeacherIds.forEach((tId) => {
+        cleanReliefTargetIds.forEach((tId) => {
           const noticeId = `unavail_${suratId}_${tId}`;
           linkedUnavailabilityIds.push(noticeId);
 
@@ -809,10 +822,31 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
         });
 
         // Relief alert sync
-        if (perluJadualGanti && effectiveTargetTeacherIds.length > 0) {
+        if (perluJadualGanti && cleanReliefTargetIds.length > 0) {
           linkedReliefAlertId = `relief_surat_${suratId}`;
+          const resolvedAssignmentTeacherIds = new Set<string>(cleanReliefTargetIds);
+          activeTeachers.forEach((t) => {
+            const tNameUpper = (t.fullName || '').trim().toUpperCase();
+            if (
+              cleanReliefTargetIds.includes(t.teacherId) ||
+              (tNameUpper &&
+                cleanReliefTargetIds.some((id) => id.trim().toUpperCase() === tNameUpper))
+            ) {
+              resolvedAssignmentTeacherIds.add(t.teacherId);
+            }
+          });
           const affectedClasses = academicAssignments
-            .filter((asg) => effectiveTargetTeacherIds.includes(asg.teacherId) && asg.status !== 'INACTIVE')
+            .filter((asg) => {
+              const asgTeacherName = (asg as { teacherName?: string }).teacherName;
+              return (
+                (resolvedAssignmentTeacherIds.has(asg.teacherId) ||
+                  (asgTeacherName &&
+                    cleanReliefTargetIds.some(
+                      (id) => id.trim().toUpperCase() === asgTeacherName.trim().toUpperCase()
+                    ))) &&
+                asg.status !== 'INACTIVE'
+              );
+            })
             .map((asg) => ({
               teacherId: asg.teacherId,
               classId: asg.classId,
@@ -832,7 +866,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
               noRujukanLuar,
               startDate: tarikhHadirMula,
               endDate: tarikhHadirTamat || tarikhHadirMula,
-              absentTeacherIds: effectiveTargetTeacherIds,
+              absentTeacherIds: cleanReliefTargetIds,
               affectedClasses,
               status: 'PERLU_JADUAL_GANTI',
               createdAt: new Date().toISOString(),

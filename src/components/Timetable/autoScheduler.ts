@@ -39,6 +39,7 @@ import {
   setPreviousScheduleSignature,
   resetScheduleSignature,
 } from '../../utils/timetableEngine';
+import { getAllCellTeacherCodes } from '../../utils/lampiranData';
 
 export {
   computeScheduleSignature,
@@ -223,12 +224,16 @@ export function createEmptyScheduleGrid(academicYear: string = '2027'): Schedule
   return grid;
 }
 
-export function detectScheduleClashes(grid: ScheduleGrid, academicYear: string = '2027'): TimetableClash[] {
+export function detectScheduleClashes(
+  grid: ScheduleGrid,
+  academicYear: string = '2027',
+  guruPemulihanCode?: string
+): TimetableClash[] {
   const clashes: TimetableClash[] = [];
 
   DAYS_OF_WEEK.forEach((day) => {
     const dayAssignments: Array<{
-      teacherCode: string;
+      teacherCodes: string[];
       subjectCode: string;
       grade: number;
       slotId: string;
@@ -242,9 +247,11 @@ export function detectScheduleClashes(grid: ScheduleGrid, academicYear: string =
       slots.forEach((s) => {
         if (s.isRecess) return;
         const cell = grid[grade]?.[day]?.[s.slotId];
-        if (cell && cell.teacherCode && cell.teacherCode.trim() !== '') {
+        if (!cell) return;
+        const allTeachers = getAllCellTeacherCodes(cell, guruPemulihanCode);
+        if (allTeachers.length > 0) {
           dayAssignments.push({
-            teacherCode: cell.teacherCode.trim(),
+            teacherCodes: allTeachers,
             subjectCode: cell.subjectCode || '',
             grade,
             slotId: s.slotId,
@@ -271,9 +278,7 @@ export function detectScheduleClashes(grid: ScheduleGrid, academicYear: string =
         if (a.slotId === 'MEMBACA' || b.slotId === 'MEMBACA') continue;
         if (a.grade === b.grade && a.slotId === b.slotId) continue;
 
-        const aTeachers = a.teacherCode.split('/').map((c) => c.trim()).filter(Boolean);
-        const bTeachers = b.teacherCode.split('/').map((c) => c.trim()).filter(Boolean);
-        const overlappingTeacher = aTeachers.find((at) => bTeachers.includes(at));
+        const overlappingTeacher = a.teacherCodes.find((at) => b.teacherCodes.includes(at));
 
         if (overlappingTeacher && a.grade !== b.grade) {
           if (checkIntervalOverlap(a.startMin, a.endMin, b.startMin, b.endMin)) {
@@ -336,23 +341,21 @@ export interface ScheduleAuditReport {
 export function auditScheduleWorkload(
   grid: ScheduleGrid,
   extraTeachers: string[] = [],
-  academicYear: string = '2027'
+  academicYear: string = '2027',
+  guruPemulihanCode?: string
 ): ScheduleAuditReport {
   const teacherSet = new Set<string>(extraTeachers.filter(Boolean));
+  if (guruPemulihanCode && guruPemulihanCode.trim()) {
+    teacherSet.add(guruPemulihanCode.trim().toUpperCase());
+  }
 
-  // Discover all teacher codes present in the grid
+  // Discover all teacher codes present in the grid (mainstream + Pemulihan)
   [1, 2, 3, 4, 5, 6].forEach((g) => {
     DAYS_OF_WEEK.forEach((d) => {
       const daySlots = grid[g]?.[d];
       if (!daySlots) return;
       Object.values(daySlots).forEach((cell) => {
-        if (cell?.teacherCode) {
-          cell.teacherCode
-            .split('/')
-            .map((t) => t.trim())
-            .filter(Boolean)
-            .forEach((t) => teacherSet.add(t));
-        }
+        getAllCellTeacherCodes(cell, guruPemulihanCode).forEach((t) => teacherSet.add(t));
       });
     });
   });
@@ -429,11 +432,11 @@ export function auditScheduleWorkload(
         }
 
         if (cell.subjectCode === 'PN') return; // Already counted on SELASA (+1)
-        if (!cell.teacherCode || !cell.teacherCode.trim()) return;
+        const tList = getAllCellTeacherCodes(cell, guruPemulihanCode);
+        if (tList.length === 0) return;
 
         const isTasmikCell = s.slotId === 'TASMIK' || cell.subjectCode?.toUpperCase() === 'TASMIK';
         const len = cell.periodLength ?? (s.slotId === 'PKAR' || s.slotId === 'MEMBACA' ? 0.5 : 1);
-        const tList = cell.teacherCode.split('/').map((c) => c.trim()).filter(Boolean);
         tList.forEach((t) => {
           if (!dailyMap[t]) {
             dailyMap[t] = { ISNIN: 0, SELASA: 1, RABU: 0, KHAMIS: 0, JUMAAT: 0 };
