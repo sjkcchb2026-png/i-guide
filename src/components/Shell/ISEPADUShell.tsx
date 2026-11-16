@@ -30,7 +30,8 @@ import {
   Bell,
   Camera,
   Mail,
-  Key
+  Key,
+  Bot
 } from 'lucide-react';
 
 import SchoolLogo from '../SchoolLogo';
@@ -47,8 +48,9 @@ import { AcademicOPRManager } from '../Academic/AcademicOPRManager';
 import { PaparanMaklumanView } from '../Dashboard/PaparanMaklumanView';
 import { SuratMasukManagerView } from '../SuratMasukManagerView';
 import { ReliefSchedulingView } from '../ReliefSchedulingView';
+import { AISetiausahaHub } from '../AISetiausaha/AISetiausahaHub';
 
-export type Workspace = 'dashboard' | 'makluman' | 'surat-masuk' | 'academic' | 'kokurikulum' | 'attendance' | 'master-data';
+export type Workspace = 'dashboard' | 'makluman' | 'surat-masuk' | 'ai-setiausaha' | 'academic' | 'kokurikulum' | 'attendance' | 'master-data';
 export type AcademicTab = 'pbd' | 'uasa' | 'analysis' | 'timetable' | 'relief' | 'opr';
 
 interface ISEPADUShellProps {
@@ -144,7 +146,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* ================= TOP NAVIGATION BAR ================= */}
-      <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40 shadow-xl">
+      <header className="print:hidden bg-slate-900 border-b border-slate-800 sticky top-0 z-40 shadow-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16 sm:h-20">
             {/* Branding */}
@@ -222,6 +224,19 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               >
                 <Mail className="w-4 h-4 text-blue-400" />
                 <span>Surat Masuk (PO)</span>
+              </button>
+
+              {/* AI Setiausaha (OPR SKPM, Memo, Minit PKPA & Lantikan MySG) */}
+              <button
+                onClick={() => setActiveWorkspace('ai-setiausaha')}
+                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                  activeWorkspace === 'ai-setiausaha'
+                    ? 'bg-teal-600 text-white shadow-lg shadow-teal-600/30'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                }`}
+              >
+                <Bot className="w-4 h-4 text-teal-400" />
+                <span>AI Setiausaha</span>
               </button>
 
               {/* Akademik (Guru & Principal only) */}
@@ -338,6 +353,15 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
             >
               <Bell className="w-3.5 h-3.5" />
               <span>Makluman</span>
+            </button>
+            <button
+              onClick={() => setActiveWorkspace('ai-setiausaha')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 flex items-center gap-1 ${
+                activeWorkspace === 'ai-setiausaha' ? 'bg-teal-600 text-white' : 'text-slate-400'
+              }`}
+            >
+              <Bot className="w-3.5 h-3.5" />
+              <span>AI Setiausaha</span>
             </button>
             {isGuru && !isAkp && (
               <button
@@ -581,6 +605,28 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                 </div>
               </div>
 
+              {/* AI Setiausaha Hub Card */}
+              <div 
+                onClick={() => setActiveWorkspace('ai-setiausaha')}
+                className="bg-slate-900/90 border border-slate-800 hover:border-teal-500/50 rounded-3xl p-6 transition-all cursor-pointer group shadow-lg flex flex-col justify-between"
+              >
+                <div>
+                  <div className="w-12 h-12 rounded-2xl bg-teal-600/20 text-teal-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                    <Bot className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-lg font-bold text-white group-hover:text-teal-400 transition-colors">
+                    AI Setiausaha (Pusat Penjana Rasmi)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                    Penjana OPR Pintar SKPM/SKAS (3 foto bulat), Memo Panggilan Mesyuarat, Minit Mesyuarat PKPA &amp; Borang Maklum Balas, serta Surat Lantikan MySG.
+                  </p>
+                </div>
+                <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-teal-400">
+                  <span>Buka AI Setiausaha</span>
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                </div>
+              </div>
+
               {/* Kehadiran Staf Card */}
               <div 
                 onClick={() => setActiveWorkspace('attendance')}
@@ -679,6 +725,16 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                 setActiveWorkspace('academic');
                 setAcademicTab('relief');
               }}
+            />
+          </div>
+        )}
+
+        {/* ---------------- AI SETIAUSAHA HUB WORKSPACE ---------------- */}
+        {activeWorkspace === 'ai-setiausaha' && (
+          <div className="animate-fade-in">
+            <AISetiausahaHub
+              currentUser={currentUser}
+              schoolSettings={schoolSettings}
             />
           </div>
         )}
@@ -894,7 +950,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
       </main>
 
       {/* ================= FOOTER ================= */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">
+      <footer className="print:hidden border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">
         <p>
           iSEPADU AI &copy; {new Date().getFullYear()} · {displaySchoolName} ({displaySchoolCode})
           {' · '}{displaySlogan}

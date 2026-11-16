@@ -579,15 +579,38 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="block text-slate-400 font-bold mb-1.5">
-                  BIDANG (cth: Prasekolah / Panitia Sains)
+                  BIDANG (MySG Kurikulum / Panitia / Program Khas)
                 </label>
                 <input
                   type="text"
+                  list="mysg-academic-bidang-presets"
                   value={bidang}
                   onChange={(e) => setBidang(e.target.value)}
-                  placeholder="cth: Prasekolah (Pengurusan) atau Panitia Bahasa Cina"
+                  placeholder="cth: PitS / PLaN / PKL / Pendidikan Sivik / Panitia Bahasa Cina"
                   className="w-full py-2 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white outline-none focus:border-blue-500"
                 />
+                <datalist id="mysg-academic-bidang-presets">
+                  <option value="Kurikulum / Mesyuarat Induk" />
+                  <option value="Program Intervensi Tahun 1 (PitS)" />
+                  <option value="Program Literasi dan Numerasi (PLaN)" />
+                  <option value="Pentaksiran Kompetensi dan Literasi (PKL)" />
+                  <option value="Pendidikan Sivik" />
+                  <option value="Pemulihan Khas & Program 3M" />
+                  <option value="Komuniti Pembelajaran Profesional (PLC)" />
+                  <option value="Program Transisi Tahun 1" />
+                  <option value="DLP / MBMMBI / Program HIP" />
+                  <option value="Prasekolah (Pengurusan)" />
+                  <option value="PSS & Program NILAM" />
+                  <option value="Panitia Bahasa Cina" />
+                  <option value="Panitia Bahasa Melayu" />
+                  <option value="Panitia Bahasa Inggeris" />
+                  <option value="Panitia Matematik" />
+                  <option value="Panitia Sains / Alam Sekitar" />
+                  <option value="Panitia Sejarah & RBT" />
+                  <option value="Panitia PJPK" />
+                  <option value="Panitia Pendidikan Moral" />
+                  <option value="Panitia Pendidikan Kesenian" />
+                </datalist>
               </div>
 
               <div className="sm:col-span-2">

@@ -492,6 +492,23 @@
         "ppmName": { "type": "string", "maxLength": 200 },
         "updatedAt": { "type": "string", "format": "date-time" }
       }
+    },
+    "AISetiausahaDocument": {
+      "title": "AISetiausahaDocument",
+      "description": "Official AI Setiausaha documents (OPR SKPM, Memo Mesyuarat, Minit PKPA, Surat Lantikan MySG).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "docKind": { "type": "string", "enum": ["OPR", "MEMO", "MINIT", "LANTIKAN"] },
+        "schoolCode": { "type": "string", "maxLength": 30 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "pillar": { "type": "string", "maxLength": 30 },
+        "kodMySG": { "type": "string", "maxLength": 80 },
+        "createdBy": { "type": "string", "maxLength": 150 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "docKind", "schoolCode"]
     }
   },
   "firestore": {
@@ -622,6 +639,10 @@
     "/relief_schedules/{scheduleId}": {
       "schema": { "$ref": "#/entities/ReliefSchedule" },
       "description": "Assigned substitute timetable schedules and official slips."
+    },
+    "/ai_setiausaha_documents/{docId}": {
+      "schema": { "$ref": "#/entities/AISetiausahaDocument" },
+      "description": "Official AI Setiausaha documents scoped per school."
     }
   }
 }

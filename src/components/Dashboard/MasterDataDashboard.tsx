@@ -34,6 +34,12 @@ import {
 } from '../../types';
 import { GuruImportRow, GuruImportPreviewResponse, ApdmStudentImportRow, ApdmStudentImportPreviewResponse } from '../../types/isepadu';
 import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
+import {
+  MYSG_DEFAULT_CATALOG,
+  MySGJawatankuasaItem,
+  computeTeacherWorkloadRadar,
+} from '../../utils/mysgJawatankuasaCatalog';
+import { MySGJawatankuasaTab } from './MySGJawatankuasaTab';
 import { StudentProfileModal } from '../Student/StudentProfileModal';
 import { TimetableSystem } from '../Timetable/TimetableSystem';
 import { StaffRoleCell } from './StaffRoleCell';
@@ -80,7 +86,8 @@ import {
   CheckCircle2,
   RefreshCw,
   FileText,
-  History
+  History,
+  Layers
 } from 'lucide-react';
 
 enum OperationType {
@@ -139,7 +146,7 @@ async function parseResponseSafely(res: Response, defaultError: string): Promise
   return { text: cleanText };
 }
 
-type MDSubTab = 'config' | 'academic_years' | 'personnel' | 'classes' | 'subject_allocations' | 'students' | 'import' | 'history' | 'audit';
+type MDSubTab = 'config' | 'academic_years' | 'personnel' | 'mysg_jawatankuasa' | 'classes' | 'subject_allocations' | 'students' | 'import' | 'history' | 'audit';
 
 interface MasterDataDashboardProps {
   schoolCode?: string;
@@ -173,6 +180,9 @@ export default function MasterDataDashboard({
 
   // Governance, Import, and Override States
   const [governanceAssignments, setGovernanceAssignments] = useState<GovernanceAssignment[]>([]);
+  const [mysgItems, setMysgItems] = useState<MySGJawatankuasaItem[]>(() =>
+    MYSG_DEFAULT_CATALOG.map((item) => ({ ...item }))
+  );
   const [importSessions, setImportSessions] = useState<ImportSession[]>([]);
   const [auditTrail, setAuditTrail] = useState<AuditTrailEntry[]>([]);
   const [portfolioInput, setPortfolioInput] = useState('');
@@ -202,6 +212,7 @@ export default function MasterDataDashboard({
       fetchAllocations(selectedAcademicYear);
       fetchEnrollments(selectedAcademicYear);
       fetchGovernanceAssignments(selectedAcademicYear);
+      fetchMySGCatalog(selectedAcademicYear);
     }
   }, [selectedAcademicYear, activeSchoolCode]);
 
@@ -249,6 +260,38 @@ export default function MasterDataDashboard({
       );
     } catch (e) {
       handleFirestoreError(e, OperationType.LIST, 'governance_assignments');
+    }
+  };
+
+  const fetchMySGCatalog = async (ay: string) => {
+    try {
+      const aySlug = (ay || '2026').replace(/\//g, '-');
+      const govDocId = scopedDocId(activeSchoolCode, `mysg_jawatankuasa_${aySlug}`);
+      const snap = await getDoc(doc(db, 'school_governance', govDocId));
+      if (snap.exists() && Array.isArray(snap.data()?.items) && snap.data().items.length > 0) {
+        const savedList = snap.data().items as MySGJawatankuasaItem[];
+        const savedByKod = new Map<string, MySGJawatankuasaItem>();
+        savedList.forEach((s) => savedByKod.set(s.kodMySG, s));
+        const merged = MYSG_DEFAULT_CATALOG.map((def) => {
+          const saved = savedByKod.get(def.kodMySG);
+          return saved
+            ? {
+                ...def,
+                tahapBeban: saved.tahapBeban || def.tahapBeban,
+                mataBeban: saved.mataBeban || def.mataBeban,
+                assignedTeacherId: saved.assignedTeacherId || '',
+                assignedTeacherName: saved.assignedTeacherName || '',
+                customDueDate: saved.customDueDate || '',
+              }
+            : { ...def };
+        });
+        setMysgItems(merged);
+      } else {
+        setMysgItems(MYSG_DEFAULT_CATALOG.map((item) => ({ ...item })));
+      }
+    } catch (e) {
+      console.warn('Could not fetch MySG catalog from school_governance:', e);
+      setMysgItems(MYSG_DEFAULT_CATALOG.map((item) => ({ ...item })));
     }
   };
 
@@ -2213,6 +2256,7 @@ export default function MasterDataDashboard({
           <SubTabBtn active={activeSubTab === 'config'} onClick={() => setActiveSubTab('config')} icon={<Settings size={16} />} label="Profil Sekolah" />
           <SubTabBtn active={activeSubTab === 'academic_years'} onClick={() => setActiveSubTab('academic_years')} icon={<Calendar size={16} />} label="Sesi Akademik" />
           <SubTabBtn active={activeSubTab === 'personnel'} onClick={() => setActiveSubTab('personnel')} icon={<UserSquare size={16} />} label="Profil Guru & Portfolio" />
+          <SubTabBtn active={activeSubTab === 'mysg_jawatankuasa'} onClick={() => setActiveSubTab('mysg_jawatankuasa')} icon={<Layers size={16} />} label="Jawatankuasa & Beban MySG" />
           <SubTabBtn active={activeSubTab === 'classes'} onClick={() => setActiveSubTab('classes')} icon={<Building2 size={16} />} label="Kelas & Guru Kelas" />
           <SubTabBtn active={activeSubTab === 'subject_allocations'} onClick={() => setActiveSubTab('subject_allocations')} icon={<BookOpen size={16} />} label="Agihan Mengajar (Jadual)" />
           <SubTabBtn active={activeSubTab === 'students'} onClick={() => setActiveSubTab('students')} icon={<Users2 size={16} />} label="Profil Murid & Promosi" />
@@ -2659,19 +2703,43 @@ export default function MasterDataDashboard({
                             </span>
                           </td>
                           <td className="px-6 py-4">
-                            <div className="flex flex-wrap gap-1 max-w-sm">
-                              {governanceAssignments.filter(ga => ga.personnelId === p.id).map(ga => {
-                                const typeLabel = ga.governanceType === 'PORTFOLIO' ? 'P' : ga.governanceType === 'COMMITTEE' ? 'J' : ga.governanceType === 'COORDINATOR' ? 'K' : 'L';
-                                const roleColor = ga.role === 'CHAIR' ? 'bg-rose-50 text-rose-700 border-rose-200' : ga.role === 'SECRETARY' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-blue-50 text-blue-700 border-blue-100';
-                                return (
-                                  <span key={ga.id} className={`text-[9px] font-black px-1.5 py-0.5 rounded-md uppercase border ${roleColor}`}>
-                                    {typeLabel}: {ga.entityName} ({ga.role} - {ga.raciRole})
-                                  </span>
+                            <div className="space-y-1.5 max-w-sm">
+                              {(() => {
+                                const radarEntry = computeTeacherWorkloadRadar(mysgItems, personnel).find(
+                                  (r) => r.teacherId === p.id || r.teacherName.toUpperCase() === String(p.name || '').toUpperCase()
                                 );
-                              })}
-                              {governanceAssignments.filter(ga => ga.personnelId === p.id).length === 0 && (
-                                <span className="text-[10px] text-slate-400 italic font-semibold">Tiada Tugasan Sesi Ini</span>
-                              )}
+                                const totalMata = radarEntry?.totalMata ?? Number((p as any).mataBebanMySG || 0);
+                                const posCount = radarEntry?.positionCount ?? Number((p as any).mysgPositionCount || 0);
+                                if (totalMata > 0 || posCount > 0) {
+                                  const tone =
+                                    totalMata > 12
+                                      ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                      : totalMata >= 10
+                                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                      : 'bg-indigo-100 text-indigo-800 border-indigo-300';
+                                  return (
+                                    <div className={`inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border ${tone}`}>
+                                      <span>MySG: {totalMata} Mata</span>
+                                      <span>· {posCount} Jawatan</span>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
+                              <div className="flex flex-wrap gap-1">
+                                {governanceAssignments.filter(ga => ga.personnelId === p.id).map(ga => {
+                                  const typeLabel = ga.governanceType === 'PORTFOLIO' ? 'P' : ga.governanceType === 'COMMITTEE' ? 'J' : ga.governanceType === 'COORDINATOR' ? 'K' : 'L';
+                                  const roleColor = ga.role === 'CHAIR' ? 'bg-rose-50 text-rose-700 border-rose-200' : ga.role === 'SECRETARY' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-blue-50 text-blue-700 border-blue-100';
+                                  return (
+                                    <span key={ga.id} className={`text-[9px] font-black px-1.5 py-0.5 rounded-md uppercase border ${roleColor}`}>
+                                      {typeLabel}: {ga.entityName} ({ga.role} - {ga.raciRole})
+                                    </span>
+                                  );
+                                })}
+                                {governanceAssignments.filter(ga => ga.personnelId === p.id).length === 0 && (
+                                  <span className="text-[10px] text-slate-400 italic font-semibold">Tiada Tugasan Sesi Ini</span>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td className="px-6 py-4 text-right">
@@ -2704,6 +2772,26 @@ export default function MasterDataDashboard({
                   </table>
                 </div>
               </div>
+            )}
+
+            {/* ======================================================== */}
+            {/* SUB-TAB 3B: MYSG JAWATANKUASA & BEBAN TUGAS (V5 SSOT) */}
+            {/* ======================================================== */}
+            {activeSubTab === 'mysg_jawatankuasa' && (
+              <MySGJawatankuasaTab
+                activeSchoolCode={activeSchoolCode}
+                displaySchoolName={displaySchoolName}
+                selectedAcademicYear={selectedAcademicYear}
+                personnel={personnel}
+                currentUser={currentUser}
+                items={mysgItems}
+                onItemsChange={setMysgItems}
+                onSynced={async () => {
+                  await fetchGovernanceAssignments(selectedAcademicYear);
+                  await fetchPersonnel();
+                }}
+                logAuditTrail={logAuditTrail}
+              />
             )}
 
             {/* ======================================================== */}

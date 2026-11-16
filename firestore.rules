@@ -503,5 +503,14 @@ service cloud.firestore {
       allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
       allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
+
+    // AI Setiausaha Hub Documents (OPR SKPM, Memo Mesyuarat, Minit PKPA, Surat Lantikan MySG)
+    match /ai_setiausaha_documents/{docId} {
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
+    }
   }
 }

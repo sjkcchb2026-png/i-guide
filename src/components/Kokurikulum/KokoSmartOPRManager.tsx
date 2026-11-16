@@ -18,6 +18,7 @@ import {
 } from '../../types/kokurikulum';
 import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 import { belongsToSchool } from '../../utils/schoolTenant';
+import { MYSG_OPR_KOAKADEMIK_OPTIONS, MySGJawatankuasaItem } from '../../utils/mysgJawatankuasaCatalog';
 
 interface Props {
   profile: UserProfile;
@@ -71,8 +72,9 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
   const [endDate, setEndDate] = useState('');
   const [venue, setVenue] = useState('');
   const [level, setLevel] = useState<KokoScopeLevel>('Daerah/Zon');
-  const [category, setCategory] = useState<'uniform' | 'club' | 'sport' | 'KOKURIKULUM'>('sport');
+  const [category, setCategory] = useState<KokoActivity['category']>('sport');
   const [unit, setUnit] = useState('');
+  const [koakademikCoordinators, setKoakademikCoordinators] = useState<Record<string, string>>({});
 
   // Teacher Role Separation
   const [jurulatih, setJurulatih] = useState<string[]>([]);
@@ -174,6 +176,29 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
       }
     }
     loadTeachers();
+
+    async function loadMySGKoakademik() {
+      try {
+        const gSnap = await getDocs(collection(db, 'school_governance'));
+        const docs = gSnap.docs.filter((d) => {
+          const data = d.data() as any;
+          return belongsToSchool(data, activeSchoolCode) && data.type === 'MYSG_JAWATANKUASA_V5';
+        });
+        const latest = docs[docs.length - 1]?.data();
+        if (latest && Array.isArray(latest.items)) {
+          const map: Record<string, string> = {};
+          (latest.items as MySGJawatankuasaItem[]).forEach((item) => {
+            if (item.kodMySG.includes('KOAKADEMIK') && item.assignedTeacherName) {
+              map[item.kodMySG] = item.assignedTeacherName.toUpperCase();
+            }
+          });
+          setKoakademikCoordinators(map);
+        }
+      } catch (err) {
+        console.warn('Could not load MySG Koakademik coordinators:', err);
+      }
+    }
+    loadMySGKoakademik();
 
     return () => unsubs.forEach(u => u());
   }, [activeSchoolCode]);
@@ -452,10 +477,23 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
                       {act.jenis === 'pertandingan' ? 'Pertandingan' : 'Aktiviti / Program'}
                     </span>
 
-                    <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
-                      {act.level}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {act.category === 'KOAKADEMIK' && (
+                        <span className="px-2 py-0.5 rounded-md text-[9px] font-black bg-indigo-950 text-indigo-300 border border-indigo-700/70">
+                          KOAKADEMIK
+                        </span>
+                      )}
+                      <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                        {act.level}
+                      </span>
+                    </div>
                   </div>
+
+                  {act.unit && (
+                    <div className="text-[10px] font-bold text-indigo-300 mb-1 truncate">
+                      {act.unit}
+                    </div>
+                  )}
 
                   <h3 className="text-sm font-black text-white line-clamp-2 leading-snug">
                     {act.programName}
@@ -647,6 +685,72 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
                 onChange={e => setDate(e.target.value)}
                 className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white outline-none focus:border-amber-500"
               />
+            </div>
+
+            <div>
+              <label className="text-xs font-black text-slate-300 uppercase tracking-wider">
+                Kategori Bidang (MySG / Kokurikulum):
+              </label>
+              <select
+                value={category}
+                onChange={e => {
+                  const nextCat = e.target.value as KokoActivity['category'];
+                  setCategory(nextCat);
+                  if (nextCat === 'KOAKADEMIK' && !unit.startsWith('Koakademik')) {
+                    const first = MYSG_OPR_KOAKADEMIK_OPTIONS[0];
+                    setUnit(first.unit);
+                    const coord = koakademikCoordinators[first.code];
+                    if (coord && !jurulatih.includes(coord)) {
+                      setJurulatih([coord]);
+                    }
+                  }
+                }}
+                className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white font-bold outline-none focus:border-amber-500"
+              >
+                <option value="sport">Sukan &amp; Permainan (1M1S / MSSD)</option>
+                <option value="KOAKADEMIK">Koakademik MySG (BC / BM / BI / STEM / Kesenian)</option>
+                <option value="uniform">Unit Badan Beruniform</option>
+                <option value="club">Kelab &amp; Persatuan</option>
+                <option value="KOKURIKULUM">Kokurikulum Umum / RIMUP</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-black text-slate-300 uppercase tracking-wider">
+                {category === 'KOAKADEMIK' ? 'Penyelaras Koakademik MySG (Std 3.2.5.1):' : 'Unit / Kelab / Pasukan:'}
+              </label>
+              {category === 'KOAKADEMIK' ? (
+                <select
+                  value={unit}
+                  onChange={e => {
+                    const nextUnit = e.target.value;
+                    setUnit(nextUnit);
+                    const matched = MYSG_OPR_KOAKADEMIK_OPTIONS.find(o => o.unit === nextUnit);
+                    if (matched && koakademikCoordinators[matched.code]) {
+                      const coord = koakademikCoordinators[matched.code];
+                      setJurulatih(prev => (prev.includes(coord) ? prev : [coord, ...prev]));
+                    }
+                  }}
+                  className="mt-1 w-full bg-slate-950 border border-indigo-700/60 rounded-xl px-3.5 py-2.5 text-xs text-indigo-200 font-bold outline-none focus:border-indigo-500"
+                >
+                  {MYSG_OPR_KOAKADEMIK_OPTIONS.map(opt => {
+                    const coord = koakademikCoordinators[opt.code];
+                    return (
+                      <option key={opt.code} value={opt.unit}>
+                        {opt.unit}{coord ? ` (${coord})` : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={unit}
+                  onChange={e => setUnit(e.target.value)}
+                  placeholder="cth: Kelab Bola Keranjang / TKRS / Kelab STEM"
+                  className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white outline-none focus:border-amber-500"
+                />
+              )}
             </div>
           </div>
 
@@ -1025,7 +1129,10 @@ export default function KokoSmartOPRManager({ profile, role, schoolSettings }: P
                 </tr>
                 <tr className="border-b border-slate-900">
                   <td className="py-2 px-3 font-bold bg-slate-100 border-r border-slate-900">Penganjur:</td>
-                  <td className="py-2 px-3 border-r border-slate-900">{selectedPrintActivity.organizer}</td>
+                  <td className="py-2 px-3 border-r border-slate-900">
+                    {selectedPrintActivity.organizer}
+                    {selectedPrintActivity.unit ? ` · ${selectedPrintActivity.unit}` : ''}
+                  </td>
                   <td className="w-28 py-2 px-3 font-bold bg-slate-100 border-r border-slate-900">Peringkat:</td>
                   <td className="py-2 px-3 font-black">{selectedPrintActivity.level}</td>
                 </tr>

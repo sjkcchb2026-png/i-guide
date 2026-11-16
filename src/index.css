@@ -30,6 +30,31 @@
     page-break-after: auto;
     break-after: auto;
   }
+
+  @page setiausahaPortrait {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+
+  .print-portrait-sheet {
+    page: setiausahaPortrait;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  .print-portrait-page {
+    page: setiausahaPortrait;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .print-portrait-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
 }
 
 .kpm-double-table {

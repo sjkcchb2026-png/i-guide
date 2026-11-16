@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import * as XLSX from 'xlsx';
 import crypto from 'crypto';
+import { GoogleGenAI, Type } from '@google/genai';
 
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
@@ -154,6 +155,7 @@ export function parseFirestoreRestFields(fields: Record<string, any>): Record<st
         if (v.booleanValue !== undefined) return v.booleanValue;
         if (v.integerValue !== undefined) return parseInt(v.integerValue, 10);
         if (v.doubleValue !== undefined) return parseFloat(v.doubleValue);
+        if (v.nullValue !== undefined) return null;
         if (v.mapValue?.fields) return parseFirestoreRestFields(v.mapValue.fields);
         return v;
       });
@@ -5160,6 +5162,405 @@ async function startServer() {
       return res.json({ state });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ================= 7. AI SETIAUSAHA HUB (GEMINI & DOCUMENT PERSISTENCE) =================
+  const getGeminiClient = () => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+    return new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+  };
+
+  app.post('/api/ai/setiausaha', async (req: Request, res: Response) => {
+    const caller = await verifyCallerAuth(req);
+    if (!caller) {
+      return res.status(401).json({ error: 'Sila log masuk terlebih dahulu untuk menggunakan AI Setiausaha.' });
+    }
+
+    const { action, payload } = req.body || {};
+    if (!action) {
+      return res.status(400).json({ error: 'Parameter action diperlukan.' });
+    }
+
+    const ai = getGeminiClient();
+
+    try {
+      if (action === 'OPR_DRAFT') {
+        const {
+          notes = '',
+          programTitle = '',
+          committeeName = '',
+          pillar = 'KURIKULUM',
+          skpmStandard = '',
+          skpmAspek = '',
+          skpmStandardKualiti = '',
+          sasaran = '',
+        } = payload || {};
+
+        if (!ai) {
+          return res.json({
+            source: 'template',
+            draft: {
+              objektif: [
+                `Meningkatkan kualiti pelaksanaan program di bawah ${committeeName || pillar} selaras dengan ketetapan ${skpmAspek || 'SKPM Kualiti@Sekolah'}.`,
+                `Memberi pendedahan dan bimbingan berfokus kepada ${sasaran || 'murid serta warga sekolah sasaran'} agar mencapai tahap penguasaan optimum.`,
+                `Memperkukuh budaya kerja kolaboratif dan perekodan evidens berkualiti ke arah pematuhan Skor 4 SKPM.`,
+              ],
+              pengisianAktiviti: [
+                `Taklimat pelaksanaan ${programTitle || 'program'} serta pembahagian tugasan jawatankuasa pelaksana.`,
+                notes
+                  ? `Pelaksanaan aktiviti utama berfokus: ${String(notes).trim()}.`
+                  : `Pelaksanaan aktiviti teras melibatkan penglibatan aktif peserta secara berstruktur.`,
+                `Pemantauan dan bimbingan berterusan oleh guru penyelaras sepanjang program berlangsung.`,
+                `Sesi penilaian impak, rumusan dapatan dan pengumpulan evidens bergambar.`,
+              ],
+              impak: [
+                `Mencapai penglibatan aktif dan maklum balas positif daripada ${sasaran || 'kumpulan sasaran'}.`,
+                `Meningkatkan kecekapan pelaksanaan tugasan jawatankuasa selaras dengan Standard Kualiti ${skpmStandard || 'SKPM'}.`,
+                `Menghasilkan dokumentasi rasmi (One Page Report) sebagai evidens pengurusan berkualiti tinggi.`,
+              ],
+              refleksiDanTindakanSusulan: [
+                `Kekuatan: Kerjasama erat barisan pentadbir, penyelaras dan peserta memastikan objektif program tercapai dengan cemerlang.`,
+                `Tindakan Susulan (Skor 4 SKPM): Melaksanakan pemantauan pasca-program dan menambah baik modul bimbingan untuk fasa pelaksanaan seterusnya.`,
+              ],
+            },
+          });
+        }
+
+        const prompt = `Anda ialah Setiausaha Sekolah Kerajaan Malaysia (KPM) yang mahir menulis laporan One Page Report (OPR) dalam Bahasa Melayu rasmi yang gramatis, tepat dan menepati rubrik Skor 4 SKPM Kualiti@Sekolah (SKAS).
+
+Konteks Program:
+- Teras MySG: ${pillar}
+- Jawatankuasa / Unit: ${committeeName}
+- Tajuk Program: ${programTitle}
+- Standard & Aspek SKPM: ${skpmStandard} | ${skpmAspek}
+- Standard Kualiti: ${skpmStandardKualiti}
+- Sasaran Peserta: ${sasaran || 'Murid dan Guru'}
+- Catatan / Kata Kunci Pengguna (mungkin dalam Bahasa Cina atau Bahasa Melayu ringkas): ${notes || '(Tiada nota tambahan, jana berdasarkan tajuk program dan standard SKPM)'}
+
+Tugas Anda:
+Terjemahkan dan kembangkan catatan pengguna menjadi poin-poin Bahasa Melayu rasmi KPM yang padu, profesional dan menepati kriteria Skor 4 SKPM:
+1. "objektif": tepat 3 poin objektif yang jelas dan boleh diukur.
+2. "pengisianAktiviti": 3 hingga 4 poin kronologi pengisian aktiviti yang konkrit.
+3. "impak": tepat 3 poin impak yang menggambarkan kemenjadian murid atau keberkesanan organisasi.
+4. "refleksiDanTindakanSusulan": tepat 2 poin (poin 1 menyatakan kekuatan/cabaran pelaksanaan secara objektif; poin 2 menyatakan tindakan susulan konkrit untuk penambahbaikan berterusan bagi memenuhi rubrik Skor 4 SKPM).`;
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                objektif: { type: Type.ARRAY, items: { type: Type.STRING } },
+                pengisianAktiviti: { type: Type.ARRAY, items: { type: Type.STRING } },
+                impak: { type: Type.ARRAY, items: { type: Type.STRING } },
+                refleksiDanTindakanSusulan: { type: Type.ARRAY, items: { type: Type.STRING } },
+              },
+              required: ['objektif', 'pengisianAktiviti', 'impak', 'refleksiDanTindakanSusulan'],
+            },
+          },
+        });
+
+        const parsed = JSON.parse(response.text || '{}');
+        return res.json({ source: 'gemini', draft: parsed });
+      }
+
+      if (action === 'MEMO_AGENDA') {
+        const {
+          committeeName = '',
+          jawatanRasmi = '',
+          pillar = 'KURIKULUM',
+          tarikhMesyuarat = '',
+          bilangan = 'Bil. 1/2026',
+          contextNotes = '',
+        } = payload || {};
+
+        if (!ai) {
+          return res.json({
+            source: 'template',
+            agendas: [
+              `Pembentangan Perancangan Strategik, Takwim & Sasaran Kerja ${committeeName || 'Jawatankuasa'} (${bilangan}).`,
+              `Semakan Pengagihan Tugas Rasmi MySG dan Pematuhan Garis Panduan KPM / SKPM Terkini.`,
+              `Analisis Data Pencapaian Terkini, Isu Berbangkit serta Pelan Intervensi Berfokus.`,
+              `Penyelarasan Dokumentasi Evidens OPR, Pengurusan Rekod & Tarikh Akhir Pelaporan.`,
+            ],
+          });
+        }
+
+        const prompt = `Anda ialah Setiausaha Sekolah Kerajaan Malaysia (KPM). Cadangkan 4 hingga 5 agenda perbincangan utama yang konkrit dan profesional bagi Bahagian "4. Fokus / Perbincangan Utama Mesyuarat" dalam Memo Panggilan Mesyuarat Rasmi.
+
+Maklumat Mesyuarat:
+- Teras MySG: ${pillar}
+- Jawatankuasa Induk / Unit: ${committeeName}
+- Jawatan Berkaitan: ${jawatanRasmi}
+- Bilangan Mesyuarat: ${bilangan}
+- Tarikh Mesyuarat: ${tarikhMesyuarat || 'Bulan semasa'}
+- Konteks Tambahan / Nota (jika ada, mungkin dwibahasa): ${contextNotes || '-'}
+
+Pastikan setiap agenda ditulis dalam Bahasa Melayu surat rasmi KPM yang ringkas, padat dan khusus kepada tugas jawatankuasa tersebut (contohnya melibatkan PBD/UASA/PitS/PLaN/Panitia untuk Kurikulum, MOEIS/RMT/SPBT/3K/SSDM untuk HEM, PAJSK/1M1S/Koakademik untuk Kokurikulum, atau SKPM/EMIS/eSPKWS untuk Pentadbiran).`;
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                agendas: { type: Type.ARRAY, items: { type: Type.STRING } },
+              },
+              required: ['agendas'],
+            },
+          },
+        });
+
+        const parsed = JSON.parse(response.text || '{}');
+        return res.json({ source: 'gemini', agendas: parsed.agendas || [] });
+      }
+
+      if (action === 'MINIT_FORMALIZE') {
+        const { meetingTitle = '', committeeName = '', sections = [] } = payload || {};
+        if (!Array.isArray(sections) || sections.length === 0) {
+          return res.status(400).json({ error: 'Tiada item agenda untuk dikemaskini.' });
+        }
+
+        if (!ai) {
+          const transformed = sections.map((sec: any) => ({
+            id: sec.id,
+            formalText: sec.rawNotes?.trim()
+              ? `Mesyuarat mengambil maklum dan membincangkan perkara berhubung ${sec.agendaTitle}: ${sec.rawNotes.trim()}. Ahli mesyuarat bersetuju agar tindakan susulan dilaksanakan mengikut ketetapan yang dipersetujui.`
+              : `Pengerusi membentangkan perkara ${sec.agendaTitle} dan ahli mesyuarat mengambil maklum untuk tindakan bersama.`,
+          }));
+          return res.json({ source: 'template', entries: transformed });
+        }
+
+        const prompt = `Anda ialah Setiausaha Mesyuarat Sekolah Kerajaan Malaysia (KPM) yang pakar menulis Minit Mesyuarat Rasmi mengikut format PKPA Bil. 2/1991.
+
+Tajuk Mesyuarat: ${meetingTitle}
+Jawatankuasa: ${committeeName}
+
+Tukarkan setiap nota ringkas berikut (yang mungkin mengandungi bahasa Cina, bahasa pasar atau kata kunci pendek) kepada ayat minit mesyuarat rasmi Bahasa Melayu yang sopan, tepat dan profesional menggunakan laras bahasa PKPA Bil. 2/1991 (seperti "Pengerusi memaklumkan...", "Mesyuarat mengambil maklum...", "Mesyuarat bersetuju agar...", "Ahli mesyuarat memutuskan..."). Kekalkan fakta asal dan padankan mengikut "id" setiap item.
+
+Data Agenda:
+${JSON.stringify(
+  sections.map((s: any) => ({
+    id: s.id,
+    paraNo: s.paraNo,
+    agendaTitle: s.agendaTitle,
+    rawNotes: s.rawNotes,
+    tindakanType: s.tindakanType,
+    tindakanOwner: s.tindakanOwner,
+  })),
+  null,
+  2
+)}`;
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                entries: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      formalText: { type: Type.STRING },
+                    },
+                    required: ['id', 'formalText'],
+                  },
+                },
+              },
+              required: ['entries'],
+            },
+          },
+        });
+
+        const parsed = JSON.parse(response.text || '{}');
+        return res.json({ source: 'gemini', entries: parsed.entries || [] });
+      }
+
+      return res.status(400).json({ error: `Tindakan AI tidak dikenali: ${action}` });
+    } catch (err: any) {
+      console.error('AI Setiausaha error:', err);
+      return res.status(500).json({
+        error: err?.message || 'Ralat penjanaan AI Setiausaha. Sila cuba sebentar lagi.',
+      });
+    }
+  });
+
+  const toFirestoreRestValue = (val: any): Record<string, any> => {
+    if (val === null || val === undefined) return { nullValue: null };
+    if (typeof val === 'boolean') return { booleanValue: val };
+    if (typeof val === 'number') {
+      return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
+    }
+    if (typeof val === 'string') return { stringValue: val };
+    if (Array.isArray(val)) {
+      return { arrayValue: { values: val.map((item) => toFirestoreRestValue(item)) } };
+    }
+    if (typeof val === 'object') {
+      const fields: Record<string, any> = {};
+      for (const [k, v] of Object.entries(val)) {
+        fields[k] = toFirestoreRestValue(v);
+      }
+      return { mapValue: { fields } };
+    }
+    return { stringValue: String(val) };
+  };
+
+  const toFirestoreRestFields = (obj: Record<string, any>): Record<string, any> => {
+    const fields: Record<string, any> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      fields[k] = toFirestoreRestValue(v);
+    }
+    return fields;
+  };
+
+  const firestoreRestBase = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents`;
+
+  app.get('/api/setiausaha/documents', async (req: Request, res: Response) => {
+    const caller = await verifyCallerAuth(req);
+    if (!caller) return res.status(401).json({ error: 'Belum log masuk.' });
+
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+    const kindFilter = typeof req.query.docKind === 'string' ? req.query.docKind.toUpperCase() : '';
+    const bearerHeader = req.headers.authorization || '';
+
+    try {
+      let docs: any[] = [];
+      try {
+        const snap = await adminDb.collection('ai_setiausaha_documents').get();
+        docs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as any));
+      } catch {
+        const restRes = await fetch(`${firestoreRestBase}/ai_setiausaha_documents?pageSize=300`, {
+          headers: { Authorization: bearerHeader },
+        });
+        if (!restRes.ok) {
+          const errText = await restRes.text();
+          throw new Error(errText || `Firestore REST list status ${restRes.status}`);
+        }
+        const restJson = await restRes.json();
+        const rawDocs = Array.isArray(restJson.documents) ? restJson.documents : [];
+        docs = rawDocs.map((d: any) => {
+          const docId = String(d.name || '').split('/').pop() || '';
+          const parsed = d.fields ? parseFirestoreRestFields(d.fields) : {};
+          return { id: docId, ...parsed };
+        });
+      }
+
+      docs = docs.filter((d) => belongsToSchool(d, schoolCode));
+      if (kindFilter) {
+        docs = docs.filter((d) => String(d.docKind || '').toUpperCase() === kindFilter);
+      }
+
+      docs.sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+      return res.json({ documents: docs });
+    } catch (err: any) {
+      console.error('Failed to list setiausaha documents:', err);
+      return res.status(500).json({ error: err?.message || 'Gagal memuatkan rekod AI Setiausaha.' });
+    }
+  });
+
+  app.post('/api/setiausaha/documents', async (req: Request, res: Response) => {
+    const caller = await verifyCallerAuth(req);
+    if (!caller) return res.status(401).json({ error: 'Belum log masuk.' });
+
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+    const docData = req.body?.document;
+    if (!docData || typeof docData !== 'object' || !docData.docKind) {
+      return res.status(400).json({ error: 'Payload dokumen tidak sah.' });
+    }
+
+    const bearerHeader = req.headers.authorization || '';
+    try {
+      const docId =
+        docData.id && typeof docData.id === 'string'
+          ? scopedDocId(schoolCode, docData.id)
+          : scopedDocId(schoolCode, `setiausaha_${String(docData.docKind).toLowerCase()}_${Date.now()}`);
+
+      const nowIso = new Date().toISOString();
+      const payload = deepSanitizeFirestore({
+        ...docData,
+        id: docId,
+        schoolCode,
+        createdBy: docData.createdBy || caller.email || caller.uid,
+        createdAt: docData.createdAt || nowIso,
+        updatedAt: nowIso,
+      });
+
+      try {
+        await adminDb.doc(`ai_setiausaha_documents/${docId}`).set(payload, { merge: true });
+      } catch {
+        const restRes = await fetch(
+          `${firestoreRestBase}/ai_setiausaha_documents/${encodeURIComponent(docId)}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: bearerHeader,
+            },
+            body: JSON.stringify({ fields: toFirestoreRestFields(payload) }),
+          }
+        );
+        if (!restRes.ok) {
+          const errText = await restRes.text();
+          throw new Error(errText || `Firestore REST write status ${restRes.status}`);
+        }
+      }
+      return res.json({ success: true, document: payload });
+    } catch (err: any) {
+      console.error('Failed to save setiausaha document:', err);
+      return res.status(500).json({ error: err?.message || 'Gagal menyimpan dokumen.' });
+    }
+  });
+
+  app.delete('/api/setiausaha/documents/:id', async (req: Request, res: Response) => {
+    const caller = await verifyCallerAuth(req);
+    if (!caller) return res.status(401).json({ error: 'Belum log masuk.' });
+
+    const schoolCode = await resolveCallerSchoolCode(req, caller);
+    const docId = req.params.id;
+    const bearerHeader = req.headers.authorization || '';
+    try {
+      try {
+        const ref = adminDb.doc(`ai_setiausaha_documents/${docId}`);
+        const existing = await ref.get();
+        if (existing.exists && !belongsToSchool(existing.data() as any, schoolCode)) {
+          return res.status(403).json({ error: 'Akses rentas sekolah ditolak.' });
+        }
+        await ref.delete();
+      } catch {
+        const restRes = await fetch(
+          `${firestoreRestBase}/ai_setiausaha_documents/${encodeURIComponent(docId)}`,
+          {
+            method: 'DELETE',
+            headers: { Authorization: bearerHeader },
+          }
+        );
+        if (!restRes.ok && restRes.status !== 404) {
+          const errText = await restRes.text();
+          throw new Error(errText || `Firestore REST delete status ${restRes.status}`);
+        }
+      }
+      return res.json({ success: true, id: docId });
+    } catch (err: any) {
+      console.error('Failed to delete setiausaha document:', err);
+      return res.status(500).json({ error: err?.message || 'Gagal memadam dokumen.' });
     }
   });
 
