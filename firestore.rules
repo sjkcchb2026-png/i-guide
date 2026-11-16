@@ -372,9 +372,17 @@ service cloud.firestore {
     match /koko_activities/{actId} {
       allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
       allow list: if isSignedIn();
-      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
-      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
-      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
+    }
+
+    match /koko_meeting_reports/{reportId} {
+      allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && belongsToCallerSchool(request.resource.data);
+      allow update: if isSignedIn() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isSignedIn() && belongsToCallerSchool(resource.data);
     }
 
     match /bulletins/{bulletinId} {

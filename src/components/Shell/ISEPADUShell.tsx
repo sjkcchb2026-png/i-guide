@@ -41,6 +41,7 @@ import SubjectTeacherView from '../Teacher/SubjectTeacherView';
 import AcademicAnalysisDashboard from '../Academic/AcademicAnalysisDashboard';
 import MasterDataDashboard from '../Dashboard/MasterDataDashboard';
 import KokurikulumSystem from '../Kokurikulum/KokurikulumSystem';
+import type { MaklumanOPRPrefill } from '../Kokurikulum/KokoSmartOPRManager';
 import { StaffPunchIn } from '../StaffPunchIn';
 import { PrincipalDashboard } from '../PrincipalDashboard';
 import { TimetableSystem } from '../Timetable/TimetableSystem';
@@ -68,6 +69,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
 }) => {
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace>('dashboard');
   const [academicTab, setAcademicTab] = useState<AcademicTab>('pbd');
+  const [kokoOprPrefill, setKokoOprPrefill] = useState<MaklumanOPRPrefill | null>(null);
   const [principalAttendanceView, setPrincipalAttendanceView] = useState<'punch' | 'management'>('management');
   const [isLogoModalOpen, setIsLogoModalOpen] = useState<boolean>(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState<boolean>(
@@ -144,7 +146,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
   }, [activeSchoolCode]);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans print:min-h-0 print:bg-white print:text-slate-900">
       {/* ================= TOP NAVIGATION BAR ================= */}
       <header className="print:hidden bg-slate-900 border-b border-slate-800 sticky top-0 z-40 shadow-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -406,7 +408,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
       </header>
 
       {/* ================= WORKSPACE BODY ================= */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 print:max-w-none print:p-0">
         
         {/* ---------------- 1. DASHBOARD WORKSPACE ---------------- */}
         {activeWorkspace === 'dashboard' && (
@@ -710,6 +712,10 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               currentTeacher={currentUser}
               schoolProfile={schoolSettings}
               isPrincipalOrAdmin={isPrincipal}
+              onOpenKokoOPR={(payload) => {
+                setKokoOprPrefill(payload);
+                setActiveWorkspace('kokurikulum');
+              }}
             />
           </div>
         )}
@@ -868,6 +874,8 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               profile={currentUser}
               role={isPrincipal ? 'pentadbir' : 'guru'}
               schoolSettings={schoolSettings}
+              oprPrefill={kokoOprPrefill}
+              onClearOprPrefill={() => setKokoOprPrefill(null)}
             />
           </div>
         )}

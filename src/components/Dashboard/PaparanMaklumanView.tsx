@@ -46,6 +46,7 @@ import { UserProfile, SchoolSettings, PersonnelProfile } from '../../types';
 import { filterStaffBirthdays, StaffBirthdayInfo } from '../../utils/birthdayUtils';
 import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
+import type { MaklumanOPRPrefill } from '../Kokurikulum/KokoSmartOPRManager';
 
 export type MaklumanDomain = 'KURIKULUM' | 'HEM' | 'KOKURIKULUM' | 'PENTADBIRAN' | 'CUTI';
 
@@ -137,6 +138,7 @@ export interface PaparanMaklumanViewProps {
   schoolProfile?: SchoolProfile | SchoolSettings | null;
   isPrincipalOrAdmin?: boolean;
   addToast?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
+  onOpenKokoOPR?: (payload: MaklumanOPRPrefill) => void;
 }
 
 const MONTH_SHEETS = [
@@ -241,9 +243,13 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
   schoolProfile,
   isPrincipalOrAdmin = false,
   addToast: propAddToast,
+  onOpenKokoOPR,
 }) => {
   const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName, isLegacySchool } = useSchoolTenant();
   const [items, setItems] = useState<MaklumanTaskItem[]>([]);
+  const [kokoActivities, setKokoActivities] = useState<
+    Array<{ id: string; programName?: string; date?: string; linkedMaklumanTaskId?: string; skpmStandardCode?: string }>
+  >([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [uploadingTakwim, setUploadingTakwim] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -532,6 +538,34 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       (err) => {
         console.error('Error loading makluman_tasks:', err);
         if (isMounted) setLoading(false);
+      }
+    );
+    return () => {
+      isMounted = false;
+      unsub();
+    };
+  }, [activeSchoolCode]);
+
+  // 1b. Subscribe to Firestore `koko_activities` to show ✅ Lihat OPR / Cipta OPR status on Makluman cards
+  useEffect(() => {
+    let isMounted = true;
+    const unsub = onSnapshot(
+      collection(db, 'koko_activities'),
+      (snap) => {
+        if (!isMounted) return;
+        const list = snap.docs
+          .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
+          .map((d) => ({
+            id: d.id,
+            programName: String(d.data().programName || ''),
+            date: String(d.data().date || ''),
+            linkedMaklumanTaskId: String(d.data().linkedMaklumanTaskId || ''),
+            skpmStandardCode: String(d.data().skpmStandardCode || ''),
+          }));
+        setKokoActivities(list);
+      },
+      () => {
+        // Ignore optional listener error
       }
     );
     return () => {
@@ -1736,7 +1770,81 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                     </div>
 
                     {!isHoliday && resolvedCurrentTeacher && (
-                      <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                      <div className="flex flex-wrap items-center gap-2 shrink-0 self-end md:self-center">
+                        {(() => {
+                          const supportsKokoOpr =
+                            item.category === 'PERTANDINGAN' ||
+                            item.category === 'AKTIVITI' ||
+                            item.domain === 'KOKURIKULUM';
+                          if (!supportsKokoOpr || !onOpenKokoOPR) return null;
+
+                          const linkedOprId = String((item as any).linkedOprId || '');
+                          const normTitle = String(item.title || '').trim().toUpperCase();
+                          const matchedOpr = kokoActivities.find((act) => {
+                            if (linkedOprId && act.id === linkedOprId) return true;
+                            if (act.linkedMaklumanTaskId && act.linkedMaklumanTaskId === item.id) {
+                              return true;
+                            }
+                            const actTitle = String(act.programName || '').trim().toUpperCase();
+                            return (
+                              normTitle.length >= 6 &&
+                              actTitle.length >= 6 &&
+                              (actTitle === normTitle ||
+                                actTitle.includes(normTitle) ||
+                                normTitle.includes(actTitle))
+                            );
+                          });
+
+                          const existingOprId = linkedOprId || matchedOpr?.id;
+                          if (existingOprId) {
+                            return (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenKokoOPR({
+                                    maklumanTaskId: item.id,
+                                    openOprId: existingOprId,
+                                    programName: item.title,
+                                    date: item.dueDate,
+                                    venue: item.location || '',
+                                  })
+                                }
+                                className="px-3 py-2 rounded-xl bg-teal-600/20 hover:bg-teal-600 text-teal-300 hover:text-white border border-teal-500/40 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                                title="Buka & Cetak Poster OPR SKAS"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>✅ Lihat OPR</span>
+                              </button>
+                            );
+                          }
+
+                          return (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onOpenKokoOPR({
+                                  maklumanTaskId: item.id,
+                                  programName: item.title,
+                                  date: item.dueDate,
+                                  venue: item.location || '',
+                                  jenis: item.category === 'PERTANDINGAN' ? 'pertandingan' : 'aktiviti',
+                                  category:
+                                    item.domain === 'KURIKULUM'
+                                      ? 'KURIKULUM'
+                                      : item.domain === 'HEM'
+                                      ? 'HEM'
+                                      : 'KOKURIKULUM',
+                                })
+                              }
+                              className="px-3 py-2 rounded-xl bg-amber-600/20 hover:bg-amber-600 text-amber-300 hover:text-white border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                              title="Cipta Laporan Smart OPR (Standard 3.2 & Standard 5)"
+                            >
+                              <Award className="w-3.5 h-3.5" />
+                              <span>Cipta OPR</span>
+                            </button>
+                          );
+                        })()}
+
                         <button
                           type="button"
                           onClick={() =>

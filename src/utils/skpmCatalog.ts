@@ -208,11 +208,22 @@ const SKPM_CATALOG_ENTRIES: Record<string, SKPMStandardMeta> = {
     standardCode: 'STANDARD 3.2',
     standardTitle: 'PENGURUSAN KOKURIKULUM',
     aspekCode: 'ASPEK 3.2.6',
-    aspekTitle: 'PENGURUSAN PENTAKSIRAN KOKURIKULUM (PAJSK)',
+    aspekTitle: 'PENGURUSAN SUKAN UNTUK SEMUA',
     standardKualitiStatement:
-      'Pentaksiran kokurikulum (PAJSK & SEGAK) dilaksanakan secara menyeluruh untuk menilai penglibatan dan pencapaian murid.',
+      'Aktiviti Sukan Untuk Semua (Merentas Desa, Sukantara, Olahraga Tahunan, Hari Sukan Negara) diurus secara profesional dan terancang.',
     skor4Rubric:
-      '100% murid Tahun 4–6 dinilai dan dianalisis bagi merancang peningkatan skor penglibatan.',
+      'Penyertaan menyeluruh semua murid dengan pelan keselamatan, jawatankuasa pelaksana dan dokumentasi OPR lengkap.',
+  },
+  '3.2.7': {
+    bucket: 'Std 3.2',
+    standardCode: 'STANDARD 3.2',
+    standardTitle: 'PENGURUSAN KOKURIKULUM',
+    aspekCode: 'ASPEK 3.2.7',
+    aspekTitle: 'PENGURUSAN PENTAKSIRAN KOKURIKULUM',
+    standardKualitiStatement:
+      'Pentaksiran kokurikulum (PAJSK & SEGAK) dilaksanakan secara sistematik dan terancang.',
+    skor4Rubric:
+      '100% murid Tahun 4–6 dinilai dan dianalisis bagi merancang peningkatan skor penglibatan serta kecergasan.',
   },
   '3.3.1': {
     bucket: 'Std 3.3',
@@ -295,14 +306,203 @@ const SKPM_CATALOG_ENTRIES: Record<string, SKPMStandardMeta> = {
     bucket: 'Std 5',
     standardCode: 'STANDARD 5',
     standardTitle: 'KEMENJADIAN MURID',
-    aspekCode: 'ASPEK 5.1 – 5.3',
-    aspekTitle: 'KEMENJADIAN AKADEMIK, KOKURIKULUM & SAHSIAH MURID',
+    aspekCode: 'ASPEK 5.1 – 5.4',
+    aspekTitle: 'KEMENJADIAN AKADEMIK, KOKURIKULUM (5.2), SAHSIAH (5.3) & PENCAPAIAN (5.4)',
     standardKualitiStatement:
-      'Program sekolah berimpak menghasilkan peningkatan kemenjadian murid dari segi penguasaan akademik, penglibatan kokurikulum dan sahsiah terpuji.',
+      'Program sekolah berimpak menghasilkan peningkatan kemenjadian murid dari segi penguasaan akademik, penglibatan kokurikulum (5.2) serta kecemerlangan pertandingan (5.4).',
     skor4Rubric:
-      'Peningkatan pencapaian murid disokong oleh data PBD/UASA, PAJSK dan SSDM secara menyeluruh.',
+      'Peningkatan pencapaian murid disokong oleh data PBD/UASA, PAJSK, SSDM dan rekod kemenangan kokurikulum secara menyeluruh.',
   },
 };
+
+export type SKPMKokoStandardCode =
+  | '3.2.1.1'
+  | '3.2.2.1'
+  | '3.2.3.1'
+  | '3.2.4.1'
+  | '3.2.5.1'
+  | '3.2.6.1'
+  | '3.2.7.1';
+
+export interface SKPMKokoStandardSpec {
+  code: SKPMKokoStandardCode;
+  shortTitle: string;
+  standardTitle: string;
+  aspekTitle: string;
+  kualitiStatement: string;
+  standard5Code?: string;
+  standard5Label?: string;
+}
+
+export const SKPM_KOKO_STANDARD_OPTIONS: SKPMKokoStandardSpec[] = [
+  {
+    code: '3.2.1.1',
+    shortTitle: '3.2.1.1 — Ketetapan Pelaksanaan Kokurikulum',
+    standardTitle: 'STANDARD 3.2 : PENGURUSAN KOKURIKULUM',
+    aspekTitle: 'ASPEK 3.2.1 : KETETAPAN PELAKSANAAN KOKURIKULUM',
+    kualitiStatement:
+      'Standard Kualiti 3.2.1.1 : Pelaksanaan kokurikulum diurus secara sistematik dan terancang.',
+    standard5Code: '5.2',
+    standard5Label: 'STANDARD 5 (Aspek 5.2) : Kemenjadian & Penglibatan Murid dalam Kokurikulum',
+  },
+  {
+    code: '3.2.2.1',
+    shortTitle: '3.2.2.1 — Pengurusan Kelab/Persatuan',
+    standardTitle: 'STANDARD 3.2 : PENGURUSAN KOKURIKULUM',
+    aspekTitle: 'ASPEK 3.2.2 : PENGURUSAN KELAB/PERSATUAN',
+    kualitiStatement:
+      'Standard Kualiti 3.2.2.1 : Kelab/persatuan diurus secara sistematik dan terancang.',
+    standard5Code: '5.2',
+    standard5Label: 'STANDARD 5 (Aspek 5.2) : Kemenjadian Murid dalam Kelab & Persatuan',
+  },
+  {
+    code: '3.2.3.1',
+    shortTitle: '3.2.3.1 — Pengurusan Badan Beruniform',
+    standardTitle: 'STANDARD 3.2 : PENGURUSAN KOKURIKULUM',
+    aspekTitle: 'ASPEK 3.2.3 : PENGURUSAN BADAN BERUNIFORM',
+    kualitiStatement:
+      'Standard Kualiti 3.2.3.1 : Badan beruniform diurus secara sistematik dan terancang.',
+    standard5Code: '5.2',
+    standard5Label: 'STANDARD 5 (Aspek 5.2) : Kemenjadian Murid dalam Badan Beruniform',
+  },
+  {
+    code: '3.2.4.1',
+    shortTitle: '3.2.4.1 — Pengurusan Sukan/Permainan',
+    standardTitle: 'STANDARD 3.2 : PENGURUSAN KOKURIKULUM',
+    aspekTitle: 'ASPEK 3.2.4 : PENGURUSAN SUKAN/PERMAINAN',
+    kualitiStatement:
+      'Standard Kualiti 3.2.4.1 : Sukan/permainan diurus secara sistematik dan terancang.',
+    standard5Code: '5.2',
+    standard5Label: 'STANDARD 5 (Aspek 5.2) : Kemenjadian Murid dalam Sukan/Permainan',
+  },
+  {
+    code: '3.2.5.1',
+    shortTitle: '3.2.5.1 — Program Kecemerlangan Kokurikulum (+ Std 5.2 / 5.4)',
+    standardTitle: 'STANDARD 3.2 : PENGURUSAN KOKURIKULUM',
+    aspekTitle: 'ASPEK 3.2.5 : PENGURUSAN PROGRAM KECEMERLANGAN KOKURIKULUM',
+    kualitiStatement:
+      'Standard Kualiti 3.2.5.1 : Program kecemerlangan kokurikulum diurus secara profesional dan terancang.',
+    standard5Code: '5.2 & 5.4',
+    standard5Label:
+      'STANDARD 5 (Aspek 5.2 & 5.4) : Kemenjadian Kokurikulum & Pencapaian Kecemerlangan Sekolah',
+  },
+  {
+    code: '3.2.6.1',
+    shortTitle: '3.2.6.1 — Pengurusan Sukan Untuk Semua',
+    standardTitle: 'STANDARD 3.2 : PENGURUSAN KOKURIKULUM',
+    aspekTitle: 'ASPEK 3.2.6 : PENGURUSAN SUKAN UNTUK SEMUA',
+    kualitiStatement:
+      'Standard Kualiti 3.2.6.1 : Aktiviti Sukan Untuk Semua diurus secara profesional dan terancang.',
+    standard5Code: '5.2',
+    standard5Label: 'STANDARD 5 (Aspek 5.2) : Penyertaan Sukan Untuk Semua Murid',
+  },
+  {
+    code: '3.2.7.1',
+    shortTitle: '3.2.7.1 — Pengurusan Pentaksiran Kokurikulum (PAJSK/SEGAK)',
+    standardTitle: 'STANDARD 3.2 : PENGURUSAN KOKURIKULUM',
+    aspekTitle: 'ASPEK 3.2.7 : PENGURUSAN PENTAKSIRAN KOKURIKULUM',
+    kualitiStatement:
+      'Standard Kualiti 3.2.7.1 : Pentaksiran kokurikulum dilaksanakan secara sistematik dan terancang.',
+    standard5Code: '5.2',
+    standard5Label: 'STANDARD 5 (Aspek 5.2) : Rekod Kemenjadian PAJSK & SEGAK',
+  },
+];
+
+export function getKokoSKPMOption(code?: string): SKPMKokoStandardSpec {
+  const clean = String(code || '').trim();
+  return (
+    SKPM_KOKO_STANDARD_OPTIONS.find((opt) => opt.code === clean) ||
+    SKPM_KOKO_STANDARD_OPTIONS[3] // Default 3.2.4.1
+  );
+}
+
+export function autoResolveKokoSKPM(input: {
+  category?: string;
+  jenis?: string;
+  level?: string;
+  programName?: string;
+  unit?: string;
+  manualCode?: string;
+}): SKPMKokoStandardSpec {
+  if (input.manualCode) {
+    const manualMatch = SKPM_KOKO_STANDARD_OPTIONS.find((o) => o.code === input.manualCode);
+    if (manualMatch) {
+      if (
+        input.jenis === 'pertandingan' &&
+        input.level &&
+        input.level !== 'Sekolah' &&
+        !manualMatch.standard5Code?.includes('5.4')
+      ) {
+        return {
+          ...manualMatch,
+          standard5Code: '5.2 & 5.4',
+          standard5Label:
+            'STANDARD 5 (Aspek 5.2 & 5.4) : Kemenjadian Kokurikulum & Pencapaian Kecemerlangan Sekolah',
+        };
+      }
+      return manualMatch;
+    }
+  }
+
+  const combinedText = `${input.programName || ''} ${input.unit || ''}`.toUpperCase();
+  const cat = String(input.category || '');
+  const level = String(input.level || 'Sekolah');
+
+  // 1. 3.2.7.1 — Pentaksiran PAJSK / SEGAK
+  if (
+    cat === 'PENTAKSIRAN_PAJSK' ||
+    combinedText.includes('PAJSK') ||
+    combinedText.includes('SEGAK') ||
+    combinedText.includes('PENTAKSIRAN KOKURIKULUM')
+  ) {
+    return getKokoSKPMOption('3.2.7.1');
+  }
+
+  // 2. 3.2.6.1 — Sukan Untuk Semua
+  if (
+    cat === 'SUKAN_UNTUK_SEMUA' ||
+    combinedText.includes('MERENTAS DESA') ||
+    combinedText.includes('SUKAN TARA') ||
+    combinedText.includes('SUKANTARA') ||
+    combinedText.includes('OLAHRAGA TAHUNAN') ||
+    combinedText.includes('HARI SUKAN NEGARA') ||
+    combinedText.includes('SUKAN UNTUK SEMUA') ||
+    combinedText.includes('ANTARA RUMAH') ||
+    combinedText.includes('ANTARA KELAS')
+  ) {
+    return getKokoSKPMOption('3.2.6.1');
+  }
+
+  // 3. 3.2.5.1 — Program Kecemerlangan Kokurikulum (+ Dual-Link Std 5.2 & 5.4)
+  if (
+    cat === 'KOAKADEMIK' ||
+    (input.jenis === 'pertandingan' && level !== 'Sekolah') ||
+    combinedText.includes('KOAKADEMIK') ||
+    combinedText.includes('MSSD') ||
+    combinedText.includes('PASUKAN ELIT') ||
+    combinedText.includes('KECEMERLANGAN KOKURIKULUM')
+  ) {
+    return getKokoSKPMOption('3.2.5.1');
+  }
+
+  // 4. 3.2.4.1 — Sukan/Permainan (1M1S & School Sports Tournaments)
+  if (cat === 'sport') {
+    return getKokoSKPMOption('3.2.4.1');
+  }
+
+  // 5. 3.2.3.1 — Badan Beruniform
+  if (cat === 'uniform') {
+    return getKokoSKPMOption('3.2.3.1');
+  }
+
+  // 6. 3.2.2.1 — Kelab/Persatuan
+  if (cat === 'club') {
+    return getKokoSKPMOption('3.2.2.1');
+  }
+
+  // 7. 3.2.1.1 — Ketetapan Pelaksanaan Kokurikulum
+  return getKokoSKPMOption('3.2.1.1');
+}
 
 export function resolveSKPMForMySGItem(item?: MySGJawatankuasaItem | null): SKPMStandardMeta {
   if (!item) return SKPM_CATALOG_ENTRIES['3.1.2'];
@@ -310,8 +510,9 @@ export function resolveSKPMForMySGItem(item?: MySGJawatankuasaItem | null): SKPM
 
   // Direct aspect matching from MySG catalog's skpmStandardCode
   const prioritizedKeys = [
-    '3.2.5',
+    '3.2.7',
     '3.2.6',
+    '3.2.5',
     '3.2.4',
     '3.2.3',
     '3.2.2',
@@ -339,6 +540,9 @@ export function resolveSKPMForMySGItem(item?: MySGJawatankuasaItem | null): SKPM
   // Check PLC special match -> Standard 4 + 2.1.2
   if (raw.includes('PLC') || raw.includes('4.1')) {
     return SKPM_CATALOG_ENTRIES['4.1'];
+  }
+  if (raw.includes('PAJSK') || raw.includes('SEGAK')) {
+    return SKPM_CATALOG_ENTRIES['3.2.7'];
   }
   if (raw.includes('3K-03') || raw.includes('FIRE DRILL')) {
     return SKPM_CATALOG_ENTRIES['3.3.3'];

@@ -23,8 +23,13 @@ import {
   X, 
   Image as ImageIcon, 
   Search, 
-  ArrowLeft
+  ArrowLeft,
+  Download
 } from 'lucide-react';
+import {
+  triggerSmartPrint,
+  downloadStandalonePrintHtml,
+} from '../../utils/oprPrintHelper';
 
 export type AcademicOPRType = 'AKTIVITI' | 'PLC';
 
@@ -125,6 +130,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
   const [tindakanSusulan, setTindakanSusulan] = useState<string>('• Sesi susulan fasa seterusnya akan diadakan pada bulan hadapan.');
   const [photos, setPhotos] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [printNotice, setPrintNotice] = useState<string | null>(null);
 
   // 1. 读取 Firestore 中的学术 OPR 记录
   const fetchRecords = async () => {
@@ -800,25 +806,72 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
       {viewMode === 'print' && selectedRecord && (
         <div className="space-y-6">
           {/* Top toolbar */}
-          <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl p-4 print:hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-2xl p-4 print:hidden">
             <button
-              onClick={() => setViewMode('list')}
+              type="button"
+              onClick={() => {
+                setPrintNotice(null);
+                setViewMode('list');
+              }}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Kembali ke Senarai</span>
             </button>
-            <button
-              onClick={() => window.print()}
-              className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg cursor-pointer"
-            >
-              <Printer className="w-4 h-4" />
-              <span>Cetak Sekarang (Print / PDF)</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const res = downloadStandalonePrintHtml({
+                    elementId: 'academic-opr-print-sheet',
+                    title: selectedRecord.programName || 'OPR_Akademik',
+                    orientation: 'portrait',
+                  });
+                  setPrintNotice(res.message);
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-700/60 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Muat Turun (.html)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = triggerSmartPrint({
+                    elementId: 'academic-opr-print-sheet',
+                    title: selectedRecord.programName || 'OPR_Akademik',
+                    orientation: 'portrait',
+                  });
+                  if (res.mode !== 'native') {
+                    setPrintNotice(res.message);
+                  }
+                }}
+                className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Cetak Sekarang (Print / PDF)</span>
+              </button>
+            </div>
           </div>
 
+          {printNotice && (
+            <div className="print:hidden p-3.5 rounded-2xl bg-emerald-950/70 border border-emerald-600/60 text-emerald-200 text-xs font-bold flex items-center justify-between gap-3">
+              <span>{printNotice}</span>
+              <button
+                type="button"
+                onClick={() => setPrintNotice(null)}
+                className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Printable Sheet (CSS A4 Styled) */}
-          <div className="bg-white text-slate-900 p-8 rounded-2xl border border-slate-300 max-w-4xl mx-auto shadow-2xl print:shadow-none print:border-none print:p-0 font-sans text-xs">
+          <div
+            id="academic-opr-print-sheet"
+            className="print-portrait-sheet print-color-exact bg-white text-slate-900 p-8 rounded-2xl border border-slate-300 max-w-4xl mx-auto shadow-2xl print:shadow-none print:border-none print:p-0 font-sans text-xs"
+          >
             
             {/* Header Table */}
             <div className="text-center font-bold pb-4 border-b border-slate-300 mb-4">

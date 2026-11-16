@@ -509,6 +509,39 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "docKind", "schoolCode"]
+    },
+    "KokoActivity": {
+      "title": "KokoActivity",
+      "description": "Kokurikulum competition & activity OPR linked to SKPM Standard 3.2 and Standard 5.",
+      "type": "object",
+      "properties": {
+        "schoolCode": { "type": "string", "maxLength": 20 },
+        "jenis": { "type": "string", "enum": ["pertandingan", "aktiviti"] },
+        "programName": { "type": "string", "maxLength": 250 },
+        "category": { "type": "string", "maxLength": 50 },
+        "level": { "type": "string", "maxLength": 50 },
+        "date": { "type": "string", "maxLength": 30 },
+        "skpmStandardCode": { "type": "string", "maxLength": 30 },
+        "skpmStandard5Code": { "type": "string", "maxLength": 30 },
+        "academicYear": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["jenis", "programName", "date", "level"]
+    },
+    "KokoMeetingReport": {
+      "title": "KokoMeetingReport",
+      "description": "Kokurikulum 12 weekly meeting reports linked to SKPM Standard 3.2.",
+      "type": "object",
+      "properties": {
+        "schoolCode": { "type": "string", "maxLength": 20 },
+        "meetingNumber": { "type": "number" },
+        "groupId": { "type": "string", "maxLength": 120 },
+        "groupName": { "type": "string", "maxLength": 150 },
+        "category": { "type": "string", "maxLength": 30 },
+        "date": { "type": "string", "maxLength": 30 },
+        "skpmStandardCode": { "type": "string", "maxLength": 30 },
+        "academicYear": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["meetingNumber", "groupId", "category", "date"]
     }
   },
   "firestore": {
@@ -643,6 +676,14 @@
     "/ai_setiausaha_documents/{docId}": {
       "schema": { "$ref": "#/entities/AISetiausahaDocument" },
       "description": "Official AI Setiausaha documents scoped per school."
+    },
+    "/koko_activities/{actId}": {
+      "schema": { "$ref": "#/entities/KokoActivity" },
+      "description": "Kokurikulum competition & activity OPR reports linked to SKPM Standard 3.2 and Standard 5."
+    },
+    "/koko_meeting_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/KokoMeetingReport" },
+      "description": "Kokurikulum 12 weekly meeting OPR reports linked to SKPM Standard 3.2."
     }
   }
 }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Users, Calendar, FileText, Trophy, BarChart3, 
   Crown, Sparkles, Shield
@@ -7,7 +7,7 @@ import { UserProfile, SchoolSettings } from '../../types';
 import KokoCommitteeManager from './KokoCommitteeManager';
 import KokoAttendanceManager from './KokoAttendanceManager';
 import KokoMeetingReportManager from './KokoMeetingReportManager';
-import KokoSmartOPRManager from './KokoSmartOPRManager';
+import KokoSmartOPRManager, { MaklumanOPRPrefill } from './KokoSmartOPRManager';
 import KokoAnalyticsView from './KokoAnalyticsView';
 
 export type KokoMainTab = 
@@ -22,16 +22,32 @@ interface Props {
   profile?: UserProfile;
   role?: 'pentadbir' | 'guru' | 'laporan';
   schoolSettings?: SchoolSettings | null;
+  initialTab?: KokoMainTab;
+  oprPrefill?: MaklumanOPRPrefill | null;
+  onClearOprPrefill?: () => void;
 }
 
 export default function KokurikulumSystem({
   currentUser,
   profile,
   role = 'guru',
-  schoolSettings
+  schoolSettings,
+  initialTab,
+  oprPrefill,
+  onClearOprPrefill,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<KokoMainTab>('committee');
+  const [activeTab, setActiveTab] = useState<KokoMainTab>(
+    oprPrefill ? 'opr' : initialTab || 'committee'
+  );
   const userProfile = profile || currentUser;
+
+  useEffect(() => {
+    if (oprPrefill) {
+      setActiveTab('opr');
+    } else if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [oprPrefill, initialTab]);
 
   // Prefill state passed from Attendance shortcut to Meeting Report
   const [reportPrefill, setReportPrefill] = useState<{
@@ -165,7 +181,9 @@ export default function KokurikulumSystem({
           <KokoSmartOPRManager 
             profile={userProfile} 
             role={role} 
-            schoolSettings={schoolSettings} 
+            schoolSettings={schoolSettings}
+            prefill={oprPrefill}
+            onClearPrefill={onClearOprPrefill}
           />
         )}
 

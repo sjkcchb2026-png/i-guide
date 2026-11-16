@@ -15,11 +15,16 @@ import {
   Upload,
   Users,
   X,
+  Download,
 } from 'lucide-react';
 import { auth } from '../../firebase';
 import SchoolLogo from '../SchoolLogo';
 import { MySGJawatankuasaItem } from '../../utils/mysgJawatankuasaCatalog';
 import { resolveSKPMForMySGItem, SKPM_RADAR_BUCKETS, SKPMRadarBucket } from '../../utils/skpmCatalog';
+import {
+  triggerSmartPrint,
+  downloadStandalonePrintHtml,
+} from '../../utils/oprPrintHelper';
 import { OPRPosterDocument } from './types';
 
 interface ModuleOPRPosterProps {
@@ -137,7 +142,7 @@ export const ModuleOPRPoster: React.FC<ModuleOPRPosterProps> = ({
     setPreparedByTitle(selectedItem.jawatanRasmi);
   }, [selectedItem, skpmMeta, currentUserName, editingId]);
 
-  // Radar Evidens SKPM counts
+  // Radar Evidens SKPM counts (supports dual-bucket Standard 3.2 + Standard 5 OPRs)
   const radarCounts = useMemo(() => {
     const counts: Record<SKPMRadarBucket, number> = {
       'Std 1': 0,
@@ -152,13 +157,22 @@ export const ModuleOPRPoster: React.FC<ModuleOPRPosterProps> = ({
       if (d.skpmBucket && counts[d.skpmBucket] !== undefined) {
         counts[d.skpmBucket] += 1;
       }
+      if (
+        d.secondarySkpmBucket &&
+        d.secondarySkpmBucket !== d.skpmBucket &&
+        counts[d.secondarySkpmBucket] !== undefined
+      ) {
+        counts[d.secondarySkpmBucket] += 1;
+      }
     });
     return counts;
   }, [savedDocs]);
 
   const filteredSavedDocs = useMemo(() => {
     if (radarFilter === 'ALL') return savedDocs;
-    return savedDocs.filter((d) => d.skpmBucket === radarFilter);
+    return savedDocs.filter(
+      (d) => d.skpmBucket === radarFilter || d.secondarySkpmBucket === radarFilter
+    );
   }, [savedDocs, radarFilter]);
 
   const handlePhotoSlotUpload = (slotIdx: number, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -368,7 +382,7 @@ export const ModuleOPRPoster: React.FC<ModuleOPRPosterProps> = ({
       </div>
 
       {/* MAIN SPLIT WORKSPACE: EDITOR (LEFT) + A4 POSTER PREVIEW (RIGHT) */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start print:block">
         {/* LEFT PANEL: BILINGUAL INPUT + AI DRAFTER + FIELDS (HIDDEN ON PRINT) */}
         <div className="xl:col-span-5 bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 space-y-5 print:hidden">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -609,25 +623,57 @@ export const ModuleOPRPoster: React.FC<ModuleOPRPosterProps> = ({
         </div>
 
         {/* RIGHT PANEL: EXACT VISUAL A4 POSTER PREVIEW */}
-        <div className="xl:col-span-7 space-y-3">
-          <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5 print:hidden">
+        <div className="xl:col-span-7 space-y-3 print:w-full">
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5 print:hidden">
             <span className="text-xs font-bold text-slate-300">
               Pratonton Poster A4 Potret (SKPM Kualiti@Sekolah)
             </span>
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase cursor-pointer"
-            >
-              <Printer className="w-4 h-4" />
-              <span>Cetak / Eksport PDF (A4)</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const res = downloadStandalonePrintHtml({
+                    elementId: 'opr-a4-print-sheet',
+                    title: programTitle.trim() || `OPR_${selectedItem.jawatanRasmi}`,
+                    orientation: 'portrait',
+                  });
+                  setBanner({
+                    type: res.mode === 'error' ? 'error' : 'success',
+                    text: res.message,
+                  });
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 border border-teal-700/60 text-xs font-bold cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Muat Turun (.html)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = triggerSmartPrint({
+                    elementId: 'opr-a4-print-sheet',
+                    title: programTitle.trim() || `OPR_${selectedItem.jawatanRasmi}`,
+                    orientation: 'portrait',
+                  });
+                  if (res.mode !== 'native') {
+                    setBanner({
+                      type: res.mode === 'error' ? 'error' : 'success',
+                      text: res.message,
+                    });
+                  }
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Cetak / Eksport PDF (A4)</span>
+              </button>
+            </div>
           </div>
 
           {/* ACTUAL PRINTABLE A4 PORTRAIT POSTER SHEET */}
           <div
             id="opr-a4-print-sheet"
-            className="print-portrait-sheet bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden border border-slate-200 max-w-[794px] mx-auto flex flex-col"
+            className="print-portrait-sheet bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden border border-slate-200 max-w-[794px] mx-auto flex flex-col print:overflow-visible"
           >
             {/* 1. TOP DARK TEAL BANNER (#0D3B42) WITH GOLD BOTTOM BORDER */}
             <div className="bg-[#0D3B42] text-white px-6 py-4 border-b-4 border-[#D4AF37] print-color-exact">
@@ -821,9 +867,28 @@ export const ModuleOPRPoster: React.FC<ModuleOPRPosterProps> = ({
               className="bg-slate-950 border border-slate-800 hover:border-teal-600/60 rounded-2xl p-4 flex flex-col justify-between gap-3"
             >
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-[10px] font-bold">
-                  <span className="text-teal-300">{doc.skpmBucket}</span>
-                  <span className="text-slate-400 font-mono">{doc.tarikh}</span>
+                <div className="flex items-center justify-between gap-2 text-[10px] font-bold">
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="px-1.5 py-0.5 rounded bg-teal-950/90 text-teal-300 border border-teal-800/60">
+                      {doc.skpmCodeBadge || doc.skpmBucket}
+                    </span>
+                    {doc.secondarySkpmBucket && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-950/90 text-amber-300 border border-amber-800/60">
+                        + {doc.secondarySkpmBucket}
+                      </span>
+                    )}
+                    {doc.sourceModule === 'KOKURIKULUM_OPR' && (
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-950/90 text-emerald-300 border border-emerald-800/60">
+                        Koko OPR
+                      </span>
+                    )}
+                    {doc.sourceModule === 'KOKURIKULUM_MEETING' && (
+                      <span className="px-1.5 py-0.5 rounded bg-indigo-950/90 text-indigo-300 border border-indigo-800/60">
+                        Perjumpaan
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-slate-400 font-mono shrink-0">{doc.tarikh}</span>
                 </div>
                 <h5 className="text-xs font-black text-white uppercase line-clamp-2">
                   {doc.programTitle}

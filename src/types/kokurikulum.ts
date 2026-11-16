@@ -32,8 +32,27 @@ export interface KokoActivity {
   endDate?: string;
   venue: string;
   level: KokoScopeLevel;
-  category: 'uniform' | 'club' | 'sport' | 'KURIKULUM' | 'KOAKADEMIK' | 'HEM' | 'KOKURIKULUM';
+  category:
+    | 'uniform'
+    | 'club'
+    | 'sport'
+    | 'KURIKULUM'
+    | 'KOAKADEMIK'
+    | 'HEM'
+    | 'KOKURIKULUM'
+    | 'SUKAN_UNTUK_SEMUA'
+    | 'PENTAKSIRAN_PAJSK';
   unit?: string;
+  masa?: string;
+
+  // SKPM Kualiti@Sekolah (SKAS) Standard 3.2 & Standard 5 Linkage
+  skpmStandardCode?: string;
+  skpmStandardTitle?: string;
+  skpmAspekTitle?: string;
+  skpmKualitiStatement?: string;
+  skpmStandard5Code?: string;
+  skpmStandard5Label?: string;
+  linkedMaklumanTaskId?: string;
   
   // Teacher roles separation
   jurulatih: string[];        // Coach / Trainer names
@@ -114,7 +133,13 @@ export interface KokoMeetingReport {
   disediakanOleh: string;
   jawatanPenyedia: string;
   disahkanOleh?: string;
-  
+
+  // SKPM Kualiti@Sekolah (SKAS) Standard 3.2 Linkage
+  skpmStandardCode?: string;
+  skpmStandardTitle?: string;
+  skpmAspekTitle?: string;
+  skpmKualitiStatement?: string;
+
   academicYear: string;
   createdAt: string;
   updatedAt?: string;

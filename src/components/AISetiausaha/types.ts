@@ -29,6 +29,12 @@ export interface OPRPosterDocument {
   photos: string[]; // Up to 3 circular photos (base64 compressed)
   preparedByName: string;
   preparedByTitle: string;
+  sourceModule?: 'AI_SETIAUSAHA' | 'KOKURIKULUM_OPR' | 'KOKURIKULUM_MEETING';
+  sourceActivityId?: string;
+  secondarySkpmBucket?: SKPMRadarBucket;
+  skpmCodeBadge?: string;
+  peringkat?: string;
+  pencapaian?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;

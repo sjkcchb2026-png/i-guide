@@ -18,6 +18,9 @@ import {
 } from '../../types/kokurikulum';
 import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
+import { getKokoSKPMOption, SKPMKokoStandardCode } from '../../utils/skpmCatalog';
+import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
+import { triggerSmartPrint } from '../../utils/oprPrintHelper';
 
 interface Props {
   profile: UserProfile;
@@ -56,6 +59,7 @@ export default function KokoMeetingReportManager({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [printMessage, setPrintMessage] = useState<string | null>(null);
 
   // Form states for active report
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -170,6 +174,23 @@ export default function KokoMeetingReportManager({
     return groups.find(g => g.id === selectedGroupId || g.name === selectedGroupId);
   }, [groups, selectedGroupId]);
 
+  // Resolve SKPM Standard 3.2 specification for this meeting session & unit category
+  const resolvedMeetingSkpm = useMemo(() => {
+    let code: SKPMKokoStandardCode = '3.2.2.1';
+    if (Number(selectedMeetingNumber) === 1) {
+      code = '3.2.1.1';
+    } else if (Number(selectedMeetingNumber) === 11) {
+      code = '3.2.7.1';
+    } else if (currentGroup?.category === 'uniform') {
+      code = '3.2.3.1';
+    } else if (currentGroup?.category === 'sport') {
+      code = '3.2.4.1';
+    } else {
+      code = '3.2.2.1';
+    }
+    return getKokoSKPMOption(code);
+  }, [currentGroup?.category, selectedMeetingNumber]);
+
   // Handle incoming prefill from Attendance module shortcut
   useEffect(() => {
     if (prefill) {
@@ -262,7 +283,7 @@ export default function KokoMeetingReportManager({
     const targetGroupId = currentGroup.id || currentGroup.name;
     const reportDocId = scopedDocId(activeSchoolCode, `${targetGroupId}_p${selectedMeetingNumber}`);
 
-    const reportData: KokoMeetingReport & { schoolCode?: string } = {
+    const reportData: KokoMeetingReport & { schoolCode?: string } = deepSanitizeFirestore({
       schoolCode: activeSchoolCode,
       meetingNumber: selectedMeetingNumber,
       meetingTitle: tajukAktiviti,
@@ -289,13 +310,70 @@ export default function KokoMeetingReportManager({
       disediakanOleh,
       jawatanPenyedia,
       disahkanOleh,
+      skpmStandardCode: resolvedMeetingSkpm.code,
+      skpmStandardTitle: resolvedMeetingSkpm.standardTitle,
+      skpmAspekTitle: resolvedMeetingSkpm.aspekTitle,
+      skpmKualitiStatement: resolvedMeetingSkpm.kualitiStatement,
       academicYear: '2026',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
-    };
+    });
 
     try {
       await setDoc(doc(db, 'koko_meeting_reports', reportDocId), reportData);
+
+      // Sync meeting report into AI Setiausaha Hub (`ai_setiausaha_documents`) under Std 3.2
+      const setiausahaDocId = scopedDocId(activeSchoolCode, `koko_meeting_${reportDocId}`);
+      const setiausahaPayload = deepSanitizeFirestore({
+        id: setiausahaDocId,
+        docKind: 'OPR',
+        sourceModule: 'KOKURIKULUM_MEETING',
+        sourceActivityId: reportDocId,
+        schoolCode: activeSchoolCode,
+        academicYear: reportData.academicYear,
+        pillar: 'KOKURIKULUM',
+        kodMySG: resolvedMeetingSkpm.code,
+        jawatankuasaInduk: currentGroup.name,
+        jawatanRasmi: jawatanPenyedia || 'Guru Penasihat',
+        skpmBucket: 'Std 3.2',
+        secondarySkpmBucket: 'Std 5',
+        skpmCodeBadge: `${resolvedMeetingSkpm.code} (P${selectedMeetingNumber})`,
+        skpmStandard: resolvedMeetingSkpm.standardTitle,
+        skpmAspek: resolvedMeetingSkpm.aspekTitle,
+        skpmStandardKualiti: resolvedMeetingSkpm.kualitiStatement,
+        programTitle: `${currentGroup.name.toUpperCase()} — ${(tajukAktiviti || `PERJUMPAAN ${selectedMeetingNumber}`).toUpperCase()}`,
+        tarikh: date,
+        masa: `${timeStart} – ${timeEnd}`,
+        tempat: venue,
+        sasaran: `Ahli Unit (${attendanceStats.present}/${attendanceStats.total} Hadir · ${attendanceStats.percentage}%)`,
+        rawNotes: '',
+        objektif: objectives.filter(Boolean),
+        pengisianAktiviti: [
+          `Modul KPM: ${kpmModule || 'Modul Kokurikulum KPM'}`,
+          `Kehadiran Ahli: ${attendanceStats.present} / ${attendanceStats.total} (${attendanceStats.percentage}%)`,
+          ...(ringkasanAktiviti ? [ringkasanAktiviti] : []),
+          ...(guruHadir.length > 0 ? [`Guru Penasihat Hadir: ${guruHadir.join(', ')}`] : []),
+        ],
+        impak: [
+          refleksiImpak || 'Penglibatan aktif ahli unit dalam perjumpaan mingguan.',
+          resolvedMeetingSkpm.standard5Label || 'STANDARD 5 (Aspek 5.2) : Kemenjadian Murid dalam Kokurikulum',
+        ].filter(Boolean),
+        refleksiDanTindakanSusulan: [
+          refleksiImpak ? `Refleksi: ${refleksiImpak}` : '',
+          halLain ? `Hal Lain / Penambahbaikan: ${halLain}` : '',
+        ].filter(Boolean),
+        photos: [],
+        preparedByName: (disediakanOleh || profile.name || '').toUpperCase(),
+        preparedByTitle: jawatanPenyedia || 'Guru Penasihat',
+        createdBy: profile.email || profile.uid,
+        createdAt: reportData.createdAt,
+        updatedAt: reportData.updatedAt,
+      });
+
+      await setDoc(doc(db, 'ai_setiausaha_documents', setiausahaDocId), setiausahaPayload, {
+        merge: true,
+      });
+
       setSaving(false);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -457,12 +535,27 @@ export default function KokoMeetingReportManager({
               <p className="text-xs text-slate-400 mt-1">
                 {currentGroup.name} · Modul: {kpmModule}
               </p>
+              <div className="mt-2 inline-flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-xl bg-teal-950/60 border border-teal-500/30 text-[11px] text-teal-200">
+                <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+                <span className="font-black text-amber-300">{resolvedMeetingSkpm.code}</span>
+                <span>{resolvedMeetingSkpm.aspekTitle}</span>
+              </div>
             </div>
 
             <div className="flex items-center gap-2.5">
               <button
-                onClick={() => window.print()}
-                className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition shadow"
+                type="button"
+                onClick={() => {
+                  const res = triggerSmartPrint({
+                    elementId: 'koko-meeting-report-sheet',
+                    title: `${currentGroup.name}_Perjumpaan_${selectedMeetingNumber}`,
+                    orientation: 'portrait',
+                  });
+                  if (res.mode !== 'native') {
+                    setPrintMessage(res.message);
+                  }
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition shadow cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
                 <span>Cetak / Eksport PDF</span>
@@ -481,15 +574,28 @@ export default function KokoMeetingReportManager({
             </div>
           </div>
 
+          {printMessage && (
+            <div className="p-3 bg-blue-950/80 border border-blue-500/50 rounded-2xl flex items-center justify-between gap-2 text-xs font-bold text-blue-200 print:hidden">
+              <span>{printMessage}</span>
+              <button
+                type="button"
+                onClick={() => setPrintMessage(null)}
+                className="px-2 py-0.5 rounded bg-blue-900/60 hover:bg-blue-800 text-[11px] cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          )}
+
           {saveSuccess && (
             <div className="p-3 bg-emerald-950/80 border border-emerald-500/50 rounded-2xl flex items-center gap-2 text-xs font-bold text-emerald-300 print:hidden">
               <CheckCircle2 className="w-4 h-4" />
-              <span>Laporan Perjumpaan {selectedMeetingNumber} berjaya disimpan ke pangkalan data!</span>
+              <span>Laporan Perjumpaan {selectedMeetingNumber} ({resolvedMeetingSkpm.code}) berjaya disimpan &amp; disegerak ke AI Setiausaha!</span>
             </div>
           )}
 
           {/* ================= PRINTABLE OFFICIAL REPORT SHEET ================= */}
-          <div className="print-report-container space-y-6">
+          <div id="koko-meeting-report-sheet" className="print-report-container print-portrait-sheet space-y-6">
             {/* School Header Banner for Print */}
             <div className="border-b-2 border-slate-300 pb-4 text-center">
               <h1 className="text-base font-black uppercase tracking-wide text-slate-900 dark:text-white">
@@ -500,6 +606,13 @@ export default function KokoMeetingReportManager({
               </h2>
               <div className="mt-2 inline-block px-4 py-1 bg-blue-100 dark:bg-blue-950/80 text-blue-900 dark:text-blue-300 font-black text-xs rounded-full border border-blue-400">
                 LAPORAN PERJUMPAAN MINGGUAN ({selectedMeetingNumber} / 12)
+              </div>
+              <div className="mt-2 max-w-2xl mx-auto px-4 py-2 rounded-xl bg-[#0D3B42] text-white border-b-2 border-[#D4AF37] text-left text-[10px]">
+                <div className="font-black uppercase text-[#FDE047]">
+                  SKPM KUALITI@SEKOLAH · {resolvedMeetingSkpm.standardTitle}
+                </div>
+                <div className="font-bold uppercase text-teal-100">{resolvedMeetingSkpm.aspekTitle}</div>
+                <div className="italic text-teal-50/90">{resolvedMeetingSkpm.kualitiStatement}</div>
               </div>
             </div>
 

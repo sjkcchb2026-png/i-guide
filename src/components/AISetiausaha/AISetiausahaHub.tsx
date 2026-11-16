@@ -23,7 +23,13 @@ import {
   MySGPillar,
   PILLAR_DISPLAY_META,
 } from '../../utils/mysgJawatankuasaCatalog';
-import { resolveSKPMForMySGItem } from '../../utils/skpmCatalog';
+import {
+  autoResolveKokoSKPM,
+  getKokoSKPMOption,
+  resolveSKPMForMySGItem,
+  SKPMKokoStandardCode,
+} from '../../utils/skpmCatalog';
+import { KokoActivity, KokoMeetingReport } from '../../types/kokurikulum';
 import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
 import {
   belongsToSchool,
@@ -293,18 +299,13 @@ export const AISetiausahaHub: React.FC<AISetiausahaHubProps> = ({
 
       setMysgItems(mergedMysg);
 
-      // 4. AI Setiausaha Documents (Direct Firestore Client SDK scoped by schoolCode)
+      // 4. AI Setiausaha Documents + Legacy/Live Kokurikulum OPRs & Meeting Reports
+      let loadedDocs: AnySetiausahaDocument[] = [];
       try {
         const docsSnap = await getDocs(collection(db, 'ai_setiausaha_documents'));
-        const loadedDocs = docsSnap.docs
+        loadedDocs = docsSnap.docs
           .filter((d) => belongsToSchool(d.data() as Record<string, unknown>, activeSchoolCode))
-          .map((d) => ({ id: d.id, ...d.data() } as AnySetiausahaDocument))
-          .sort((a, b) =>
-            String(b.updatedAt || b.createdAt || '').localeCompare(
-              String(a.updatedAt || a.createdAt || '')
-            )
-          );
-        setDocuments(loadedDocs);
+          .map((d) => ({ id: d.id, ...d.data() } as AnySetiausahaDocument));
       } catch (err) {
         const errMsg = handleFirestoreError(
           err,
@@ -313,6 +314,177 @@ export const AISetiausahaHub: React.FC<AISetiausahaHubProps> = ({
         );
         setLoadError(`Ralat memuatkan arkib AI Setiausaha: ${errMsg}`);
       }
+
+      // Deduplicate set of sourceActivityIds already mirrored inside ai_setiausaha_documents
+      const mirroredSourceIds = new Set<string>();
+      loadedDocs.forEach((docItem) => {
+        if (docItem.docKind === 'OPR') {
+          if (docItem.sourceActivityId) mirroredSourceIds.add(docItem.sourceActivityId);
+          mirroredSourceIds.add(docItem.id);
+        }
+      });
+
+      // Merge any koko_activities not yet mirrored into ai_setiausaha_documents
+      try {
+        const actSnap = await getDocs(collection(db, 'koko_activities'));
+        actSnap.docs
+          .filter((d) => belongsToSchool(d.data() as Record<string, unknown>, activeSchoolCode))
+          .forEach((d) => {
+            const act = { id: d.id, ...d.data() } as KokoActivity;
+            const mirrorDocId = scopedDocId(activeSchoolCode, `koko_opr_${d.id}`);
+            if (mirroredSourceIds.has(d.id) || mirroredSourceIds.has(mirrorDocId)) {
+              return;
+            }
+            const skpmSpec = autoResolveKokoSKPM({
+              category: act.category,
+              jenis: act.jenis,
+              level: act.level,
+              programName: act.programName,
+              unit: act.unit,
+              manualCode: act.skpmStandardCode,
+            });
+            const hasStd5 = Boolean(skpmSpec.standard5Code || act.jenis === 'pertandingan');
+            const synthesizedOpr: OPRPosterDocument = {
+              id: `koko_legacy_${d.id}`,
+              docKind: 'OPR',
+              sourceModule: 'KOKURIKULUM_OPR',
+              sourceActivityId: d.id,
+              schoolCode: activeSchoolCode,
+              academicYear: act.academicYear || resolvedYear,
+              pillar: 'KOKURIKULUM',
+              kodMySG: act.skpmStandardCode || skpmSpec.code,
+              jawatankuasaInduk: act.unit || 'Pengurusan Kokurikulum & Koakademik',
+              jawatanRasmi:
+                act.category === 'KOAKADEMIK'
+                  ? `Penyelaras ${act.unit || 'Koakademik'}`
+                  : 'Jurulatih / Guru Penasihat Kokurikulum',
+              skpmBucket: 'Std 3.2',
+              secondarySkpmBucket: hasStd5 ? 'Std 5' : undefined,
+              skpmCodeBadge: skpmSpec.standard5Code
+                ? `${skpmSpec.code} + Std ${skpmSpec.standard5Code}`
+                : skpmSpec.code,
+              skpmStandard: act.skpmStandardTitle || skpmSpec.standardTitle,
+              skpmAspek: act.skpmAspekTitle || skpmSpec.aspekTitle,
+              skpmStandardKualiti: act.skpmKualitiStatement || skpmSpec.kualitiStatement,
+              programTitle: (act.programName || 'AKTIVITI KOKURIKULUM').toUpperCase(),
+              tarikh: act.date || '',
+              masa: act.masa || '-',
+              tempat: act.venue || '-',
+              sasaran:
+                act.participantCount === 0
+                  ? 'Guru & Pengurusan Sekolah'
+                  : `${act.participantCount || 0} Orang Murid (${act.level || 'Sekolah'})`,
+              peringkat: act.level,
+              pencapaian: act.jenis === 'pertandingan' ? String(act.pencapaian || '') : undefined,
+              rawNotes: '',
+              objektif: [act.objective1, act.objective2, act.objective3].filter(Boolean) as string[],
+              pengisianAktiviti: [
+                `Penganjur: ${act.organizer || '-'}${act.unit ? ` · Unit: ${act.unit}` : ''} (Peringkat: ${act.level || 'Sekolah'})`,
+                ...(act.jenis === 'pertandingan' && act.pencapaian
+                  ? [`Pencapaian Rasmi: ${act.pencapaian}`]
+                  : []),
+                ...(act.jurulatih?.length ? [`Jurulatih: ${act.jurulatih.join(', ')}`] : []),
+                ...(act.guruPengiring?.length ? [`Guru Pengiring: ${act.guruPengiring.join(', ')}`] : []),
+              ],
+              impak: [act.impact || '', act.skpmStandard5Label || skpmSpec.standard5Label || ''].filter(Boolean),
+              refleksiDanTindakanSusulan: [
+                act.reflection ? `Refleksi: ${act.reflection}` : '',
+                act.kekuatan ? `Kekuatan: ${act.kekuatan}` : '',
+                act.kelemahanCadangan ? `Penambahbaikan: ${act.kelemahanCadangan}` : '',
+                act.tindakanSusulan ? `Tindakan Susulan: ${act.tindakanSusulan}` : '',
+              ].filter(Boolean),
+              photos: (act.images || []).slice(0, 3),
+              preparedByName: (act.jurulatih?.[0] || act.createdBy || '').toUpperCase(),
+              preparedByTitle:
+                act.category === 'KOAKADEMIK'
+                  ? `Penyelaras ${act.unit || 'Koakademik'}`
+                  : 'Jurulatih / Guru Penasihat',
+              createdBy: act.createdBy || '',
+              createdAt: act.createdAt || '',
+              updatedAt: act.updatedAt || act.createdAt || '',
+            };
+            loadedDocs.push(synthesizedOpr);
+          });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, 'koko_activities');
+      }
+
+      // Merge any koko_meeting_reports not yet mirrored into ai_setiausaha_documents
+      try {
+        const repSnap = await getDocs(collection(db, 'koko_meeting_reports'));
+        repSnap.docs
+          .filter((d) => belongsToSchool(d.data() as Record<string, unknown>, activeSchoolCode))
+          .forEach((d) => {
+            const rep = { id: d.id, ...d.data() } as KokoMeetingReport;
+            const mirrorDocId = scopedDocId(activeSchoolCode, `koko_meeting_${d.id}`);
+            if (mirroredSourceIds.has(d.id) || mirroredSourceIds.has(mirrorDocId)) {
+              return;
+            }
+            let code: SKPMKokoStandardCode = '3.2.2.1';
+            if (Number(rep.meetingNumber) === 1) code = '3.2.1.1';
+            else if (Number(rep.meetingNumber) === 11) code = '3.2.7.1';
+            else if (rep.category === 'uniform') code = '3.2.3.1';
+            else if (rep.category === 'sport') code = '3.2.4.1';
+            const skpmSpec = getKokoSKPMOption(rep.skpmStandardCode || code);
+
+            const synthesizedMeeting: OPRPosterDocument = {
+              id: `koko_meeting_legacy_${d.id}`,
+              docKind: 'OPR',
+              sourceModule: 'KOKURIKULUM_MEETING',
+              sourceActivityId: d.id,
+              schoolCode: activeSchoolCode,
+              academicYear: rep.academicYear || resolvedYear,
+              pillar: 'KOKURIKULUM',
+              kodMySG: skpmSpec.code,
+              jawatankuasaInduk: rep.groupName || 'Unit Kokurikulum',
+              jawatanRasmi: rep.jawatanPenyedia || 'Guru Penasihat',
+              skpmBucket: 'Std 3.2',
+              secondarySkpmBucket: 'Std 5',
+              skpmCodeBadge: `${skpmSpec.code} (P${rep.meetingNumber})`,
+              skpmStandard: rep.skpmStandardTitle || skpmSpec.standardTitle,
+              skpmAspek: rep.skpmAspekTitle || skpmSpec.aspekTitle,
+              skpmStandardKualiti: rep.skpmKualitiStatement || skpmSpec.kualitiStatement,
+              programTitle: `${(rep.groupName || 'UNIT KOKURIKULUM').toUpperCase()} — ${(rep.tajukAktiviti || rep.meetingTitle || `PERJUMPAAN ${rep.meetingNumber}`).toUpperCase()}`,
+              tarikh: rep.date || '',
+              masa: `${rep.timeStart || '13:30'} – ${rep.timeEnd || '15:00'}`,
+              tempat: rep.venue || 'Sekolah',
+              sasaran: `Ahli Unit (${rep.attendanceStats?.present || 0}/${rep.attendanceStats?.total || 0} Hadir · ${rep.attendanceStats?.percentage || 0}%)`,
+              rawNotes: '',
+              objektif: Array.isArray(rep.objektif) ? rep.objektif.filter(Boolean) : [],
+              pengisianAktiviti: [
+                `Modul KPM: ${rep.kpmModule || 'Modul Kokurikulum KPM'}`,
+                rep.ringkasanAktiviti || '',
+                ...(rep.guruPenasihatHadir?.length
+                  ? [`Guru Penasihat Hadir: ${rep.guruPenasihatHadir.join(', ')}`]
+                  : []),
+              ].filter(Boolean),
+              impak: [
+                rep.refleksiImpak || '',
+                skpmSpec.standard5Label || '',
+              ].filter(Boolean),
+              refleksiDanTindakanSusulan: [
+                rep.refleksiImpak ? `Refleksi: ${rep.refleksiImpak}` : '',
+                rep.halLain ? `Hal Lain: ${rep.halLain}` : '',
+              ].filter(Boolean),
+              photos: (rep.images || []).slice(0, 3),
+              preparedByName: (rep.disediakanOleh || '').toUpperCase(),
+              preparedByTitle: rep.jawatanPenyedia || 'Guru Penasihat',
+              createdBy: rep.disediakanOleh || '',
+              createdAt: rep.createdAt || '',
+              updatedAt: rep.updatedAt || rep.createdAt || '',
+            };
+            loadedDocs.push(synthesizedMeeting);
+          });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, 'koko_meeting_reports');
+      }
+
+      loadedDocs.sort((a, b) =>
+        String(b.updatedAt || b.createdAt || '').localeCompare(
+          String(a.updatedAt || a.createdAt || '')
+        )
+      );
+      setDocuments(loadedDocs);
     } finally {
       setLoading(false);
     }
@@ -418,13 +590,20 @@ export const AISetiausahaHub: React.FC<AISetiausahaHubProps> = ({
 
   const handleDeleteDoc = useCallback(async (id: string): Promise<void> => {
     if (!auth.currentUser || !id) return;
-    const docPath = `ai_setiausaha_documents/${id}`;
     try {
-      await deleteDoc(doc(db, 'ai_setiausaha_documents', id));
+      if (id.startsWith('koko_legacy_')) {
+        const rawId = id.replace('koko_legacy_', '');
+        await deleteDoc(doc(db, 'koko_activities', rawId));
+      } else if (id.startsWith('koko_meeting_legacy_')) {
+        const rawId = id.replace('koko_meeting_legacy_', '');
+        await deleteDoc(doc(db, 'koko_meeting_reports', rawId));
+      } else {
+        await deleteDoc(doc(db, 'ai_setiausaha_documents', id));
+      }
       setDocuments((prev) => prev.filter((d) => d.id !== id));
       setLoadError(null);
     } catch (err) {
-      const msg = handleFirestoreError(err, OperationType.DELETE, docPath);
+      const msg = handleFirestoreError(err, OperationType.DELETE, id);
       setLoadError(`Gagal memadam dokumen: ${msg}`);
     }
   }, []);
