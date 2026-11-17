@@ -22,6 +22,7 @@ interface Props {
   schoolSettings?: SchoolSettings | null;
   schoolCode: string;
   schoolName: string;
+  academicYear?: string;
 }
 
 export const ModuleOPRPoster: React.FC<Props> = ({
@@ -29,6 +30,7 @@ export const ModuleOPRPoster: React.FC<Props> = ({
   schoolSettings,
   schoolCode,
   schoolName,
+  academicYear = '2026',
 }) => {
   const [docs, setDocs] = useState<AISetiausahaDocument[]>([]);
   const [selectedDoc, setSelectedDoc] = useState<AISetiausahaDocument | null>(null);
@@ -49,11 +51,17 @@ export const ModuleOPRPoster: React.FC<Props> = ({
       const snap = await getDocs(collection(db, 'ai_setiausaha_documents'));
       const list = snap.docs
         .map((d) => ({ ...(d.data() as any), id: d.id } as AISetiausahaDocument))
-        .filter((d) => belongsToSchool(d as any, schoolCode) && d.docKind === 'OPR')
+        .filter((d) => {
+          if (!belongsToSchool(d as any, schoolCode) || d.docKind !== 'OPR') return false;
+          const docYear = d.academicYear || (d.tarikh ? d.tarikh.slice(0, 4) : '2026');
+          return docYear === academicYear || docYear.startsWith(academicYear.slice(0, 4));
+        })
         .sort((a, b) => (b.tarikh || '').localeCompare(a.tarikh || ''));
       setDocs(list);
-      if (list.length > 0 && !selectedDoc) {
-        setSelectedDoc(list[0]);
+      if (list.length > 0) {
+        setSelectedDoc((prev) => (prev && list.some((x) => x.id === prev.id) ? prev : list[0]));
+      } else {
+        setSelectedDoc(null);
       }
     } catch (err) {
       console.warn('Could not load AI Setiausaha OPR docs:', err);
@@ -62,16 +70,16 @@ export const ModuleOPRPoster: React.FC<Props> = ({
 
   useEffect(() => {
     loadDocs();
-  }, [schoolCode]);
+  }, [schoolCode, academicYear]);
 
   const handleCreateOPR = async () => {
     if (!programTitle.trim()) return;
-    const id = scopedDocId(schoolCode, `opr_${Date.now()}`);
+    const id = scopedDocId(schoolCode, `opr_${academicYear.replace(/\//g, '-')}_${Date.now()}`);
     const newDoc: AISetiausahaDocument = {
       id,
       docKind: 'OPR',
       schoolCode,
-      academicYear: tarikh.slice(0, 4) || '2026',
+      academicYear,
       pillar: 'KURIKULUM',
       skpmCodeBadge: 'SKPM Kualiti@Sekolah',
       skpmStandard: 'STANDARD 3.1 / 3.2 / 3.3: PENGURUSAN SEKOLAH',
@@ -113,7 +121,7 @@ export const ModuleOPRPoster: React.FC<Props> = ({
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
           <h4 className="text-xs font-black uppercase text-amber-300 flex items-center gap-1.5">
             <Plus className="w-4 h-4" />
-            <span>Jana Poster OPR Baharu</span>
+            <span>Jana Poster OPR Baharu (Sesi {academicYear})</span>
           </h4>
           <input
             type="text"
@@ -162,7 +170,7 @@ export const ModuleOPRPoster: React.FC<Props> = ({
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2 max-h-96 overflow-y-auto">
           <div className="text-xs font-black uppercase text-slate-400">
-            Arkib OPR SKPM ({docs.length})
+            Arkib OPR SKPM Sesi {academicYear} ({docs.length})
           </div>
           {docs.map((d, idx) => (
             <div
@@ -243,7 +251,7 @@ export const ModuleOPRPoster: React.FC<Props> = ({
               <div className="border-b-4 border-indigo-900 pb-4 flex items-center justify-between">
                 <div>
                   <div className="text-[10px] font-black uppercase tracking-widest text-indigo-700">
-                    ONE PAGE REPORT (OPR) · {selectedDoc.skpmCodeBadge || 'SKPM KUALITI@SEKOLAH'}
+                    ONE PAGE REPORT (OPR) · {selectedDoc.skpmCodeBadge || 'SKPM KUALITI@SEKOLAH'} · SESI {selectedDoc.academicYear || academicYear}
                   </div>
                   <h2 className="text-xl font-black uppercase text-slate-900 mt-0.5">
                     {selectedDoc.programTitle}
@@ -325,7 +333,7 @@ export const ModuleOPRPoster: React.FC<Props> = ({
         ) : (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-400 text-xs">
             <FileText className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-            Pilih atau cipta Poster OPR di sebelah kiri.
+            Pilih atau cipta Poster OPR bagi Sesi {academicYear} di sebelah kiri.
           </div>
         )}
       </div>

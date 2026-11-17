@@ -4,6 +4,11 @@ export type MySGPillar = 'PENTADBIRAN' | 'KURIKULUM' | 'HEM' | 'KOKURIKULUM';
 export type MySGTahapBeban = 'BERAT' | 'SEDERHANA' | 'RINGAN';
 export type MySGSkpmBucket = 'Std 1 & 2' | 'Std 3.1' | 'Std 3.2' | 'Std 3.3' | 'Std 5';
 
+export interface MySGAhliItem {
+  teacherId: string;
+  teacherName: string;
+}
+
 export interface MySGJawatankuasaItem {
   kodMySG: string;
   pillar: MySGPillar;
@@ -15,6 +20,7 @@ export interface MySGJawatankuasaItem {
   skpmStandardRef: string;
   assignedTeacherId?: string;
   assignedTeacherName?: string;
+  ahliList?: MySGAhliItem[];
   customDueDate?: string;
 }
 
@@ -377,6 +383,72 @@ export interface TeacherWorkloadRadarItem {
   sederhanaCount: number;
   ringanCount: number;
   positions: MySGJawatankuasaItem[];
+  ahliCount: number;
+  ahliPositions: MySGJawatankuasaItem[];
+}
+
+export function mergeMySGCatalogWithSaved(
+  savedList?: MySGJawatankuasaItem[] | null
+): MySGJawatankuasaItem[] {
+  if (!Array.isArray(savedList) || savedList.length === 0) {
+    return MYSG_DEFAULT_CATALOG.map((item) => ({
+      ...item,
+      ahliList: item.ahliList ? [...item.ahliList] : [],
+    }));
+  }
+
+  const savedByKod = new Map<string, MySGJawatankuasaItem>();
+  savedList.forEach((s) => {
+    if (s && s.kodMySG) {
+      savedByKod.set(s.kodMySG, s);
+    }
+  });
+
+  const defaultKods = new Set(MYSG_DEFAULT_CATALOG.map((d) => d.kodMySG));
+
+  const mergedDefaults = MYSG_DEFAULT_CATALOG.map((def) => {
+    const saved = savedByKod.get(def.kodMySG);
+    if (!saved) {
+      return { ...def, ahliList: [] };
+    }
+    const cleanAhli: MySGAhliItem[] = Array.isArray(saved.ahliList)
+      ? saved.ahliList
+          .filter((a) => a && (a.teacherId || a.teacherName))
+          .map((a) => ({
+            teacherId: String(a.teacherId || '').trim(),
+            teacherName: String(a.teacherName || '').trim().toUpperCase(),
+          }))
+      : [];
+    return {
+      ...def,
+      jawatankuasaInduk: saved.jawatankuasaInduk || def.jawatankuasaInduk,
+      jawatanRasmi: saved.jawatanRasmi || def.jawatanRasmi,
+      tahapBeban: saved.tahapBeban || def.tahapBeban,
+      mataBeban: saved.mataBeban || def.mataBeban,
+      assignedTeacherId: saved.assignedTeacherId || '',
+      assignedTeacherName: saved.assignedTeacherName || '',
+      ahliList: cleanAhli,
+      customDueDate: saved.customDueDate || '',
+    };
+  });
+
+  const customSaved = savedList
+    .filter((s) => s && s.kodMySG && !defaultKods.has(s.kodMySG))
+    .map((s) => ({
+      ...s,
+      assignedTeacherId: s.assignedTeacherId || '',
+      assignedTeacherName: s.assignedTeacherName || '',
+      ahliList: Array.isArray(s.ahliList)
+        ? s.ahliList
+            .filter((a) => a && (a.teacherId || a.teacherName))
+            .map((a) => ({
+              teacherId: String(a.teacherId || '').trim(),
+              teacherName: String(a.teacherName || '').trim().toUpperCase(),
+            }))
+        : [],
+    }));
+
+  return [...mergedDefaults, ...customSaved];
 }
 
 export function computeTeacherWorkloadRadar(
@@ -385,25 +457,10 @@ export function computeTeacherWorkloadRadar(
 ): TeacherWorkloadRadarItem[] {
   const map = new Map<string, TeacherWorkloadRadarItem>();
 
-  personnel.forEach((p) => {
-    const key = p.id || p.name.toUpperCase();
-    map.set(key, {
-      teacherId: p.id,
-      teacherName: (p.name || '').toUpperCase(),
-      email: p.email || '',
-      totalMata: 0,
-      positionCount: 0,
-      beratCount: 0,
-      sederhanaCount: 0,
-      ringanCount: 0,
-      positions: [],
-    });
-  });
-
-  items.forEach((item) => {
-    const tId = (item.assignedTeacherId || '').trim();
-    const tName = (item.assignedTeacherName || '').trim().toUpperCase();
-    if (!tId && !tName) return;
+  const findOrCreateEntry = (tIdRaw: string, tNameRaw: string): TeacherWorkloadRadarItem | null => {
+    const tId = (tIdRaw || '').trim();
+    const tName = (tNameRaw || '').trim().toUpperCase();
+    if (!tId && !tName) return null;
 
     let entry = tId ? map.get(tId) : undefined;
     if (!entry && tName) {
@@ -426,18 +483,60 @@ export function computeTeacherWorkloadRadar(
         sederhanaCount: 0,
         ringanCount: 0,
         positions: [],
+        ahliCount: 0,
+        ahliPositions: [],
       };
       map.set(fallbackKey, entry);
     }
+    return entry;
+  };
 
-    const mata = Number(item.mataBeban) || (item.tahapBeban === 'BERAT' ? 3 : item.tahapBeban === 'SEDERHANA' ? 2 : 1);
-    entry.totalMata += mata;
-    entry.positionCount += 1;
-    if (item.tahapBeban === 'BERAT') entry.beratCount += 1;
-    else if (item.tahapBeban === 'SEDERHANA') entry.sederhanaCount += 1;
-    else entry.ringanCount += 1;
-    entry.positions.push(item);
+  personnel.forEach((p) => {
+    const key = p.id || p.name.toUpperCase();
+    map.set(key, {
+      teacherId: p.id,
+      teacherName: (p.name || '').toUpperCase(),
+      email: p.email || '',
+      totalMata: 0,
+      positionCount: 0,
+      beratCount: 0,
+      sederhanaCount: 0,
+      ringanCount: 0,
+      positions: [],
+      ahliCount: 0,
+      ahliPositions: [],
+    });
   });
 
-  return Array.from(map.values()).sort((a, b) => b.totalMata - a.totalMata || a.teacherName.localeCompare(b.teacherName));
+  items.forEach((item) => {
+    // 1. Primary Penyelaras / Ketua / Setiausaha (Load-bearing: BERAT=3, SEDERHANA=2, RINGAN=1)
+    const entry = findOrCreateEntry(item.assignedTeacherId || '', item.assignedTeacherName || '');
+    if (entry) {
+      const mata =
+        Number(item.mataBeban) ||
+        (item.tahapBeban === 'BERAT' ? 3 : item.tahapBeban === 'SEDERHANA' ? 2 : 1);
+      entry.totalMata += mata;
+      entry.positionCount += 1;
+      if (item.tahapBeban === 'BERAT') entry.beratCount += 1;
+      else if (item.tahapBeban === 'SEDERHANA') entry.sederhanaCount += 1;
+      else entry.ringanCount += 1;
+      entry.positions.push(item);
+    }
+
+    // 2. Ahli Jawatankuasa (AJK) — strictly 0 Mata Beban
+    if (Array.isArray(item.ahliList)) {
+      item.ahliList.forEach((ahli) => {
+        const ahliEntry = findOrCreateEntry(ahli.teacherId, ahli.teacherName);
+        if (ahliEntry) {
+          ahliEntry.ahliCount += 1;
+          ahliEntry.ahliPositions.push(item);
+        }
+      });
+    }
+  });
+
+  return Array.from(map.values()).sort(
+    (a, b) => b.totalMata - a.totalMata || a.teacherName.localeCompare(b.teacherName)
+  );
 }
+

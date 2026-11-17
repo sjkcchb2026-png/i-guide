@@ -38,6 +38,7 @@ import {
   MYSG_DEFAULT_CATALOG,
   MySGJawatankuasaItem,
   computeTeacherWorkloadRadar,
+  mergeMySGCatalogWithSaved,
 } from '../../utils/mysgJawatankuasaCatalog';
 import { MySGJawatankuasaTab } from './MySGJawatankuasaTab';
 import { StudentProfileModal } from '../Student/StudentProfileModal';
@@ -195,7 +196,9 @@ export default function MasterDataDashboard({
   const [allocationViewMode, setAllocationViewMode] = useState<'matrix' | 'table'>('matrix');
 
   // Selection state for filters
-  const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('');
+  const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('2026');
+  const [showQuickYearCreator, setShowQuickYearCreator] = useState<boolean>(false);
+  const [quickYearInput, setQuickYearInput] = useState<string>('');
 
   // Initial Fetching scoped to activeSchoolCode
   useEffect(() => {
@@ -266,32 +269,24 @@ export default function MasterDataDashboard({
   const fetchMySGCatalog = async (ay: string) => {
     try {
       const aySlug = (ay || '2026').replace(/\//g, '-');
+      const assignDocId = `${activeSchoolCode}_${aySlug}`;
       const govDocId = scopedDocId(activeSchoolCode, `mysg_jawatankuasa_${aySlug}`);
-      const snap = await getDoc(doc(db, 'school_governance', govDocId));
-      if (snap.exists() && Array.isArray(snap.data()?.items) && snap.data().items.length > 0) {
-        const savedList = snap.data().items as MySGJawatankuasaItem[];
-        const savedByKod = new Map<string, MySGJawatankuasaItem>();
-        savedList.forEach((s) => savedByKod.set(s.kodMySG, s));
-        const merged = MYSG_DEFAULT_CATALOG.map((def) => {
-          const saved = savedByKod.get(def.kodMySG);
-          return saved
-            ? {
-                ...def,
-                tahapBeban: saved.tahapBeban || def.tahapBeban,
-                mataBeban: saved.mataBeban || def.mataBeban,
-                assignedTeacherId: saved.assignedTeacherId || '',
-                assignedTeacherName: saved.assignedTeacherName || '',
-                customDueDate: saved.customDueDate || '',
-              }
-            : { ...def };
-        });
-        setMysgItems(merged);
+
+      const [assignSnap, govSnap] = await Promise.all([
+        getDoc(doc(db, 'mysg_jawatankuasa_assignments', assignDocId)).catch(() => null),
+        getDoc(doc(db, 'school_governance', govDocId)).catch(() => null),
+      ]);
+
+      if (assignSnap?.exists() && Array.isArray(assignSnap.data()?.items) && assignSnap.data().items.length > 0) {
+        setMysgItems(mergeMySGCatalogWithSaved(assignSnap.data().items as MySGJawatankuasaItem[]));
+      } else if (govSnap?.exists() && Array.isArray(govSnap.data()?.items) && govSnap.data().items.length > 0) {
+        setMysgItems(mergeMySGCatalogWithSaved(govSnap.data().items as MySGJawatankuasaItem[]));
       } else {
-        setMysgItems(MYSG_DEFAULT_CATALOG.map((item) => ({ ...item })));
+        setMysgItems(mergeMySGCatalogWithSaved(null));
       }
     } catch (e) {
-      console.warn('Could not fetch MySG catalog from school_governance:', e);
-      setMysgItems(MYSG_DEFAULT_CATALOG.map((item) => ({ ...item })));
+      console.warn('Could not fetch MySG catalog:', e);
+      setMysgItems(mergeMySGCatalogWithSaved(null));
     }
   };
 
@@ -392,27 +387,59 @@ export default function MasterDataDashboard({
       const list = snap.docs
         .filter(d => belongsToSchool(d.data() as any, activeSchoolCode))
         .map(d => ({ id: d.id, ...d.data() } as AcademicYearConfig));
-      list.sort((a, b) => b.year.localeCompare(a.year));
+
+      const requiredSessions = ['2026', '2027', '2028'];
+      const existingYears = new Set(list.map(y => y.year));
+      const hasAnyActive = list.some(y => y.status === 'active');
+
+      for (const reqYear of requiredSessions) {
+        if (!existingYears.has(reqYear)) {
+          const docId = scopedDocId(activeSchoolCode, reqYear);
+          const statusVal: 'active' | 'historical' =
+            reqYear === '2026' && !hasAnyActive ? 'active' : 'historical';
+          const payload: AcademicYearConfig = {
+            id: docId,
+            schoolCode: activeSchoolCode,
+            year: reqYear,
+            status: statusVal,
+          };
+          list.push(payload);
+          await setDoc(doc(db, 'academic_years', docId), payload, { merge: true }).catch(() => null);
+        }
+      }
+
+      list.sort((a, b) => a.year.localeCompare(b.year));
       setAcademicYears(list);
-      
-      if (list.length === 0) {
-        const defaultYear = '2026/2027';
-        const docId = scopedDocId(activeSchoolCode, defaultYear);
-        const payload: AcademicYearConfig = {
-          id: docId,
-          schoolCode: activeSchoolCode,
-          year: defaultYear,
-          status: 'active'
-        };
-        await setDoc(doc(db, 'academic_years', docId), payload);
-        setAcademicYears([payload]);
-        setSelectedAcademicYear(defaultYear);
-      } else {
-        const active = list.find(y => y.status === 'active') || list[0];
+
+      if (!selectedAcademicYear || !list.some(y => y.year === selectedAcademicYear)) {
+        const active = list.find(y => y.year === '2026') || list.find(y => y.status === 'active') || list[0];
         setSelectedAcademicYear(active.year);
       }
     } catch (e) {
       handleFirestoreError(e, OperationType.LIST, 'academic_years');
+    }
+  };
+
+  const handleQuickAddAndSelectAcademicYear = async (yearStr: string) => {
+    const clean = yearStr.trim();
+    if (!clean) return;
+    try {
+      const docId = scopedDocId(activeSchoolCode, clean);
+      const payload: AcademicYearConfig = {
+        id: docId,
+        schoolCode: activeSchoolCode,
+        year: clean,
+        status: 'historical',
+      };
+      await setDoc(doc(db, 'academic_years', docId), payload, { merge: true });
+      setAcademicYears(prev => {
+        if (prev.some(y => y.year === clean)) return prev;
+        return [...prev, payload].sort((a, b) => a.year.localeCompare(b.year));
+      });
+      setSelectedAcademicYear(clean);
+    } catch (e) {
+      console.warn('Could not add custom academic year:', e);
+      setSelectedAcademicYear(clean);
     }
   };
 
@@ -2237,17 +2264,75 @@ export default function MasterDataDashboard({
             </p>
           </div>
 
-          <div className="flex items-center gap-3 w-full lg:w-auto">
-            <span className="text-xs font-black text-slate-400 uppercase">Sesi Aktif:</span>
+          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+            <span className="text-xs font-black text-slate-500 uppercase">Sesi Aktif / Perancangan:</span>
             <select
               value={selectedAcademicYear}
-              onChange={(e) => setSelectedAcademicYear(e.target.value)}
-              className="bg-slate-100 hover:bg-slate-200 border-none rounded-xl px-4 py-2 text-xs font-black text-slate-800 transition-colors cursor-pointer"
+              onChange={(e) => {
+                if (e.target.value === '__ADD_NEW__') {
+                  setShowQuickYearCreator(true);
+                  return;
+                }
+                setSelectedAcademicYear(e.target.value);
+              }}
+              className="bg-slate-900 text-amber-300 border border-slate-700 rounded-xl px-4 py-2 text-xs font-black transition-colors cursor-pointer"
             >
-              {academicYears.map(y => (
-                <option key={y.year} value={y.year}>{y.year} {y.status === 'active' && '●'}</option>
-              ))}
+              {Array.from(
+                new Set(['2026', '2027', '2028', ...academicYears.map((y) => y.year)])
+              )
+                .filter(Boolean)
+                .sort((a, b) => a.localeCompare(b))
+                .map((yr) => {
+                  const found = academicYears.find((y) => y.year === yr);
+                  const isCurr = yr === '2026' || found?.status === 'active';
+                  return (
+                    <option key={yr} value={yr}>
+                      Sesi {yr} {isCurr ? '● (Semasa)' : '(Perancangan)'}
+                    </option>
+                  );
+                })}
+              <option value="__ADD_NEW__">+ Sesi Baharu...</option>
             </select>
+
+            {selectedAcademicYear === '2026' || selectedAcademicYear.startsWith('2026') ? (
+              <span className="px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-black">
+                🟢 Sesi Semasa ({selectedAcademicYear})
+              </span>
+            ) : (
+              <span className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-[11px] font-black">
+                🟡 Mod Perancangan Sesi Baharu ({selectedAcademicYear}) — Data Sesi 2026 Kekal Selamat
+              </span>
+            )}
+
+            {showQuickYearCreator && (
+              <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-300 rounded-xl p-1.5">
+                <input
+                  type="text"
+                  value={quickYearInput}
+                  onChange={(e) => setQuickYearInput(e.target.value)}
+                  placeholder="cth: 2029"
+                  className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-bold w-24"
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await handleQuickAddAndSelectAcademicYear(quickYearInput);
+                    setQuickYearInput('');
+                    setShowQuickYearCreator(false);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-blue-600 text-white text-xs font-black cursor-pointer"
+                >
+                  Pilih
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowQuickYearCreator(false)}
+                  className="text-slate-500 hover:text-slate-800 text-xs font-bold px-1"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -2782,6 +2867,9 @@ export default function MasterDataDashboard({
                 activeSchoolCode={activeSchoolCode}
                 displaySchoolName={displaySchoolName}
                 selectedAcademicYear={selectedAcademicYear}
+                availableYears={academicYears.map((y) => y.year)}
+                onSelectAcademicYear={setSelectedAcademicYear}
+                onAddNewAcademicYear={handleQuickAddAndSelectAcademicYear}
                 personnel={personnel}
                 currentUser={currentUser}
                 items={mysgItems}
