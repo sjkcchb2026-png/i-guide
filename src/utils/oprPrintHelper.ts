@@ -1,216 +1,185 @@
+/**
+ * Smart Print & Standalone HTML Export Helper for iSEPADU AI
+ * Safe inside sandboxed iframes (avoids window.open / window.alert).
+ * Prints the target element cleanly on A4 pages via a temporary print style + hidden iframe or native print,
+ * and allows downloading a self-contained printable .html file.
+ */
+
 export interface SmartPrintOptions {
   elementId: string;
-  title: string;
+  title?: string;
   orientation?: 'portrait' | 'landscape';
 }
 
 export interface SmartPrintResult {
-  mode: 'native' | 'downloaded' | 'error';
+  mode: 'native' | 'iframe' | 'download' | 'error';
   message: string;
 }
 
-function collectDocumentStyles(): string {
-  const chunks: string[] = [];
+function buildPrintableHtmlDocument(
+  innerHtml: string,
+  title: string,
+  orientation: 'portrait' | 'landscape' = 'portrait'
+): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const resolvedHtml = origin
+    ? innerHtml.replace(/src="\/assets\//g, `src="${origin}/assets/`)
+    : innerHtml;
 
-  try {
-    for (const sheet of Array.from(document.styleSheets)) {
-      try {
-        const rules = sheet.cssRules;
-        if (rules && rules.length > 0) {
-          const cssText = Array.from(rules)
-            .map((r) => r.cssText)
-            .join('\n');
-          chunks.push(cssText);
-          continue;
+  // Collect existing stylesheet links and inline styles from the current document
+  let headStyles = '';
+  if (typeof document !== 'undefined') {
+    const styleNodes = document.querySelectorAll('style, link[rel="stylesheet"]');
+    styleNodes.forEach((node) => {
+      if (node.tagName.toLowerCase() === 'link') {
+        const href = (node as HTMLLinkElement).href;
+        if (href) {
+          headStyles += `<link rel="stylesheet" href="${href}" />\n`;
         }
-      } catch {
-        // Cross-origin stylesheet fallback below
+      } else {
+        headStyles += `<style>${node.innerHTML}</style>\n`;
       }
-      if (sheet.href) {
-        chunks.push(`@import url("${sheet.href}");`);
-      }
-    }
-  } catch {
-    // Ignore stylesheet inspection errors
+    });
   }
 
-  return chunks.join('\n');
-}
-
-function buildStandaloneHtml(
-  element: HTMLElement,
-  title: string,
-  orientation: 'portrait' | 'landscape'
-): string {
-  const styles = collectDocumentStyles();
-  const safeTitle = title
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
-  return `<!doctype html>
+  return `<!DOCTYPE html>
 <html lang="ms">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${safeTitle}</title>
+  <title>${title}</title>
+  <base href="${origin}/" />
+  ${headStyles}
   <style>
-    ${styles}
     @page {
       size: A4 ${orientation};
-      margin: 8mm;
+      margin: 10mm;
     }
     html, body {
-      background: #ffffff !important;
-      color: #0f172a !important;
       margin: 0;
-      padding: 16px;
+      padding: 0;
+      background: #ffffff !important;
+      color: #000000 !important;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    .print\\:hidden {
-      display: none !important;
+    .print-page-break {
+      page-break-after: always;
+      break-after: page;
     }
-    .print-toolbar {
-      max-width: 794px;
-      margin: 0 auto 14px auto;
-      padding: 10px 14px;
-      background: #0d3b42;
-      color: #ffffff;
-      border-radius: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      font-size: 12px;
-      border-bottom: 3px solid #d4af37;
-    }
-    .print-toolbar button {
-      background: #f59e0b;
-      color: #0f172a;
-      border: none;
-      border-radius: 8px;
-      padding: 8px 14px;
-      font-weight: 800;
-      font-size: 12px;
-      cursor: pointer;
+    .print-page-break:last-child {
+      page-break-after: auto;
+      break-after: auto;
     }
     @media print {
-      html, body {
-        padding: 0 !important;
-        margin: 0 !important;
-        background: #ffffff !important;
-      }
-      .print-toolbar {
+      .print\\:hidden {
         display: none !important;
-      }
-      .print-portrait-sheet {
-        width: 100% !important;
-        max-width: none !important;
-        margin: 0 !important;
-        box-shadow: none !important;
-        border: none !important;
-      }
-      .print-portrait-page {
-        page-break-after: always;
-        break-after: page;
-        box-shadow: none !important;
-        border: none !important;
-        margin: 0 !important;
-        max-width: none !important;
-        width: 100% !important;
-      }
-      .print-portrait-page:last-child {
-        page-break-after: auto;
-        break-after: auto;
       }
     }
   </style>
 </head>
 <body>
-  <div class="print-toolbar">
-    <span><strong>${safeTitle}</strong> — Paparan Cetak A4 Rasmi</span>
-    <button type="button" onclick="window.print()">Cetak / Simpan PDF</button>
-  </div>
-  ${element.outerHTML}
+  ${resolvedHtml}
   <script>
-    window.addEventListener('load', function () {
-      setTimeout(function () {
-        try { window.print(); } catch (e) {}
-      }, 250);
+    window.addEventListener('load', function() {
+      setTimeout(function() {
+        try { window.focus(); window.print(); } catch (e) {}
+      }, 350);
     });
   </script>
 </body>
 </html>`;
 }
 
-export function downloadStandalonePrintHtml(options: SmartPrintOptions): SmartPrintResult {
-  const { elementId, title, orientation = 'portrait' } = options;
-  const el = document.getElementById(elementId);
-  if (!el) {
+export function triggerSmartPrint(options: SmartPrintOptions): SmartPrintResult {
+  const { elementId, title = 'Dokumen_Rasmi_Sekolah', orientation = 'portrait' } = options;
+  if (typeof document === 'undefined') {
+    return { mode: 'error', message: 'Persekitaran pelayar tidak tersedia.' };
+  }
+
+  const target = document.getElementById(elementId);
+  if (!target) {
     return {
       mode: 'error',
-      message: 'Paparan poster OPR tidak ditemui untuk dicetak. Sila buka pratonton OPR terlebih dahulu.',
+      message: `Elemen cetakan (#${elementId}) tidak ditemui pada halaman.`,
     };
   }
-
-  const html = buildStandaloneHtml(el, title, orientation);
-  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const safeFile =
-    title
-      .replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]+/g, '_')
-      .replace(/^_+|_+$/g, '')
-      .slice(0, 60) || 'OPR_SKPM';
-
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${safeFile}_A4_Cetak.html`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-
-  return {
-    mode: 'downloaded',
-    message:
-      'Fail A4 siap-cetak (.html) telah dimuat turun. Buka fail tersebut di pelayar dan tekan Ctrl+P / Save as PDF.',
-  };
-}
-
-export function triggerSmartPrint(options: SmartPrintOptions): SmartPrintResult {
-  const { elementId, title, orientation = 'portrait' } = options;
-
-  let beforePrintFired = false;
-  const onBeforePrint = () => {
-    beforePrintFired = true;
-  };
-  window.addEventListener('beforeprint', onBeforePrint);
 
   try {
+    // Print via hidden iframe so only the target A4 document is printed with exact styles
+    const existingIframe = document.getElementById('isepadu-smart-print-iframe');
+    if (existingIframe && existingIframe.parentNode) {
+      existingIframe.parentNode.removeChild(existingIframe);
+    }
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'isepadu-smart-print-iframe';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.visibility = 'hidden';
+    document.body.appendChild(iframe);
+
+    const htmlDoc = buildPrintableHtmlDocument(target.outerHTML, title, orientation);
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(htmlDoc);
+      doc.close();
+      return {
+        mode: 'native',
+        message: 'Dialog cetakan dibuka.',
+      };
+    }
+
     window.print();
-  } catch {
-    // Blocked by sandboxed iframe or browser policy
-  } finally {
-    window.removeEventListener('beforeprint', onBeforePrint);
+    return { mode: 'native', message: 'Dialog cetakan dibuka.' };
+  } catch (err) {
+    return downloadStandalonePrintHtml(options);
+  }
+}
+
+export function downloadStandalonePrintHtml(options: SmartPrintOptions): SmartPrintResult {
+  const { elementId, title = 'Dokumen_Rasmi_Sekolah', orientation = 'portrait' } = options;
+  if (typeof document === 'undefined') {
+    return { mode: 'error', message: 'Persekitaran pelayar tidak tersedia.' };
   }
 
-  if (beforePrintFired) {
+  const target = document.getElementById(elementId);
+  if (!target) {
     return {
-      mode: 'native',
-      message: 'Dialog cetakan pelayar dibuka.',
+      mode: 'error',
+      message: `Elemen cetakan (#${elementId}) tidak ditemui pada halaman.`,
     };
   }
 
-  // Fallback when running inside sandboxed preview iframe (where window.print() is silently ignored)
-  const dlResult = downloadStandalonePrintHtml({ elementId, title, orientation });
-  if (dlResult.mode === 'downloaded') {
+  try {
+    const htmlDoc = buildPrintableHtmlDocument(target.outerHTML, title, orientation);
+    const blob = new Blob([htmlDoc], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const safeName = title
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 80);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeName || 'Dokumen_Cetakan'}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+
     return {
-      mode: 'downloaded',
-      message:
-        'Pratonton iframe menyekat dialog cetak terus, jadi fail OPR A4 siap-cetak (.html) telah dimuat turun secara automatik — buka fail tersebut untuk cetak / simpan PDF (atau buka aplikasi dalam tab penuh).',
+      mode: 'download',
+      message: `Fail cetakan "${safeName || 'Dokumen_Cetakan'}.html" berjaya dimuat turun. Buka fail tersebut untuk cetak terus ke PDF/kertas A4.`,
+    };
+  } catch (err: any) {
+    return {
+      mode: 'error',
+      message: `Gagal menjana fail cetakan: ${err?.message || 'Ralat tidak diketahui'}`,
     };
   }
-  return dlResult;
 }

@@ -1,42 +1,33 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Award,
-  Car,
-  ClipboardList,
-  Download,
-  Edit3,
-  HeartPulse,
-  MessageSquare,
-  Printer,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  Users,
   X,
+  Printer,
+  Download,
+  Users,
+  Search,
+  CheckSquare,
+  Square,
+  FileText,
+  Sparkles,
+  Check,
+  Edit3,
+  UserCheck,
 } from 'lucide-react';
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
-import { db } from '../../firebase';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import {
-  GuardianInfo,
-  PersonnelProfile,
-  ResidentialAddress,
-  SchoolSettings,
   Student,
   StudentMaster,
+  GuardianInfo,
+  ResidentialAddress,
+  SchoolSettings,
   UserProfile,
 } from '../../types';
-import { KokoActivity } from '../../types/kokurikulum';
-import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
+import { belongsToSchool } from '../../utils/schoolTenant';
 import {
-  belongsToSchool,
-  isLegacyDefaultSchool,
-  normalizeActiveSchoolCode,
-} from '../../utils/schoolTenant';
-import {
-  downloadStandalonePrintHtml,
   triggerSmartPrint,
+  downloadStandalonePrintHtml,
 } from '../../utils/oprPrintHelper';
-import SchoolLogo from '../SchoolLogo';
 
 export interface SPPKInitialData {
   programName?: string;
@@ -52,10 +43,33 @@ export interface SPPKInitialData {
   studentNames?: string[];
 }
 
-interface SPPKCompetitionFormsModalProps {
+export interface SPPKParticipantOverride {
+  studentId: string;
+  studentName: string;
+  studentIc: string;
+  birthDate: string;
+  gender: string;
+  age: string;
+  className: string;
+  selectedGuardianSlot: 'G1' | 'G2';
+  guardian1?: GuardianInfo;
+  guardian2?: GuardianInfo;
+  parentName: string;
+  parentIc: string;
+  parentOccupation: string;
+  relationship: string;
+  homeAddress: string;
+  homePhone: string;
+  officePhone: string;
+  mobilePhone: string;
+  jenisSakitKecederaan?: string;
+  jenisRawatan?: string;
+}
+
+interface Props {
   isOpen: boolean;
   onClose: () => void;
-  schoolCode?: string;
+  schoolCode: string;
   schoolName?: string;
   schoolLogo?: string;
   schoolSettings?: SchoolSettings | null;
@@ -63,2417 +77,2649 @@ interface SPPKCompetitionFormsModalProps {
   initialData?: SPPKInitialData | null;
 }
 
-interface UnifiedStudentRecord {
-  id: string;
-  apdmId?: string;
-  name: string;
-  icNumber: string;
-  birthDate: string;
-  age: string;
-  gender: 'LELAKI' | 'PEREMPUAN' | '';
-  className: string;
-  yearLevel: string;
-  guardian1Name: string;
-  guardian1Ic: string;
-  guardian1Occupation: string;
-  guardian1Relation: string;
-  guardian1Mobile: string;
-  guardian1Office: string;
-  guardian2Name: string;
-  guardian2Mobile: string;
-  fullAddress: string;
+function formatDateDMY(dateStr?: string): string {
+  if (!dateStr) return '';
+  const trimmed = dateStr.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (match) {
+    return `${match[3]}/${match[2]}/${match[1]}`;
+  }
+  return trimmed;
 }
 
-interface StudentHealthFlags {
-  asthma: boolean;
-  asthmaNote: string;
-  allergy: boolean;
-  allergyNote: string;
-  heart: boolean;
-  heartNote: string;
-  seizure: boolean;
-  seizureNote: string;
-  diabetes: boolean;
-  diabetesNote: string;
-  other: boolean;
-  otherNote: string;
-  postIllness: string;
-  postTreatment: string;
+function formatMyKadOrIc(icRaw?: string): string {
+  const raw = String(icRaw || '').trim();
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 12) {
+    return `${digits.slice(0, 6)}-${digits.slice(6, 8)}-${digits.slice(8, 12)}`;
+  }
+  return raw;
 }
 
-interface StudentEditableOverride {
-  name: string;
-  icNumber: string;
-  birthDate: string;
+function deriveFromMyKad(icRaw?: string): {
+  cleanIc: string;
+  formattedIc: string;
+  birthDateDMY: string;
   age: string;
   gender: string;
-  className: string;
-  guardian1Name: string;
-  guardian1Ic: string;
-  guardian1Occupation: string;
-  guardian1Relation: string;
-  guardian1Mobile: string;
-  guardian1Office: string;
-  guardian2Name: string;
-  guardian2Mobile: string;
-  fullAddress: string;
-  health: StudentHealthFlags;
-}
-
-interface UnifiedTeacherRecord {
-  id: string;
-  name: string;
-  ic: string;
-  position: string;
-  grade: string;
-  phone: string;
-  vehicleModel: string;
-  vehiclePlateNo: string;
-  licenseClass: string;
-}
-
-type PreviewTab = 'ALL' | 'SPPK1' | 'SPPK2' | 'SPPK3' | 'KENDERAAN';
-
-const DEFAULT_HEALTH_FLAGS: StudentHealthFlags = {
-  asthma: false,
-  asthmaNote: '',
-  allergy: false,
-  allergyNote: '',
-  heart: false,
-  heartNote: '',
-  seizure: false,
-  seizureNote: '',
-  diabetes: false,
-  diabetesNote: '',
-  other: false,
-  otherNote: '',
-  postIllness: '',
-  postTreatment: '',
-};
-
-function cleanString(val: unknown): string {
-  return String(val ?? '').trim();
-}
-
-function normalizeKey(val: unknown): string {
-  return String(val ?? '')
-    .toUpperCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function normalizeDigits(val: unknown): string {
-  return String(val ?? '').replace(/\D+/g, '');
-}
-
-function formatAddress(addr?: ResidentialAddress | string | null): string {
-  if (!addr) return '';
-  if (typeof addr === 'string') return addr.trim();
-  const parts = [
-    addr.address1,
-    addr.address2,
-    [addr.postcode, addr.city].filter(Boolean).join(' '),
-    addr.state,
-  ]
-    .map((p) => cleanString(p))
-    .filter(Boolean);
-  return parts.join(', ');
-}
-
-function deriveBirthDetailsFromIc(icRaw: string, refYear: number): {
-  birthDate: string;
-  age: string;
-  gender: 'LELAKI' | 'PEREMPUAN' | '';
 } {
-  const digits = normalizeDigits(icRaw);
-  if (digits.length < 6) return { birthDate: '', age: '', gender: '' };
+  const digits = String(icRaw || '').replace(/\D/g, '');
+  if (digits.length < 6) {
+    return {
+      cleanIc: digits,
+      formattedIc: String(icRaw || '').trim(),
+      birthDateDMY: '',
+      age: '',
+      gender: '',
+    };
+  }
+
   const yy = parseInt(digits.slice(0, 2), 10);
   const mm = digits.slice(2, 4);
   const dd = digits.slice(4, 6);
-  const monthNum = parseInt(mm, 10);
-  const dayNum = parseInt(dd, 10);
-  if (monthNum < 1 || monthNum > 12 || dayNum < 1 || dayNum > 31) {
-    return { birthDate: '', age: '', gender: '' };
-  }
-  const currentTwoDigit = refYear % 100;
-  const fullYear = yy <= currentTwoDigit + 2 ? 2000 + yy : 1900 + yy;
-  const ageVal = refYear - fullYear;
-  let gender: 'LELAKI' | 'PEREMPUAN' | '' = '';
+  const currentYear = new Date().getFullYear();
+  const fullYear = yy > 40 ? 1900 + yy : 2000 + yy;
+  const ageNum = Math.max(5, currentYear - fullYear);
+
+  const formattedIc = formatMyKadOrIc(icRaw);
+
+  let gender = '';
   if (digits.length === 12) {
     const lastDigit = parseInt(digits[11], 10);
-    if (!Number.isNaN(lastDigit)) {
-      gender = lastDigit % 2 === 1 ? 'LELAKI' : 'PEREMPUAN';
-    }
+    gender = lastDigit % 2 === 1 ? 'LELAKI' : 'PEREMPUAN';
   }
+
   return {
-    birthDate: `${dd}/${mm}/${fullYear}`,
-    age: ageVal > 0 && ageVal < 25 ? `${ageVal} Tahun` : '',
+    cleanIc: digits,
+    formattedIc,
+    birthDateDMY: `${dd}/${mm}/${fullYear}`,
+    age: `${ageNum} TAHUN`,
     gender,
   };
 }
 
-function formatMalayDate(dateStr?: string): string {
-  if (!dateStr) return '....................';
-  const parts = dateStr.split('-');
-  if (parts.length !== 3) return dateStr;
-  const months = [
-    'Januari',
-    'Februari',
-    'Mac',
-    'April',
-    'Mei',
-    'Jun',
-    'Julai',
-    'Ogos',
-    'September',
-    'Oktober',
-    'November',
-    'Disember',
-  ];
-  const mIdx = parseInt(parts[1], 10) - 1;
-  const day = parseInt(parts[2], 10);
-  return `${day} ${months[mIdx] || parts[1]} ${parts[0]}`;
+function formatResidentialAddress(addr?: ResidentialAddress | string | null): string {
+  if (!addr) return '';
+  if (typeof addr === 'string') return addr.trim().toUpperCase();
+  const parts = [
+    addr.address1,
+    addr.address2,
+    addr.address3,
+    [addr.postcode, addr.city].filter(Boolean).join(' '),
+    addr.district && addr.district !== addr.city ? addr.district : '',
+    addr.state,
+  ]
+    .map((p) => String(p || '').trim())
+    .filter((p) => p && p !== '-');
+  return parts.join(', ').toUpperCase();
 }
 
-function formatGenderLabel(g?: string): 'LELAKI' | 'PEREMPUAN' | '' {
-  const u = normalizeKey(g);
-  if (!u) return '';
-  if (u === 'L' || u === 'LELAKI' || u === 'M' || u === 'MALE') return 'LELAKI';
-  if (u === 'P' || u === 'PEREMPUAN' || u === 'F' || u === 'FEMALE') return 'PEREMPUAN';
-  return '';
+function buildParticipantFromMergedRecord(
+  s: Partial<Student & StudentMaster> & Record<string, any>
+): SPPKParticipantOverride {
+  const rawIc =
+    s.icNumber ||
+    s.ic_no ||
+    s.no_kp ||
+    s.mykid ||
+    s.ic ||
+    '';
+  const mykad = deriveFromMyKad(rawIc);
+
+  const genderRaw = String(s.gender || s.jantina || '').toUpperCase();
+  const genderLabel =
+    genderRaw === 'L' || genderRaw.startsWith('LELAKI')
+      ? 'LELAKI'
+      : genderRaw === 'P' || genderRaw.startsWith('PEREMPUAN')
+      ? 'PEREMPUAN'
+      : mykad.gender;
+
+  const rawBirth = s.birthDate || s.tarikh_lahir || '';
+  const birthDate = rawBirth ? formatDateDMY(String(rawBirth)) : mykad.birthDateDMY;
+
+  const ageVal =
+    s.age && Number(s.age) > 0
+      ? `${s.age} TAHUN`
+      : s.birthYear && Number(s.birthYear) > 1990
+      ? `${new Date().getFullYear() - Number(s.birthYear)} TAHUN`
+      : mykad.age;
+
+  const className = String(
+    s.currentClass ||
+      s.class ||
+      s.class_name ||
+      s.kelas ||
+      (s.currentYear !== undefined
+        ? s.currentYear === 0
+          ? 'PRASEKOLAH'
+          : `TAHUN ${s.currentYear}`
+        : s.year !== undefined
+        ? s.year === 0
+          ? 'PRASEKOLAH'
+          : `TAHUN ${s.year}`
+        : '')
+  ).toUpperCase();
+
+  // Extract structured Guardian 1 (Penjaga Utama) & Guardian 2 (Penjaga Kedua) from APDM StudentMaster
+  const g1: GuardianInfo = s.guardian1 || {
+    name: s.guardianName || s.nama_bapa || s.father_name || s.penjaga_1 || '',
+    icNumber: s.no_kp_bapa || s.father_ic || s.no_kp_penjaga || s.parent_ic || '',
+    relation: s.hubungan_penjaga_1 || s.hubungan || 'BAPA / PENJAGA UTAMA',
+    occupation: s.pekerjaan_bapa || s.father_occupation || s.pekerjaan_penjaga || '',
+    officePhone: s.tel_pejabat_1 || '',
+    mobilePhone: s.guardianPhone || s.phone || s.no_tel_bapa || s.no_tel_penjaga || '',
+  };
+
+  const g2: GuardianInfo = s.guardian2 || {
+    name: s.nama_ibu || s.mother_name || s.penjaga_2 || '',
+    icNumber: s.no_kp_ibu || s.mother_ic || '',
+    relation: s.hubungan_penjaga_2 || 'IBU / PENJAGA KEDUA',
+    occupation: s.pekerjaan_ibu || s.mother_occupation || '',
+    officePhone: s.tel_pejabat_2 || '',
+    mobilePhone: s.no_tel_ibu || '',
+  };
+
+  // Prefer Guardian 1 (Penjaga Utama); if Guardian 1 has no name, fall back to Guardian 2
+  const useG1 = Boolean(g1?.name && String(g1.name).trim() && String(g1.name).trim() !== '-');
+  const activeG = useG1 ? g1 : g2?.name ? g2 : g1;
+  const selectedSlot: 'G1' | 'G2' = useG1 ? 'G1' : g2?.name ? 'G2' : 'G1';
+
+  const parentName = String(activeG?.name || s.guardianName || '').trim().toUpperCase();
+  const parentIc = formatMyKadOrIc(activeG?.icNumber);
+  const parentOccupation = String(
+    activeG?.occupation || activeG?.employmentStatus || ''
+  )
+    .trim()
+    .toUpperCase();
+  const relationship = String(
+    activeG?.relation || (selectedSlot === 'G1' ? 'BAPA / PENJAGA' : 'IBU / PENJAGA')
+  )
+    .trim()
+    .toUpperCase();
+
+  const homeAddress =
+    formatResidentialAddress(s.address) ||
+    String(s.alamat || s.alamat_rumah || s.home_address || '')
+      .trim()
+      .toUpperCase();
+
+  const officePhone = String(activeG?.officePhone || '').trim();
+  const mobilePhone = String(
+    activeG?.mobilePhone ||
+      g1?.mobilePhone ||
+      g2?.mobilePhone ||
+      s.guardianPhone ||
+      s.phone ||
+      ''
+  ).trim();
+
+  const canonicalId = String(s.student_id || s.apdmId || s.id || s.icNumber || s.name);
+
+  return {
+    studentId: canonicalId,
+    studentName: String(s.name || '').trim().toUpperCase(),
+    studentIc: mykad.formattedIc,
+    birthDate,
+    gender: genderLabel,
+    age: ageVal,
+    className,
+    selectedGuardianSlot: selectedSlot,
+    guardian1: g1,
+    guardian2: g2,
+    parentName,
+    parentIc,
+    parentOccupation,
+    relationship,
+    homeAddress,
+    homePhone: '',
+    officePhone,
+    mobilePhone,
+    jenisSakitKecederaan: '',
+    jenisRawatan: '',
+  };
 }
 
-function formatWhatsAppPhone(phoneRaw?: string): string {
-  const digits = normalizeDigits(phoneRaw);
-  if (!digits || digits.length < 8) return '';
-  if (digits.startsWith('60')) return digits;
-  if (digits.startsWith('0')) return `6${digits}`;
-  return `60${digits}`;
-}
-
-function getVehicleStorageKey(schoolCode: string, teacherName: string): string {
-  return `isepadu_sppk_vehicle_${schoolCode}_${normalizeKey(teacherName)}`;
-}
-
-export const SPPKCompetitionFormsModal: React.FC<SPPKCompetitionFormsModalProps> = ({
+export const SPPKCompetitionFormsModal: React.FC<Props> = ({
   isOpen,
   onClose,
-  schoolCode: propSchoolCode,
-  schoolName: propSchoolName,
-  schoolLogo: propSchoolLogo,
-  schoolSettings: propSchoolSettings,
-  currentUser,
+  schoolCode,
+  schoolName,
+  schoolSettings,
   initialData,
 }) => {
-  const tenant = useSchoolTenant();
-  const activeSchoolCode = normalizeActiveSchoolCode(propSchoolCode || tenant.schoolCode);
-  const schoolSettingsExtra = propSchoolSettings as
-    | (SchoolSettings & {
-        academicYear?: string;
-        address?: string;
-        phone?: string;
-      })
-    | null
-    | undefined;
-  const academicYearNum =
-    parseInt(
-      cleanString(
-        currentUser?.academic_year ||
-          schoolSettingsExtra?.academicYear ||
-          new Date().getFullYear()
-      ),
-      10
-    ) || new Date().getFullYear();
+  const [mergedStudents, setMergedStudents] = useState<Array<Record<string, any>>>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [classFilter, setClassFilter] = useState<string>('ALL');
 
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [banner, setBanner] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
+  // Form Metadata
+  const [programName, setProgramName] = useState<string>('');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [venue, setVenue] = useState<string>('');
+  const [schoolFullAddress, setSchoolFullAddress] = useState<string>('');
+  const [principalName, setPrincipalName] = useState<string>('');
+  const [tarikhPengesahan, setTarikhPengesahan] = useState<string>('');
 
-  // Loaded SSOT Collections
-  const [allStudents, setAllStudents] = useState<UnifiedStudentRecord[]>([]);
-  const [allTeachers, setAllTeachers] = useState<UnifiedTeacherRecord[]>([]);
-  const [kokoActivities, setKokoActivities] = useState<KokoActivity[]>([]);
-  const [fetchedSchoolMeta, setFetchedSchoolMeta] = useState<{
-    name?: string;
-    logo?: string;
-    address?: string;
-    phone?: string;
-    email?: string;
-    guruBesarName?: string;
-  }>({});
-
-  // Editable Code Labels
-  const [sppk1Label, setSppk1Label] = useState('BORANG SPPK 1');
-  const [sppk2Label, setSppk2Label] = useState('BORANG SPPK 2');
-  const [sppk3Label, setSppk3Label] = useState('BORANG SPPK 3');
-
-  // Competition Metadata
-  const [selectedActivityId, setSelectedActivityId] = useState('');
-  const [programName, setProgramName] = useState('');
-  const [organizer, setOrganizer] = useState('PPD / JPN / KPM');
-  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState('');
-  const [masa, setMasa] = useState('07:30 pagi – 02:00 petang');
-  const [venue, setVenue] = useState('');
-  const [level, setLevel] = useState('Daerah / Bahagian');
-  const [guruBesarName, setGuruBesarName] = useState('');
-
-  // Teacher / Vehicle State
-  const [selectedTeacherName, setSelectedTeacherName] = useState('');
-  const [teacherIc, setTeacherIc] = useState('');
-  const [teacherPosition, setTeacherPosition] = useState('Guru Pengiring / PPP');
-  const [teacherGrade, setTeacherGrade] = useState('DG41');
-  const [teacherPhone, setTeacherPhone] = useState('');
-  const [vehicleModel, setVehicleModel] = useState('');
-  const [vehiclePlateNo, setVehiclePlateNo] = useState('');
-  const [licenseClass, setLicenseClass] = useState('D');
-
-  // Student Multi-Select & Per-Student Overrides
-  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
-  const [studentOverrides, setStudentOverrides] = useState<Record<string, StudentEditableOverride>>({});
-  const [studentSearch, setStudentSearch] = useState('');
-  const [classFilter, setClassFilter] = useState('SEMUA');
+  // Form Tab Selection
+  const [formFilter, setFormFilter] = useState<'ALL' | 'SPPK1' | 'SPPK2' | 'SPPK3'>('ALL');
+  const [preTickMedicalNo, setPreTickMedicalNo] = useState<boolean>(false);
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
+  const [overrides, setOverrides] = useState<Record<string, SPPKParticipantOverride>>({});
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  // Preview Tab & Panel Collapse
-  const [previewTab, setPreviewTab] = useState<PreviewTab>('ALL');
-  const [showEditorPanel, setShowEditorPanel] = useState(true);
+  const defaultSchoolDisplay = useMemo(() => {
+    const name =
+      schoolName ||
+      schoolSettings?.schoolName ||
+      'SJK (C) CHUNG HUA BALINGIAN';
+    const addr =
+      (schoolSettings as any)?.address ||
+      (schoolCode === 'YCC3404'
+        ? '96350 BALINGIAN, MUKAH, SARAWAK'
+        : 'SARAWAK');
+    return `${name}, ${addr}`.toUpperCase();
+  }, [schoolName, schoolSettings, schoolCode]);
 
-  const effectiveSchoolName =
-    propSchoolName ||
-    propSchoolSettings?.schoolName ||
-    fetchedSchoolMeta.name ||
-    tenant.schoolName ||
-    'SJK(C) CHUNG HUA BINTULU';
-  const effectiveSchoolLogo =
-    propSchoolLogo ||
-    propSchoolSettings?.schoolLogo ||
-    propSchoolSettings?.logoUrl ||
-    fetchedSchoolMeta.logo ||
-    tenant.schoolLogo;
-  const effectiveSchoolAddress =
-    schoolSettingsExtra?.address || fetchedSchoolMeta.address || '';
-  const effectiveSchoolPhone =
-    schoolSettingsExtra?.phone || fetchedSchoolMeta.phone || '';
-
-  // Load Firestore SSOT when modal opens
   useEffect(() => {
     if (!isOpen) return;
-    let cancelled = false;
+    setProgramName((initialData?.programName || '').toUpperCase());
+    setStartDate(initialData?.date || new Date().toISOString().slice(0, 10));
+    setEndDate(
+      initialData?.endDate ||
+        initialData?.date ||
+        new Date().toISOString().slice(0, 10)
+    );
+    setVenue((initialData?.venue || '').toUpperCase());
+    setSchoolFullAddress(defaultSchoolDisplay);
+    setPrincipalName(
+      ((schoolSettings as any)?.principalName || '').toUpperCase()
+    );
+    setTarikhPengesahan('');
+  }, [isOpen, initialData, defaultSchoolDisplay, schoolSettings]);
 
-    const loadSSOT = async () => {
-      setLoading(true);
-      setLoadError(null);
+  // Load and merge `student_master` (APDM Induk with Penjaga 1, Penjaga 2 & Address) + `students` (Sessional Enrollment)
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    async function fetchAndMergeStudents() {
       try {
-        const [masterSnap, studentsSnap, personnelSnap, usersSnap, kokoSnap] =
-          await Promise.all([
-            getDocs(collection(db, 'student_master')).catch(() => null),
-            getDocs(collection(db, 'students')).catch(() => null),
-            getDocs(collection(db, 'personnel')).catch(() => null),
-            getDocs(collection(db, 'users')).catch(() => null),
-            getDocs(collection(db, 'koko_activities')).catch(() => null),
-          ]);
+        const [masterSnap, enrollSnap] = await Promise.all([
+          getDocs(collection(db, 'student_master')).catch(() => null),
+          getDocs(collection(db, 'students')).catch(() => null),
+        ]);
 
-        // Also fetch school settings metadata (Guru Besar name, address, phone)
-        try {
-          const schoolRef = isLegacyDefaultSchool(activeSchoolCode)
-            ? doc(db, 'school_settings', 'general')
-            : doc(db, 'schools', activeSchoolCode);
-          const sSnap = await getDoc(schoolRef);
-          if (!cancelled && sSnap.exists()) {
-            const sd = sSnap.data() as any;
-            setFetchedSchoolMeta({
-              name: sd.schoolName || sd.name || '',
-              logo: sd.logoUrl || sd.schoolLogo || '',
-              address: sd.address || '',
-              phone: sd.phone || '',
-              email: sd.email || '',
-              guruBesarName: sd.principalName || sd.guruBesarName || '',
-            });
-          }
-        } catch {
-          // Optional fallback
-        }
-
-        if (cancelled) return;
-
-        // 1. Merge student_master and students into UnifiedStudentRecord[]
-        const masterList: StudentMaster[] = masterSnap
+        const masterDocs = masterSnap
           ? masterSnap.docs
-              .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
-              .map((d) => ({ ...(d.data() as StudentMaster), student_id: d.id }))
+              .filter((d) => belongsToSchool(d.data(), schoolCode))
+              .map((d) => ({ ...(d.data() as any), student_id: d.data().student_id || d.id, _masterDocId: d.id }))
           : [];
 
-        const activeStudents: Student[] = studentsSnap
-          ? studentsSnap.docs
-              .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
-              .map((d) => ({ ...(d.data() as Student), id: d.id }))
+        const enrollDocs = enrollSnap
+          ? enrollSnap.docs
+              .filter((d) => belongsToSchool(d.data(), schoolCode))
+              .map((d) => ({ ...(d.data() as any), id: d.id }))
           : [];
 
-        const masterByApdm = new Map<string, StudentMaster>();
-        const masterByIc = new Map<string, StudentMaster>();
-        const masterByName = new Map<string, StudentMaster>();
+        // Index master records by student_id, apdmId, clean IC, and normalized name
+        const masterById = new Map<string, any>();
+        const masterByIc = new Map<string, any>();
+        const masterByName = new Map<string, any>();
 
-        masterList.forEach((m) => {
-          if (m.apdmId) masterByApdm.set(normalizeKey(m.apdmId), m);
-          if (m.student_id) masterByApdm.set(normalizeKey(m.student_id), m);
-          const icDig = normalizeDigits(m.icNumber);
-          if (icDig) masterByIc.set(icDig, m);
-          if (m.name) masterByName.set(normalizeKey(m.name), m);
+        masterDocs.forEach((m) => {
+          if (m.student_id) masterById.set(String(m.student_id).trim(), m);
+          if (m._masterDocId) masterById.set(String(m._masterDocId).trim(), m);
+          if (m.apdmId) masterById.set(String(m.apdmId).trim(), m);
+          const cleanIc = String(m.icNumber || '').replace(/\D/g, '');
+          if (cleanIc) masterByIc.set(cleanIc, m);
+          const normName = String(m.name || '').toUpperCase().replace(/\s+/g, ' ').trim();
+          if (normName) masterByName.set(normName, m);
         });
 
-        const mergedMap = new Map<string, UnifiedStudentRecord>();
+        const combinedMap = new Map<string, any>();
 
-        const buildRecord = (
-          id: string,
-          act?: Student | null,
-          mast?: StudentMaster | null
-        ): UnifiedStudentRecord => {
-          const ic =
-            cleanString(mast?.icNumber) ||
-            cleanString(act?.icNumber) ||
-            cleanString((act as any)?.noKp) ||
-            cleanString(mast?.maskedIc);
-          const derived = deriveBirthDetailsFromIc(ic, academicYearNum);
-          const actAny = act as (Student & Record<string, any>) | null | undefined;
-          const g1: GuardianInfo | undefined = mast?.guardian1 || actAny?.guardian1;
-          const g2: GuardianInfo | undefined = mast?.guardian2 || actAny?.guardian2;
-          const addr = mast?.address || actAny?.address;
-
-          const birthDateRaw = cleanString(mast?.birthDate) || cleanString(act?.birthDate);
-          let ageStr = '';
-          if (mast?.age && Number(mast.age) > 0) {
-            ageStr = `${mast.age} Tahun`;
-          } else if (mast?.birthYear && Number(mast.birthYear) > 1990) {
-            ageStr = `${academicYearNum - Number(mast.birthYear)} Tahun`;
-          } else {
-            ageStr = derived.age;
-          }
-
-          const className =
-            cleanString(actAny?.currentClass) ||
-            cleanString(act?.class) ||
-            cleanString(mast?.currentClass) ||
-            '';
-
-          const yearVal =
-            actAny?.currentYear ||
-            mast?.currentYear ||
-            (className.match(/^([1-6])\s/)?.[1] ? Number(className.match(/^([1-6])\s/)?.[1]) : 0);
-
-          return {
-            id,
-            apdmId: cleanString(mast?.apdmId || act?.apdmId || ''),
-            name: cleanString(mast?.name || act?.name),
-            icNumber: ic,
-            birthDate: birthDateRaw || derived.birthDate,
-            age: ageStr,
-            gender:
-              formatGenderLabel(mast?.gender || act?.gender) || derived.gender,
-            className,
-            yearLevel: yearVal ? `Tahun ${yearVal}` : className,
-            guardian1Name:
-              cleanString(g1?.name) ||
-              cleanString((act as any)?.parentName) ||
-              cleanString((act as any)?.guardianName),
-            guardian1Ic: cleanString(g1?.icNumber),
-            guardian1Occupation: cleanString(g1?.occupation),
-            guardian1Relation: cleanString(g1?.relation) || 'Ibu / Bapa / Penjaga',
-            guardian1Mobile:
-              cleanString(g1?.mobilePhone) ||
-              cleanString((act as any)?.parentPhone) ||
-              cleanString((act as any)?.phone) ||
-              cleanString(mast?.phone),
-            guardian1Office: cleanString(g1?.officePhone),
-            guardian2Name: cleanString(g2?.name),
-            guardian2Mobile: cleanString(g2?.mobilePhone),
-            fullAddress: formatAddress(addr),
-          };
-        };
-
-        // First index active students enriched with master
-        activeStudents.forEach((s) => {
-          const mast =
-            (s.apdmId && masterByApdm.get(normalizeKey(s.apdmId))) ||
-            masterByApdm.get(normalizeKey(s.id)) ||
-            (s.icNumber && masterByIc.get(normalizeDigits(s.icNumber))) ||
-            masterByName.get(normalizeKey(s.name)) ||
-            null;
-          const rec = buildRecord(s.id, s, mast);
-          if (rec.name) mergedMap.set(normalizeKey(rec.name) + '::' + normalizeDigits(rec.icNumber), rec);
+        // 1. Start with all master records (contains full guardian1, guardian2, address)
+        masterDocs.forEach((m) => {
+          const key = String(m.student_id || m.apdmId || m._masterDocId || m.name);
+          combinedMap.set(key, { ...m, id: key, student_id: key });
         });
 
-        // Add any remaining student_master entries not already in active students
-        masterList.forEach((m) => {
-          const key = normalizeKey(m.name) + '::' + normalizeDigits(m.icNumber);
-          if (!mergedMap.has(key) && m.name) {
-            mergedMap.set(key, buildRecord(m.student_id, null, m));
-          }
-        });
+        // 2. Overlay sessional enrollment records (`students`) and link any matching master record
+        enrollDocs.forEach((e) => {
+          const cleanIc = String(e.icNumber || '').replace(/\D/g, '');
+          const normName = String(e.name || '').toUpperCase().replace(/\s+/g, ' ').trim();
+          const matchedMaster =
+            (e.student_id && masterById.get(String(e.student_id).trim())) ||
+            (e.apdmId && masterById.get(String(e.apdmId).trim())) ||
+            (cleanIc && masterByIc.get(cleanIc)) ||
+            (normName && masterByName.get(normName));
 
-        const studentList = Array.from(mergedMap.values()).sort((a, b) =>
-          a.className.localeCompare(b.className) || a.name.localeCompare(b.name)
-        );
-        setAllStudents(studentList);
-
-        // 2. Build Teachers list from personnel + users
-        const teacherMap = new Map<string, UnifiedTeacherRecord>();
-        let detectedGbName = '';
-
-        const upsertTeacher = (raw: any, docId: string) => {
-          const name = cleanString(raw.name || raw.fullName || raw.displayName);
-          if (!name) return;
-          const k = normalizeKey(name);
-          const roleUpper = normalizeKey(raw.role || raw.jawatan || raw.position);
-          if (
-            !detectedGbName &&
-            (roleUpper.includes('GURU_BESAR') ||
-              roleUpper.includes('GURU BESAR') ||
-              roleUpper === 'PRINCIPAL')
-          ) {
-            detectedGbName = name;
-          }
-
-          const existing = teacherMap.get(k);
-          const pos =
-            cleanString(raw.position) ||
-            cleanString(raw.jawatan) ||
-            existing?.position ||
-            'Guru Penolong / PPP';
-          const grade =
-            cleanString(raw.grade) ||
-            cleanString(raw.gred) ||
-            existing?.grade ||
-            'DG41';
-          const ic =
-            cleanString(raw.ic) ||
-            cleanString(raw.nric) ||
-            cleanString(raw.noKP) ||
-            cleanString(raw.icNumber) ||
-            existing?.ic ||
-            '';
-          const phone =
-            cleanString(raw.phone) ||
-            cleanString(raw.noTel) ||
-            cleanString(raw.mobilePhone) ||
-            existing?.phone ||
-            '';
-
-          let savedVehicle: {
-            vehicleModel?: string;
-            vehiclePlateNo?: string;
-            licenseClass?: string;
-          } = {};
-          try {
-            const rawLocal = localStorage.getItem(
-              getVehicleStorageKey(activeSchoolCode, name)
-            );
-            if (rawLocal) savedVehicle = JSON.parse(rawLocal);
-          } catch {
-            // ignore storage parse issue
-          }
-
-          teacherMap.set(k, {
-            id: existing?.id || docId,
-            name,
-            ic,
-            position: pos,
-            grade,
-            phone,
-            vehicleModel:
-              cleanString(raw.vehicleModel) ||
-              savedVehicle.vehicleModel ||
-              existing?.vehicleModel ||
-              '',
-            vehiclePlateNo:
-              cleanString(raw.vehiclePlateNo) ||
-              savedVehicle.vehiclePlateNo ||
-              existing?.vehiclePlateNo ||
-              '',
-            licenseClass:
-              cleanString(raw.licenseClass) ||
-              savedVehicle.licenseClass ||
-              existing?.licenseClass ||
-              'D',
-          });
-        };
-
-        if (personnelSnap) {
-          personnelSnap.docs
-            .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
-            .forEach((d) => upsertTeacher(d.data() as PersonnelProfile, d.id));
-        }
-        if (usersSnap) {
-          usersSnap.docs
-            .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
-            .forEach((d) => {
-              const u = d.data();
-              if (u.status === 'INACTIVE' || u.isActive === false) return;
-              upsertTeacher(u, d.id);
+          if (matchedMaster) {
+            const key = String(matchedMaster.student_id || matchedMaster.apdmId || matchedMaster._masterDocId);
+            combinedMap.set(key, {
+              ...matchedMaster,
+              ...e,
+              // Ensure rich APDM fields from student_master are never overwritten by empty enrollment fields
+              id: key,
+              student_id: key,
+              enrollmentDocId: e.id,
+              icNumber: matchedMaster.icNumber || e.icNumber || '',
+              birthDate: matchedMaster.birthDate || e.birthDate || '',
+              birthYear: matchedMaster.birthYear || e.birthYear || 0,
+              age: matchedMaster.age || e.age || 0,
+              currentClass: e.class || matchedMaster.currentClass || '',
+              guardian1: matchedMaster.guardian1,
+              guardian2: matchedMaster.guardian2,
+              address: matchedMaster.address,
             });
-        }
-
-        const teacherList = Array.from(teacherMap.values()).sort((a, b) =>
-          a.name.localeCompare(b.name)
-        );
-        setAllTeachers(teacherList);
-        if (detectedGbName) {
-          setGuruBesarName((prev) => prev || detectedGbName);
-        }
-
-        // 3. Load koko_activities for quick competition dropdown
-        if (kokoSnap) {
-          const acts = kokoSnap.docs
-            .filter((d) => belongsToSchool(d.data(), activeSchoolCode))
-            .map((d) => ({ id: d.id, ...d.data() } as KokoActivity))
-            .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-          setKokoActivities(acts);
-        }
-
-        // 4. Hydrate initialData selection
-        if (initialData) {
-          if (initialData.programName) setProgramName(initialData.programName);
-          if (initialData.organizer) setOrganizer(initialData.organizer);
-          if (initialData.date) setDate(initialData.date);
-          if (initialData.endDate) setEndDate(initialData.endDate);
-          if (initialData.masa) setMasa(initialData.masa);
-          if (initialData.venue) setVenue(initialData.venue);
-          if (initialData.level) setLevel(initialData.level);
-
-          // Pre-select Guru Pengiring
-          const desiredTeacherName =
-            initialData.guruPengiring?.[0] || currentUser?.name || teacherList[0]?.name || '';
-          if (desiredTeacherName) {
-            const matchedT =
-              teacherList.find((t) => normalizeKey(t.name) === normalizeKey(desiredTeacherName)) ||
-              teacherList.find((t) =>
-                normalizeKey(t.name).includes(normalizeKey(desiredTeacherName))
-              );
-            if (matchedT) {
-              setSelectedTeacherName(matchedT.name);
-              setTeacherIc(matchedT.ic);
-              setTeacherPosition(matchedT.position);
-              setTeacherGrade(matchedT.grade);
-              setTeacherPhone(matchedT.phone);
-              setVehicleModel(matchedT.vehicleModel);
-              setVehiclePlateNo(matchedT.vehiclePlateNo);
-              setLicenseClass(matchedT.licenseClass || 'D');
-            } else {
-              setSelectedTeacherName(desiredTeacherName);
+          } else {
+            const key = String(e.student_id || e.id || e.name);
+            if (!combinedMap.has(key)) {
+              combinedMap.set(key, { ...e, id: key, student_id: key });
             }
           }
+        });
 
-          // Pre-select participating students
-          const preIds = new Set<string>();
-          if (initialData.studentIds && initialData.studentIds.length > 0) {
-            initialData.studentIds.forEach((sid) => {
-              const found = studentList.find(
-                (st) => st.id === sid || st.apdmId === sid
-              );
-              if (found) preIds.add(found.id);
-            });
-          }
-          if (initialData.studentNames && initialData.studentNames.length > 0) {
-            initialData.studentNames.forEach((sn) => {
-              const nKey = normalizeKey(sn);
-              const found = studentList.find((st) => normalizeKey(st.name) === nKey);
-              if (found) preIds.add(found.id);
-            });
-          }
-          setSelectedStudentIds(Array.from(preIds));
-        } else if (currentUser?.name) {
-          const matchedT = teacherList.find(
-            (t) => normalizeKey(t.name) === normalizeKey(currentUser.name)
+        // Deduplicate by normalized student name if both scoped & unscoped docs existed
+        const seenNames = new Set<string>();
+        const list: Array<Record<string, any>> = [];
+        Array.from(combinedMap.values())
+          .sort((a, b) => {
+            // Prefer records that have guardian1.icNumber or guardian1.name populated
+            const aHasG1 = a.guardian1?.icNumber || a.guardian1?.name ? 1 : 0;
+            const bHasG1 = b.guardian1?.icNumber || b.guardian1?.name ? 1 : 0;
+            if (aHasG1 !== bHasG1) return bHasG1 - aHasG1;
+            return String(a.name || '').localeCompare(String(b.name || ''));
+          })
+          .forEach((rec) => {
+            const normName = String(rec.name || '').toUpperCase().replace(/\s+/g, ' ').trim();
+            if (!normName) return;
+            if (seenNames.has(normName)) return;
+            seenNames.add(normName);
+            list.push(rec);
+          });
+
+        list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+
+        if (!active) return;
+        setMergedStudents(list);
+
+        // Build participant overrides map with full APDM guardian1, guardian2 & address
+        const map: Record<string, SPPKParticipantOverride> = {};
+        list.forEach((s) => {
+          const built = buildParticipantFromMergedRecord(s);
+          map[built.studentId] = built;
+        });
+        setOverrides(map);
+
+        // Pre-select students from initialData (match by studentId, enrollmentDocId, apdmId, or name)
+        if (
+          (initialData?.studentIds && initialData.studentIds.length > 0) ||
+          (initialData?.studentNames && initialData.studentNames.length > 0)
+        ) {
+          const targetIdSet = new Set(
+            (initialData?.studentIds || []).map((id) => String(id).trim())
           );
-          if (matchedT) {
-            setSelectedTeacherName(matchedT.name);
-            setTeacherIc(matchedT.ic);
-            setTeacherPosition(matchedT.position);
-            setTeacherGrade(matchedT.grade);
-            setTeacherPhone(matchedT.phone);
-            setVehicleModel(matchedT.vehicleModel);
-            setVehiclePlateNo(matchedT.vehiclePlateNo);
-            setLicenseClass(matchedT.licenseClass || 'D');
-          } else {
-            setSelectedTeacherName(currentUser.name);
+          const targetNameSet = new Set(
+            (initialData?.studentNames || []).map((n) =>
+              String(n).toUpperCase().replace(/\s+/g, ' ').trim()
+            )
+          );
+
+          const matched = list
+            .filter((s) => {
+              const sid = String(s.student_id || s.id || '').trim();
+              const eid = String(s.enrollmentDocId || '').trim();
+              const aid = String(s.apdmId || '').trim();
+              const sName = String(s.name || '').toUpperCase().replace(/\s+/g, ' ').trim();
+              return (
+                (sid && targetIdSet.has(sid)) ||
+                (eid && targetIdSet.has(eid)) ||
+                (aid && targetIdSet.has(aid)) ||
+                (sName && targetNameSet.has(sName))
+              );
+            })
+            .map((s) => String(s.student_id || s.id));
+
+          if (matched.length > 0) {
+            setSelectedIds(matched);
+            return;
           }
         }
-      } catch (err: any) {
-        setLoadError(err?.message || 'Gagal memuatkan data APDM Murid & Profil Guru.');
-      } finally {
-        if (!cancelled) setLoading(false);
+
+        if (list.length > 0) {
+          setSelectedIds([String(list[0].student_id || list[0].id)]);
+        }
+      } catch (err) {
+        console.warn('Could not load student_master / students for SPPK modal:', err);
       }
-    };
-
-    loadSSOT();
+    }
+    fetchAndMergeStudents();
     return () => {
-      cancelled = true;
+      active = false;
     };
-  }, [isOpen, activeSchoolCode, academicYearNum, initialData, currentUser?.academic_year, currentUser?.name, schoolSettingsExtra?.academicYear]);
+  }, [isOpen, schoolCode, initialData]);
 
-  // Apply selected teacher details when dropdown changes
-  const handleSelectTeacher = (name: string) => {
-    setSelectedTeacherName(name);
-    const t = allTeachers.find((x) => x.name === name);
-    if (t) {
-      setTeacherIc(t.ic);
-      setTeacherPosition(t.position);
-      setTeacherGrade(t.grade);
-      setTeacherPhone(t.phone);
-      setVehicleModel(t.vehicleModel);
-      setVehiclePlateNo(t.vehiclePlateNo);
-      setLicenseClass(t.licenseClass || 'D');
-    }
-  };
-
-  // Persist vehicle details convenience cache per school + teacher in localStorage
-  useEffect(() => {
-    if (!selectedTeacherName) return;
-    try {
-      localStorage.setItem(
-        getVehicleStorageKey(activeSchoolCode, selectedTeacherName),
-        JSON.stringify({
-          vehicleModel,
-          vehiclePlateNo,
-          licenseClass,
-        })
-      );
-    } catch {
-      // ignore storage quota errors
-    }
-  }, [activeSchoolCode, selectedTeacherName, vehicleModel, vehiclePlateNo, licenseClass]);
-
-  // Quick-fill from existing KokoActivity dropdown
-  const handleSelectKokoActivity = (actId: string) => {
-    setSelectedActivityId(actId);
-    const act = kokoActivities.find((a) => a.id === actId);
-    if (!act) return;
-    setProgramName(act.programName || '');
-    setOrganizer(act.organizer || 'PPD / JPN / KPM');
-    setDate(act.date || new Date().toISOString().split('T')[0]);
-    setEndDate(act.endDate || '');
-    setMasa(act.masa || '07:30 pagi – 02:00 petang');
-    setVenue(act.venue || '');
-    setLevel(act.level || 'Daerah / Bahagian');
-
-    const teacherChoice = act.guruPengiring?.[0] || act.jurulatih?.[0];
-    if (teacherChoice) {
-      const matched =
-        allTeachers.find((t) => normalizeKey(t.name) === normalizeKey(teacherChoice)) ||
-        allTeachers.find((t) => normalizeKey(t.name).includes(normalizeKey(teacherChoice)));
-      if (matched) handleSelectTeacher(matched.name);
-      else setSelectedTeacherName(teacherChoice);
-    }
-
-    const nextIds = new Set<string>();
-    (act.studentIds || []).forEach((sid) => {
-      const found = allStudents.find((s) => s.id === sid || s.apdmId === sid);
-      if (found) nextIds.add(found.id);
-    });
-    (act.studentNames || []).forEach((sn) => {
-      const found = allStudents.find((s) => normalizeKey(s.name) === normalizeKey(sn));
-      if (found) nextIds.add(found.id);
-    });
-    if (nextIds.size > 0) setSelectedStudentIds(Array.from(nextIds));
-  };
-
-  const uniqueClasses = useMemo(() => {
+  const availableClasses = useMemo(() => {
     const set = new Set<string>();
-    allStudents.forEach((s) => {
-      if (s.className) set.add(s.className);
+    mergedStudents.forEach((s) => {
+      const cls = String(s.currentClass || s.class || s.class_name || '').trim();
+      if (cls) set.add(cls);
     });
     return Array.from(set).sort();
-  }, [allStudents]);
+  }, [mergedStudents]);
 
   const filteredStudents = useMemo(() => {
-    const q = normalizeKey(studentSearch);
-    return allStudents.filter((s) => {
-      if (classFilter !== 'SEMUA' && s.className !== classFilter) return false;
-      if (!q) return true;
-      return (
-        normalizeKey(s.name).includes(q) ||
-        normalizeKey(s.className).includes(q) ||
-        cleanString(s.icNumber).includes(q)
-      );
+    return mergedStudents.filter((s) => {
+      const cls = String(s.currentClass || s.class || s.class_name || '').trim();
+      if (classFilter !== 'ALL' && cls !== classFilter) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const name = String(s.name || '').toLowerCase();
+        const ic = String(s.icNumber || s.student_id || '').toLowerCase();
+        const g1Name = String(s.guardian1?.name || s.guardianName || '').toLowerCase();
+        const g2Name = String(s.guardian2?.name || '').toLowerCase();
+        return (
+          name.includes(q) ||
+          ic.includes(q) ||
+          g1Name.includes(q) ||
+          g2Name.includes(q) ||
+          cls.toLowerCase().includes(q)
+        );
+      }
+      return true;
     });
-  }, [allStudents, studentSearch, classFilter]);
+  }, [mergedStudents, classFilter, searchQuery]);
+
+  // Build list of participants to render (or 1 blank template if 0 selected)
+  const activeParticipants: SPPKParticipantOverride[] = useMemo(() => {
+    if (selectedIds.length === 0) {
+      return [
+        {
+          studentId: 'BLANK_TEMPLATE',
+          studentName: '',
+          studentIc: '',
+          birthDate: '',
+          gender: '',
+          age: '',
+          className: '',
+          selectedGuardianSlot: 'G1',
+          parentName: '',
+          parentIc: '',
+          parentOccupation: '',
+          relationship: '',
+          homeAddress: '',
+          homePhone: '',
+          officePhone: '',
+          mobilePhone: '',
+          jenisSakitKecederaan: '',
+          jenisRawatan: '',
+        },
+      ];
+    }
+    return selectedIds
+      .map((id) => overrides[id])
+      .filter((x): x is SPPKParticipantOverride => Boolean(x));
+  }, [selectedIds, overrides]);
+
+  if (!isOpen) return null;
+
+  const startFormatted = formatDateDMY(startDate);
+  const endFormatted = formatDateDMY(endDate || startDate);
 
   const toggleStudent = (id: string) => {
-    setSelectedStudentIds((prev) =>
+    setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   };
 
-  const selectedStudentsResolved = useMemo(() => {
-    return selectedStudentIds
-      .map((id) => {
-        const base = allStudents.find((s) => s.id === id);
-        if (!base) return null;
-        const ov = studentOverrides[id];
-        return {
-          id: base.id,
-          name: ov?.name ?? base.name,
-          icNumber: ov?.icNumber ?? base.icNumber,
-          birthDate: ov?.birthDate ?? base.birthDate,
-          age: ov?.age ?? base.age,
-          gender: ov?.gender ?? base.gender,
-          className: ov?.className ?? base.className,
-          guardian1Name: ov?.guardian1Name ?? base.guardian1Name,
-          guardian1Ic: ov?.guardian1Ic ?? base.guardian1Ic,
-          guardian1Occupation: ov?.guardian1Occupation ?? base.guardian1Occupation,
-          guardian1Relation: ov?.guardian1Relation ?? base.guardian1Relation,
-          guardian1Mobile: ov?.guardian1Mobile ?? base.guardian1Mobile,
-          guardian1Office: ov?.guardian1Office ?? base.guardian1Office,
-          guardian2Name: ov?.guardian2Name ?? base.guardian2Name,
-          guardian2Mobile: ov?.guardian2Mobile ?? base.guardian2Mobile,
-          fullAddress: ov?.fullAddress ?? base.fullAddress,
-          health: ov?.health ?? DEFAULT_HEALTH_FLAGS,
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => Boolean(x));
-  }, [selectedStudentIds, allStudents, studentOverrides]);
-
-  const updateStudentOverride = (
-    studentId: string,
-    patch: Partial<StudentEditableOverride>
-  ) => {
-    const base = allStudents.find((s) => s.id === studentId);
-    if (!base) return;
-    setStudentOverrides((prev) => {
-      const current: StudentEditableOverride = prev[studentId] || {
-        name: base.name,
-        icNumber: base.icNumber,
-        birthDate: base.birthDate,
-        age: base.age,
-        gender: base.gender,
-        className: base.className,
-        guardian1Name: base.guardian1Name,
-        guardian1Ic: base.guardian1Ic,
-        guardian1Occupation: base.guardian1Occupation,
-        guardian1Relation: base.guardian1Relation,
-        guardian1Mobile: base.guardian1Mobile,
-        guardian1Office: base.guardian1Office,
-        guardian2Name: base.guardian2Name,
-        guardian2Mobile: base.guardian2Mobile,
-        fullAddress: base.fullAddress,
-        health: { ...DEFAULT_HEALTH_FLAGS },
-      };
+  const switchStudentGuardianSlot = (studentId: string, slot: 'G1' | 'G2') => {
+    setOverrides((prev) => {
+      const existing = prev[studentId];
+      if (!existing) return prev;
+      const g = slot === 'G1' ? existing.guardian1 : existing.guardian2;
+      if (!g) return prev;
       return {
         ...prev,
-        [studentId]: { ...current, ...patch },
+        [studentId]: {
+          ...existing,
+          selectedGuardianSlot: slot,
+          parentName: String(g.name || '').trim().toUpperCase(),
+          parentIc: formatMyKadOrIc(g.icNumber),
+          parentOccupation: String(g.occupation || g.employmentStatus || '')
+            .trim()
+            .toUpperCase(),
+          relationship: String(
+            g.relation || (slot === 'G1' ? 'BAPA / PENJAGA UTAMA' : 'IBU / PENJAGA KEDUA')
+          )
+            .trim()
+            .toUpperCase(),
+          officePhone: String(g.officePhone || '').trim(),
+          mobilePhone: String(
+            g.mobilePhone ||
+              existing.guardian1?.mobilePhone ||
+              existing.guardian2?.mobilePhone ||
+              existing.mobilePhone ||
+              ''
+          ).trim(),
+        },
       };
     });
   };
 
-  const updateStudentHealth = (
-    studentId: string,
-    patch: Partial<StudentHealthFlags>
-  ) => {
-    const base = allStudents.find((s) => s.id === studentId);
-    if (!base) return;
-    const current = studentOverrides[studentId]?.health || DEFAULT_HEALTH_FLAGS;
-    updateStudentOverride(studentId, {
-      health: { ...current, ...patch },
-    });
-  };
-
-  const formattedDateRange = useMemo(() => {
-    if (!date) return '....................';
-    if (endDate && endDate !== date) {
-      return `${formatMalayDate(date)} hingga ${formatMalayDate(endDate)}`;
-    }
-    return formatMalayDate(date);
-  }, [date, endDate]);
-
-  const buildWhatsAppParentUrl = (st: (typeof selectedStudentsResolved)[number]) => {
-    const phone = formatWhatsAppPhone(st.guardian1Mobile || st.guardian2Mobile);
-    if (!phone) return '';
-    const guardianDisplay = st.guardian1Name || 'Tuan/Puan';
-    const msg = [
-      `Salam sejahtera ${guardianDisplay},`,
-      ``,
-      `Makluman daripada pihak *${effectiveSchoolName}*:`,
-      `Anak jagaan tuan/puan, *${st.name}* (${st.className || 'Murid'}), telah dipilih untuk menyertai:`,
-      `🏆 *${programName || 'Pertandingan / Aktiviti Sekolah'}*`,
-      `📅 Tarikh: ${formattedDateRange}`,
-      `⏰ Masa: ${masa || '-'}`,
-      `📍 Tempat: ${venue || '-'}`,
-      `👩‍🏫 Guru Pengiring: ${selectedTeacherName || '-'} (${teacherPhone || '-'})`,
-      ``,
-      `Mohon kerjasama tuan/puan untuk melengkapkan dan menandatangani *${sppk1Label}* (Kebenaran Ibu Bapa) dan *${sppk2Label}* (Perakuan Kesihatan) serta mengembalikannya kepada Guru Pengiring sebelum tarikh program.`,
-      ``,
-      `Sekian, terima kasih.`,
-    ].join('\n');
-    return `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
-  };
-
-  const handlePrintAll = () => {
-    const res = triggerSmartPrint({
-      elementId: 'sppk-batch-print-sheet',
-      title: `Pakej_SPPK_${programName || 'Pertandingan'}`,
-      orientation: 'portrait',
-    });
-    if (res.mode !== 'native') {
-      setBanner({
-        type: res.mode === 'error' ? 'error' : 'info',
-        text: res.message,
+  const switchAllGuardiansSlot = (slot: 'G1' | 'G2') => {
+    setOverrides((prev) => {
+      const next: Record<string, SPPKParticipantOverride> = { ...prev };
+      Object.keys(next).forEach((sid) => {
+        const item = next[sid];
+        const g = slot === 'G1' ? item.guardian1 : item.guardian2;
+        if (g && g.name && String(g.name).trim() !== '-') {
+          next[sid] = {
+            ...item,
+            selectedGuardianSlot: slot,
+            parentName: String(g.name || '').trim().toUpperCase(),
+            parentIc: formatMyKadOrIc(g.icNumber),
+            parentOccupation: String(g.occupation || g.employmentStatus || '')
+              .trim()
+              .toUpperCase(),
+            relationship: String(
+              g.relation || (slot === 'G1' ? 'BAPA / PENJAGA UTAMA' : 'IBU / PENJAGA KEDUA')
+            )
+              .trim()
+              .toUpperCase(),
+            officePhone: String(g.officePhone || '').trim(),
+            mobilePhone: String(
+              g.mobilePhone ||
+                item.guardian1?.mobilePhone ||
+                item.guardian2?.mobilePhone ||
+                item.mobilePhone ||
+                ''
+            ).trim(),
+          };
+        }
       });
-    }
-  };
-
-  const handleDownloadHtml = () => {
-    const res = downloadStandalonePrintHtml({
-      elementId: 'sppk-batch-print-sheet',
-      title: `Pakej_SPPK_${programName || 'Pertandingan'}`,
-      orientation: 'portrait',
-    });
-    setBanner({
-      type: res.mode === 'error' ? 'error' : 'info',
-      text: res.message,
+      return next;
     });
   };
 
-  if (!isOpen) return null;
+  const updateOverrideField = (
+    studentId: string,
+    field: keyof SPPKParticipantOverride,
+    value: string
+  ) => {
+    setOverrides((prev) => {
+      const existing = prev[studentId];
+      if (!existing) return prev;
+      return {
+        ...prev,
+        [studentId]: {
+          ...existing,
+          [field]: value,
+        },
+      };
+    });
+  };
 
-  const showSppk1 = previewTab === 'ALL' || previewTab === 'SPPK1';
-  const showSppk2 = previewTab === 'ALL' || previewTab === 'SPPK2';
-  const showSppk3 = previewTab === 'ALL' || previewTab === 'SPPK3';
-  const showKenderaan = previewTab === 'KENDERAAN';
-
-  const totalPrintedPages =
-    (showSppk1 ? selectedStudentsResolved.length : 0) +
-    (showSppk2 ? selectedStudentsResolved.length : 0) +
-    (showSppk3 ? selectedStudentsResolved.length : 0) +
-    (showKenderaan ? 1 : 0);
+  const OfficialHeader: React.FC<{ formCode: 'Borang SPPK 1' | 'Borang SPPK 2' | 'Borang SPPK 3' }> = ({
+    formCode,
+  }) => (
+    <div style={{ marginBottom: '4px' }}>
+      <div style={{ textAlign: 'center' }}>
+        <img
+          src="/assets/aistudio/jata_negara_kpm.png"
+          alt="Kementerian Pendidikan - Jabatan Pendidikan Negeri Sarawak"
+          style={{
+            height: '64px',
+            width: 'auto',
+            margin: '0 auto',
+            display: 'block',
+            objectFit: 'contain',
+          }}
+        />
+      </div>
+      <div
+        style={{
+          textAlign: 'right',
+          fontWeight: 'bold',
+          fontStyle: 'italic',
+          textDecoration: 'underline',
+          fontSize: '11pt',
+          marginTop: '-4px',
+          marginBottom: '6px',
+        }}
+      >
+        {formCode}
+      </div>
+    </div>
+  );
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm overflow-y-auto p-3 sm:p-6 print:static print:bg-white print:p-0 print:overflow-visible">
-      <div className="max-w-7xl mx-auto space-y-4 print:max-w-none print:space-y-0">
-        {/* TOP MODAL CONTROL BAR */}
-        <div className="print:hidden bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-2xl flex flex-col lg:flex-row lg:items-center justify-between gap-4 sticky top-2 z-20">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-teal-600/20 text-teal-300 border border-teal-500/40 rounded-2xl shrink-0">
-              <ClipboardList className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-base sm:text-lg font-black text-white tracking-tight">
-                  Penjana Pakej Borang SPPK 1, SPPK 2 &amp; SPPK 3 (Auto-APDM)
-                </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  {selectedStudentsResolved.length} Murid · {totalPrintedPages} Helaian A4
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                Auto-isi maklumat Murid, Ibu Bapa/Penjaga, Alamat (APDM) &amp; Guru Pengiring/Kenderaan (Profil Guru)
-              </p>
-            </div>
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col overflow-hidden">
+      {/* Top Action Bar (Hidden in Print) */}
+      <div className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 print:hidden">
+        <div className="flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-300">
+            <FileText className="w-5 h-5" />
           </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowEditorPanel((v) => !v)}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-            >
-              <Edit3 className="w-3.5 h-3.5 text-amber-400" />
-              <span>{showEditorPanel ? 'Sembunyi Panel Data' : 'Ubahsuai Data & Pilihan'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleDownloadHtml}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 border border-teal-700/60 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Muat Turun (.html)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handlePrintAll}
-              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase tracking-wider flex items-center gap-1.5 shadow-lg cursor-pointer"
-            >
-              <Printer className="w-4 h-4" />
-              <span>🖨️ Cetak Semua Borang (A4)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white transition cursor-pointer"
-              title="Tutup"
-            >
-              <X className="w-5 h-5" />
-            </button>
+          <div>
+            <h2 className="text-sm font-black text-white uppercase tracking-wide flex items-center gap-2">
+              <span>Jana Rasmi Borang SPPK 1, SPPK 2 &amp; SPPK 3 (JPN Sarawak)</span>
+              <span className="px-2 py-0.5 text-[10px] rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                Auto-Sync APDM Penjaga 1 &amp; 2
+              </span>
+            </h2>
+            <p className="text-[11px] text-slate-400">
+              Auto-isi Nama, No. KP, Pekerjaan, Hubungan, No. Telefon &amp; Alamat Rumah daripada rekod Penjaga Utama (APDM Student Master).
+            </p>
           </div>
         </div>
 
-        {/* STATUS / BANNER */}
-        {banner && (
-          <div
-            className={`print:hidden p-3.5 rounded-2xl border text-xs font-bold flex items-center justify-between gap-3 ${
-              banner.type === 'error'
-                ? 'bg-rose-950/70 border-rose-700 text-rose-200'
-                : banner.type === 'success'
-                ? 'bg-emerald-950/70 border-emerald-700 text-emerald-200'
-                : 'bg-blue-950/70 border-blue-700 text-blue-200'
-            }`}
-          >
-            <span>{banner.text}</span>
-            <button
-              type="button"
-              onClick={() => setBanner(null)}
-              className="p-1 rounded-lg hover:bg-white/10 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {loadError && (
-          <div className="print:hidden p-3.5 rounded-2xl bg-rose-950/70 border border-rose-700 text-xs font-bold text-rose-200">
-            {loadError}
-          </div>
-        )}
-
-        {/* COLLAPSIBLE CONFIGURATION & INLINE DATA HYDRATION PANEL */}
-        {showEditorPanel && (
-          <div className="print:hidden bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 space-y-6 shadow-xl">
-            {loading && (
-              <div className="flex items-center gap-2 text-xs text-teal-300 font-bold">
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Menyegerak data APDM Murid (`student_master`), Waris &amp; Profil Guru...</span>
-              </div>
-            )}
-
-            {/* SECTION 1: COMPETITION & FORM LABEL CONFIG */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-              <div className="lg:col-span-7 space-y-3 bg-slate-950/70 border border-slate-800 rounded-2xl p-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
-                    <Award className="w-4 h-4" />
-                    <span>1. Maklumat Pertandingan / Program</span>
-                  </h3>
-                  {kokoActivities.length > 0 && (
-                    <select
-                      value={selectedActivityId}
-                      onChange={(e) => handleSelectKokoActivity(e.target.value)}
-                      className="bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-[11px] text-teal-300 font-bold outline-none max-w-xs"
-                    >
-                      <option value="">-- Import Pantas dari Rekod OPR --</option>
-                      {kokoActivities.map((act) => (
-                        <option key={act.id} value={act.id}>
-                          [{act.date}] {act.programName}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  <div className="sm:col-span-2">
-                    <label className="text-[11px] font-bold text-slate-400">
-                      Nama Pertandingan / Aktiviti:
-                    </label>
-                    <input
-                      type="text"
-                      value={programName}
-                      onChange={(e) => setProgramName(e.target.value)}
-                      placeholder="cth: Pertandingan Bercerita Bahasa Melayu Peringkat Daerah"
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-bold outline-none focus:border-teal-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400">Penganjur:</label>
-                    <input
-                      type="text"
-                      value={organizer}
-                      onChange={(e) => setOrganizer(e.target.value)}
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400">Peringkat:</label>
-                    <input
-                      type="text"
-                      value={level}
-                      onChange={(e) => setLevel(e.target.value)}
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400">Tarikh Pergi:</label>
-                    <input
-                      type="date"
-                      value={date}
-                      onChange={(e) => setDate(e.target.value)}
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400">
-                      Tarikh Balik (Jika Berlainan):
-                    </label>
-                    <input
-                      type="date"
-                      value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400">Masa:</label>
-                    <input
-                      type="text"
-                      value={masa}
-                      onChange={(e) => setMasa(e.target.value)}
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400">Tempat Pertandingan:</label>
-                    <input
-                      type="text"
-                      value={venue}
-                      onChange={(e) => setVenue(e.target.value)}
-                      placeholder="cth: Dewan Suarah Bintulu / SK ..."
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* Editable Top-Right SPPK Code Labels */}
-                <div className="pt-2 border-t border-slate-800 grid grid-cols-3 gap-2 text-[11px]">
-                  <div>
-                    <label className="text-slate-400 font-bold">Label Kod 1:</label>
-                    <input
-                      type="text"
-                      value={sppk1Label}
-                      onChange={(e) => setSppk1Label(e.target.value)}
-                      className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-teal-300 font-mono font-bold outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-slate-400 font-bold">Label Kod 2:</label>
-                    <input
-                      type="text"
-                      value={sppk2Label}
-                      onChange={(e) => setSppk2Label(e.target.value)}
-                      className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-teal-300 font-mono font-bold outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-slate-400 font-bold">Label Kod 3:</label>
-                    <input
-                      type="text"
-                      value={sppk3Label}
-                      onChange={(e) => setSppk3Label(e.target.value)}
-                      className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-teal-300 font-mono font-bold outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* SECTION 2: GURU PENGIRING & VEHICLE DETAILS */}
-              <div className="lg:col-span-5 space-y-3 bg-slate-950/70 border border-slate-800 rounded-2xl p-4">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-indigo-300 flex items-center gap-1.5">
-                    <Car className="w-4 h-4" />
-                    <span>2. Guru Pengiring &amp; Kenderaan (SPPK 3)</span>
-                  </h3>
-                  <span className="text-[10px] text-emerald-400 font-bold">Auto-Profil Guru</span>
-                </div>
-
-                <div className="space-y-2.5 text-xs">
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-400">
-                      Pilih Guru Pengiring (Dari Master Data):
-                    </label>
-                    <select
-                      value={selectedTeacherName}
-                      onChange={(e) => handleSelectTeacher(e.target.value)}
-                      className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-bold outline-none focus:border-indigo-500"
-                    >
-                      <option value="">-- Pilih Guru Pengiring --</option>
-                      {allTeachers.map((t) => (
-                        <option key={t.id + t.name} value={t.name}>
-                          {t.name} {t.ic ? `(${t.ic})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="text-[11px] font-bold text-slate-400">No. Kad Pengenalan:</label>
-                      <input
-                        type="text"
-                        value={teacherIc}
-                        onChange={(e) => setTeacherIc(e.target.value)}
-                        placeholder="cth: 900101-13-xxxx"
-                        className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-bold text-slate-400">No. Telefon:</label>
-                      <input
-                        type="text"
-                        value={teacherPhone}
-                        onChange={(e) => setTeacherPhone(e.target.value)}
-                        placeholder="01x-xxxxxxx"
-                        className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-bold text-slate-400">Jawatan:</label>
-                      <input
-                        type="text"
-                        value={teacherPosition}
-                        onChange={(e) => setTeacherPosition(e.target.value)}
-                        className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-bold text-slate-400">Gred:</label>
-                      <input
-                        type="text"
-                        value={teacherGrade}
-                        onChange={(e) => setTeacherGrade(e.target.value)}
-                        className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-bold text-amber-300">
-                        Jenis / Model Kenderaan:
-                      </label>
-                      <input
-                        type="text"
-                        value={vehicleModel}
-                        onChange={(e) => setVehicleModel(e.target.value)}
-                        placeholder="cth: Perodua Myvi / Toyota Vios"
-                        className="mt-1 w-full bg-slate-900 border border-amber-700/60 rounded-xl px-3 py-1.5 text-white outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-bold text-amber-300">
-                        No. Pendaftaran Kenderaan:
-                      </label>
-                      <input
-                        type="text"
-                        value={vehiclePlateNo}
-                        onChange={(e) => setVehiclePlateNo(e.target.value.toUpperCase())}
-                        placeholder="cth: QAA 1234 B"
-                        className="mt-1 w-full bg-slate-900 border border-amber-700/60 rounded-xl px-3 py-1.5 text-white font-mono uppercase outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-bold text-slate-400">
-                        Kelas Lesen Memandu:
-                      </label>
-                      <input
-                        type="text"
-                        value={licenseClass}
-                        onChange={(e) => setLicenseClass(e.target.value.toUpperCase())}
-                        placeholder="cth: D / DA"
-                        className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-bold text-slate-400">
-                        Nama Guru Besar (Pelulus):
-                      </label>
-                      <input
-                        type="text"
-                        value={guruBesarName}
-                        onChange={(e) => setGuruBesarName(e.target.value)}
-                        placeholder="Nama Guru Besar"
-                        className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-white outline-none"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* SECTION 3: STUDENT PICKER & INLINE PARENT/HEALTH EDITOR */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-              {/* Left: Searchable Student Multi-Select */}
-              <div className="lg:col-span-5 bg-slate-950/70 border border-slate-800 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
-                    <Users className="w-4 h-4" />
-                    <span>3. Pilih Peserta Murid ({selectedStudentIds.length} Dipilih)</span>
-                  </h3>
-                  {selectedStudentIds.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedStudentIds([])}
-                      className="text-[10px] font-bold text-rose-400 hover:underline cursor-pointer"
-                    >
-                      Kosongkan
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="text"
-                      value={studentSearch}
-                      onChange={(e) => setStudentSearch(e.target.value)}
-                      placeholder="Cari nama murid / No. KP..."
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white outline-none"
-                    />
-                  </div>
-                  <select
-                    value={classFilter}
-                    onChange={(e) => setClassFilter(e.target.value)}
-                    className="bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 outline-none"
-                  >
-                    <option value="SEMUA">Semua Kelas</option>
-                    {uniqueClasses.map((cls) => (
-                      <option key={cls} value={cls}>
-                        {cls}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/80 border border-slate-800 rounded-xl bg-slate-900/60">
-                  {filteredStudents.slice(0, 120).map((st) => {
-                    const checked = selectedStudentIds.includes(st.id);
-                    const hasGuardian = Boolean(st.guardian1Name);
-                    return (
-                      <label
-                        key={st.id}
-                        className={`flex items-center justify-between gap-2 px-3 py-2 text-xs cursor-pointer transition ${
-                          checked ? 'bg-teal-950/50 text-white' : 'hover:bg-slate-800/60 text-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleStudent(st.id)}
-                            className="rounded accent-teal-500 shrink-0"
-                          />
-                          <div className="min-w-0">
-                            <div className="font-bold truncate">{st.name}</div>
-                            <div className="text-[10px] text-slate-400 font-mono truncate">
-                              {st.className || '-'} · {st.icNumber || 'Tiada No. KP'}
-                            </div>
-                          </div>
-                        </div>
-                        <span
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                            hasGuardian
-                              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                              : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                          }`}
-                        >
-                          {hasGuardian ? 'APDM Lengkap' : 'Semak Waris'}
-                        </span>
-                      </label>
-                    );
-                  })}
-                  {filteredStudents.length === 0 && (
-                    <div className="p-4 text-center text-xs text-slate-500">
-                      Tiada murid ditemui dalam rekod sekolah.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Right: Selected Students Quick Editor + Health Conditions + WhatsApp Parent */}
-              <div className="lg:col-span-7 bg-slate-950/70 border border-slate-800 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
-                    <HeartPulse className="w-4 h-4" />
-                    <span>4. Semakan Waris, Kesihatan (SPPK 2) &amp; WhatsApp Ibu Bapa</span>
-                  </h3>
-                  <span className="text-[10px] text-slate-400">Klik nama murid untuk ubahsuai butiran</span>
-                </div>
-
-                {selectedStudentsResolved.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-slate-500 border border-dashed border-slate-800 rounded-xl">
-                    Pilih sekurang-kurangnya seorang murid di sebelah kiri untuk menjana Borang SPPK 1, SPPK 2 &amp; senarai peserta SPPK 3.
-                  </div>
-                ) : (
-                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                    {selectedStudentsResolved.map((st, idx) => {
-                      const isExpanded = editingStudentId === st.id;
-                      const waUrl = buildWhatsAppParentUrl(st);
-                      return (
-                        <div
-                          key={st.id}
-                          className="border border-slate-800 rounded-xl bg-slate-900/80 overflow-hidden"
-                        >
-                          <div className="p-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-                            <button
-                              type="button"
-                              onClick={() => setEditingStudentId(isExpanded ? null : st.id)}
-                              className="text-left flex-1 min-w-0 cursor-pointer"
-                            >
-                              <div className="font-bold text-white truncate">
-                                {idx + 1}. {st.name}{' '}
-                                <span className="text-teal-300 font-mono text-[11px]">
-                                  ({st.className || '-'})
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-slate-400 truncate">
-                                Waris: {st.guardian1Name || 'Belum diisi'} · Tel:{' '}
-                                {st.guardian1Mobile || st.guardian2Mobile || 'Tiada'}
-                              </div>
-                            </button>
-
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => setEditingStudentId(isExpanded ? null : st.id)}
-                                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
-                              >
-                                <Edit3 className="w-3 h-3 text-amber-400" />
-                                <span>{isExpanded ? 'Tutup' : 'Edit & Kesihatan'}</span>
-                              </button>
-
-                              {waUrl ? (
-                                <a
-                                  href={waUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold flex items-center gap-1"
-                                  title="Hantar Peringatan WhatsApp kepada Ibu Bapa/Penjaga"
-                                >
-                                  <MessageSquare className="w-3 h-3" />
-                                  <span>WhatsApp Waris</span>
-                                </a>
-                              ) : (
-                                <span className="px-2 py-1 rounded-lg bg-slate-800/70 text-slate-500 text-[10px]">
-                                  Tiada No. WA
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          {isExpanded && (
-                            <div className="p-3 border-t border-slate-800 bg-slate-950/70 space-y-3 text-[11px]">
-                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                <div>
-                                  <label className="text-slate-400 font-bold">Nama Murid:</label>
-                                  <input
-                                    type="text"
-                                    value={st.name}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, { name: e.target.value })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-slate-400 font-bold">No. KP / MyKid:</label>
-                                  <input
-                                    type="text"
-                                    value={st.icNumber}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, { icNumber: e.target.value })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-slate-400 font-bold">Tahun / Kelas:</label>
-                                  <input
-                                    type="text"
-                                    value={st.className}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, { className: e.target.value })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-slate-400 font-bold">Nama Penjaga 1:</label>
-                                  <input
-                                    type="text"
-                                    value={st.guardian1Name}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, { guardian1Name: e.target.value })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-slate-400 font-bold">No. KP Penjaga 1:</label>
-                                  <input
-                                    type="text"
-                                    value={st.guardian1Ic}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, { guardian1Ic: e.target.value })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-slate-400 font-bold">No. Tel Penjaga 1:</label>
-                                  <input
-                                    type="text"
-                                    value={st.guardian1Mobile}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, {
-                                        guardian1Mobile: e.target.value,
-                                      })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-slate-400 font-bold">Nama Penjaga 2:</label>
-                                  <input
-                                    type="text"
-                                    value={st.guardian2Name}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, { guardian2Name: e.target.value })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-slate-400 font-bold">No. Tel Penjaga 2:</label>
-                                  <input
-                                    type="text"
-                                    value={st.guardian2Mobile}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, {
-                                        guardian2Mobile: e.target.value,
-                                      })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-slate-400 font-bold">Hubungan:</label>
-                                  <input
-                                    type="text"
-                                    value={st.guardian1Relation}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, {
-                                        guardian1Relation: e.target.value,
-                                      })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-slate-400 font-bold">Pekerjaan Penjaga 1:</label>
-                                  <input
-                                    type="text"
-                                    value={st.guardian1Occupation}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, {
-                                        guardian1Occupation: e.target.value,
-                                      })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
-                                  />
-                                </div>
-                                <div className="sm:col-span-2">
-                                  <label className="text-slate-400 font-bold">Alamat Kediaman:</label>
-                                  <input
-                                    type="text"
-                                    value={st.fullAddress}
-                                    onChange={(e) =>
-                                      updateStudentOverride(st.id, { fullAddress: e.target.value })
-                                    }
-                                    className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
-                                  />
-                                </div>
-                              </div>
-
-                              {/* Health Conditions (SPPK 2 & SPPK 3) */}
-                              <div className="pt-2 border-t border-slate-800 space-y-1.5">
-                                <div className="font-bold text-teal-300">
-                                  Sejarah Perubatan Murid (SPPK 2 — Tandakan jika PERNAH/MASIH):
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                  {(
-                                    [
-                                      ['asthma', 'asthmaNote', 'Asma / Lelah'],
-                                      ['allergy', 'allergyNote', 'Alahan (Ubat / Makanan)'],
-                                      ['heart', 'heartNote', 'Masalah Jantung'],
-                                      ['seizure', 'seizureNote', 'Sawan / Epilepsi'],
-                                      ['diabetes', 'diabetesNote', 'Diabetes / Kronik'],
-                                      ['other', 'otherNote', 'Kecederaan / Lain-lain'],
-                                    ] as const
-                                  ).map(([flagKey, noteKey, label]) => (
-                                    <div
-                                      key={flagKey}
-                                      className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1"
-                                    >
-                                      <label className="flex items-center gap-1.5 cursor-pointer shrink-0 text-slate-200">
-                                        <input
-                                          type="checkbox"
-                                          checked={st.health[flagKey]}
-                                          onChange={(e) =>
-                                            updateStudentHealth(st.id, {
-                                              [flagKey]: e.target.checked,
-                                            })
-                                          }
-                                          className="accent-rose-500"
-                                        />
-                                        <span>{label}</span>
-                                      </label>
-                                      <input
-                                        type="text"
-                                        value={st.health[noteKey]}
-                                        onChange={(e) =>
-                                          updateStudentHealth(st.id, {
-                                            [noteKey]: e.target.value,
-                                          })
-                                        }
-                                        placeholder="Catatan..."
-                                        className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-white"
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                                  <div>
-                                    <label className="text-[10px] text-slate-400 font-bold">
-                                      SPPK 3 — Jenis Sakit / Kecederaan (jika ada):
-                                    </label>
-                                    <input
-                                      type="text"
-                                      value={st.health.postIllness}
-                                      onChange={(e) =>
-                                        updateStudentHealth(st.id, {
-                                          postIllness: e.target.value,
-                                        })
-                                      }
-                                      placeholder="Kosongkan jika tiada (automatik diisi teks standard)"
-                                      className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[10px] text-white"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="text-[10px] text-slate-400 font-bold">
-                                      SPPK 3 — Jenis Rawatan / Tindakan:
-                                    </label>
-                                    <input
-                                      type="text"
-                                      value={st.health.postTreatment}
-                                      onChange={(e) =>
-                                        updateStudentHealth(st.id, {
-                                          postTreatment: e.target.value,
-                                        })
-                                      }
-                                      placeholder="Kosongkan jika tiada rawatan diperlukan"
-                                      className="mt-0.5 w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[10px] text-white"
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* PREVIEW TABS */}
-        <div className="print:hidden flex flex-wrap items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-2.5">
-          <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Form Filter Tabs */}
+          <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-1 text-xs font-bold">
             {(
               [
-                ['ALL', `Semua (3×${selectedStudentsResolved.length} Helaian JPN Sarawak)`],
-                ['SPPK1', `${sppk1Label} (${selectedStudentsResolved.length})`],
-                ['SPPK2', `${sppk2Label} (${selectedStudentsResolved.length})`],
-                ['SPPK3', `${sppk3Label} (${selectedStudentsResolved.length})`],
-                ['KENDERAAN', 'Kenderaan & Senarai Peserta (1)'],
-              ] as [PreviewTab, string][]
-            ).map(([tabKey, tabLabel]) => (
+                { id: 'ALL', label: 'Semua (SPPK 1-3)' },
+                { id: 'SPPK1', label: 'Borang SPPK 1' },
+                { id: 'SPPK2', label: 'Borang SPPK 2' },
+                { id: 'SPPK3', label: 'Borang SPPK 3' },
+              ] as const
+            ).map((tab) => (
               <button
-                key={tabKey}
+                key={tab.id}
                 type="button"
-                onClick={() => setPreviewTab(tabKey)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
-                  previewTab === tabKey
-                    ? 'bg-teal-600 text-white shadow'
-                    : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                onClick={() => setFormFilter(tab.id)}
+                className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                  formFilter === tab.id
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
                 }`}
               >
-                {tabLabel}
+                {tab.label}
               </button>
             ))}
           </div>
 
-          <div className="text-[11px] text-slate-400 font-bold px-2 flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Format Rasmi JPN Sarawak (SPPK 1, 2 &amp; 3)</span>
+          <button
+            type="button"
+            onClick={() => {
+              const res = downloadStandalonePrintHtml({
+                elementId: 'sppk-printable-bundle',
+                title: `Borang_SPPK_${programName || 'Program'}`,
+                orientation: 'portrait',
+              });
+              setStatusMsg(res.message);
+            }}
+            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 border border-teal-700/60 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            <span>Muat Turun (.html)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const res = triggerSmartPrint({
+                elementId: 'sppk-printable-bundle',
+                title: `Borang_SPPK_${programName || 'Program'}`,
+                orientation: 'portrait',
+              });
+              if (res.mode !== 'native') {
+                setStatusMsg(res.message);
+              }
+            }}
+            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase flex items-center gap-1.5 shadow cursor-pointer"
+          >
+            <Printer className="w-4 h-4" />
+            <span>
+              Cetak A4 ({activeParticipants.length} Set)
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white transition cursor-pointer"
+            title="Tutup"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {statusMsg && (
+        <div className="bg-indigo-950/90 border-b border-indigo-700 px-4 py-2 text-xs text-indigo-200 flex items-center justify-between print:hidden">
+          <span>{statusMsg}</span>
+          <button
+            type="button"
+            onClick={() => setStatusMsg(null)}
+            className="text-indigo-400 hover:text-white ml-4"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Main Split Workspace */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
+        {/* Left Control Sidebar (Hidden in Print) */}
+        <div className="lg:col-span-4 bg-slate-900/95 border-r border-slate-800 p-4 overflow-y-auto space-y-4 print:hidden">
+          {/* 1. Program Details */}
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-3.5 space-y-3">
+            <div className="text-xs font-black text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>1. Maklumat Program / Pertandingan</span>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                Nama Program / Aktiviti:
+              </label>
+              <input
+                type="text"
+                value={programName}
+                onChange={(e) => setProgramName(e.target.value.toUpperCase())}
+                placeholder="cth: KEJOHANAN MERENTAS DESA MSSR DAERAH DALAT"
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-bold outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                  Tarikh Mulai:
+                </label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                  Hingga Tarikh:
+                </label>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                Tempat Diadakan (di):
+              </label>
+              <input
+                type="text"
+                value={venue}
+                onChange={(e) => setVenue(e.target.value.toUpperCase())}
+                placeholder="cth: STADIUM MUKAH / SJK(C) CHUNG HUA BALINGIAN"
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                Nama &amp; Alamat Penuh Sekolah (SPPK 1):
+              </label>
+              <input
+                type="text"
+                value={schoolFullAddress}
+                onChange={(e) => setSchoolFullAddress(e.target.value.toUpperCase())}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                  Nama Guru Besar (Pilihan):
+                </label>
+                <input
+                  type="text"
+                  value={principalName}
+                  onChange={(e) => setPrincipalName(e.target.value.toUpperCase())}
+                  placeholder="Kosongkan jika tandatangan manual"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                  Tarikh Pengesahan:
+                </label>
+                <input
+                  type="text"
+                  value={tarikhPengesahan}
+                  onChange={(e) => setTarikhPengesahan(e.target.value)}
+                  placeholder="cth: 16/11/2026"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500"
+                />
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer pt-1">
+              <input
+                type="checkbox"
+                checked={preTickMedicalNo}
+                onChange={(e) => setPreTickMedicalNo(e.target.checked)}
+                className="rounded border-slate-600"
+              />
+              <span>Pra-tandakan &quot;/&quot; pada ruangan &quot;Tidak&quot; dalam jadual SPPK 2</span>
+            </label>
           </div>
+
+          {/* 2. Student Multi-Selector & Penjaga Utama / Kedua Switcher */}
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-3.5 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-black text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5" />
+                <span>2. Pilih Peserta ({selectedIds.length} Murid)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedIds(
+                      filteredStudents.map((s) =>
+                        String(s.student_id || s.id)
+                      )
+                    )
+                  }
+                  className="text-[10px] font-bold px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                >
+                  Pilih Semua
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds([])}
+                  className="text-[10px] font-bold px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 cursor-pointer"
+                  title="Kosongkan untuk cetak Borang SPPK Kosong"
+                >
+                  Borang Kosong
+                </button>
+              </div>
+            </div>
+
+            {/* Global Penjaga 1 (Utama) vs Penjaga 2 Switcher */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-2 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-300">
+                <UserCheck className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Data APDM Ibu Bapa:</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => switchAllGuardiansSlot('G1')}
+                  className="px-2 py-1 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white border border-indigo-500/40 text-[10px] font-bold cursor-pointer"
+                  title="Gunakan Penjaga 1 (Penjaga Utama / Bapa) untuk semua murid"
+                >
+                  Penjaga 1 (Utama)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchAllGuardiansSlot('G2')}
+                  className="px-2 py-1 rounded-lg bg-purple-600/25 hover:bg-purple-600 text-purple-200 hover:text-white border border-purple-500/40 text-[10px] font-bold cursor-pointer"
+                  title="Gunakan Penjaga 2 (Ibu / Penjaga Kedua) untuk semua murid"
+                >
+                  Penjaga 2 (Ibu)
+                </button>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Cari nama murid / No. KP / nama penjaga..."
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-8 pr-2.5 py-1.5 text-xs text-white outline-none focus:border-emerald-500"
+                />
+              </div>
+              <select
+                value={classFilter}
+                onChange={(e) => setClassFilter(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-white font-bold outline-none"
+              >
+                <option value="ALL">Semua Kelas</option>
+                {availableClasses.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="max-h-56 overflow-y-auto divide-y divide-slate-800/60 border border-slate-800 rounded-xl bg-slate-900/50">
+              {filteredStudents.length === 0 ? (
+                <div className="p-4 text-center text-xs text-slate-500">
+                  Tiada murid ditemui. Anda masih boleh mencetak borang SPPK kosong.
+                </div>
+              ) : (
+                filteredStudents.map((s, idx) => {
+                  const sid = String(s.student_id || s.id);
+                  const checked = selectedIds.includes(sid);
+                  const ov = overrides[sid];
+                  const hasG2 = Boolean(
+                    ov?.guardian2?.name && String(ov.guardian2.name).trim() !== '-'
+                  );
+
+                  return (
+                    <div
+                      key={`${sid}_${idx}`}
+                      className={`p-2 flex items-center justify-between gap-2 text-xs transition ${
+                        checked ? 'bg-indigo-950/40' : 'hover:bg-slate-900'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleStudent(sid)}
+                        className="flex items-center gap-2 text-left flex-1 min-w-0 cursor-pointer"
+                      >
+                        {checked ? (
+                          <CheckSquare className="w-4 h-4 text-emerald-400 shrink-0" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-600 shrink-0" />
+                        )}
+                        <div className="truncate">
+                          <div className="font-bold text-white truncate">
+                            {s.name}
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-mono truncate">
+                            {ov?.className || '-'} · KP: {ov?.studentIc || 'Tiada'}
+                          </div>
+                          <div className="text-[10px] text-emerald-300/90 font-mono truncate">
+                            Penjaga ({ov?.selectedGuardianSlot === 'G2' ? 'P2' : 'P1 Utama'}):{' '}
+                            {ov?.parentName || 'Tiada Rekod APDM'}{' '}
+                            {ov?.parentIc ? `(${ov.parentIc})` : ''}
+                          </div>
+                        </div>
+                      </button>
+
+                      {checked && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          {hasG2 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                switchStudentGuardianSlot(
+                                  sid,
+                                  ov?.selectedGuardianSlot === 'G1' ? 'G2' : 'G1'
+                                )
+                              }
+                              className="px-1.5 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600 text-[10px] font-bold text-indigo-300 hover:text-white border border-slate-700 cursor-pointer"
+                              title="Tukar antara Penjaga 1 (Utama) & Penjaga 2 (Ibu/Bapa)"
+                            >
+                              {ov?.selectedGuardianSlot === 'G2' ? 'P2' : 'P1'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditingStudentId(
+                                editingStudentId === sid ? null : sid
+                              )
+                            }
+                            className={`p-1.5 rounded-lg border text-[10px] font-bold flex items-center gap-1 cursor-pointer ${
+                              editingStudentId === sid
+                                ? 'bg-amber-500 text-slate-950 border-amber-400'
+                                : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                            }`}
+                            title="Kemaskini Maklumat Ibu Bapa / Murid"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* 3. Individual Participant Editor (When Edit Clicked) */}
+          {editingStudentId && overrides[editingStudentId] && (
+            <div className="bg-slate-950 border border-amber-500/40 rounded-2xl p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-amber-300 uppercase">
+                  Kemaskini Peserta: {overrides[editingStudentId].studentName}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setEditingStudentId(null)}
+                  className="text-xs text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <Check className="w-4 h-4 text-emerald-400" />
+                </button>
+              </div>
+
+              {/* Quick Switcher between Penjaga 1 & Penjaga 2 inside Edit Drawer */}
+              {(overrides[editingStudentId].guardian1?.name ||
+                overrides[editingStudentId].guardian2?.name) && (
+                <div className="grid grid-cols-2 gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => switchStudentGuardianSlot(editingStudentId, 'G1')}
+                    className={`p-2 rounded-xl border text-left text-[10px] cursor-pointer transition ${
+                      overrides[editingStudentId].selectedGuardianSlot === 'G1'
+                        ? 'bg-indigo-600/30 border-indigo-400 text-white font-bold'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <div className="uppercase text-[9px] text-indigo-300 font-black">
+                      Penjaga 1 (Utama)
+                    </div>
+                    <div className="truncate">
+                      {overrides[editingStudentId].guardian1?.name || '-'}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchStudentGuardianSlot(editingStudentId, 'G2')}
+                    className={`p-2 rounded-xl border text-left text-[10px] cursor-pointer transition ${
+                      overrides[editingStudentId].selectedGuardianSlot === 'G2'
+                        ? 'bg-purple-600/30 border-purple-400 text-white font-bold'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <div className="uppercase text-[9px] text-purple-300 font-black">
+                      Penjaga 2 (Kedua)
+                    </div>
+                    <div className="truncate">
+                      {overrides[editingStudentId].guardian2?.name || '-'}
+                    </div>
+                  </button>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 block">
+                    Nama Ibu Bapa / Penjaga:
+                  </label>
+                  <input
+                    type="text"
+                    value={overrides[editingStudentId].parentName}
+                    onChange={(e) =>
+                      updateOverrideField(
+                        editingStudentId,
+                        'parentName',
+                        e.target.value.toUpperCase()
+                      )
+                    }
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 block">
+                    No. KP Ibu Bapa / Penjaga:
+                  </label>
+                  <input
+                    type="text"
+                    value={overrides[editingStudentId].parentIc}
+                    onChange={(e) =>
+                      updateOverrideField(
+                        editingStudentId,
+                        'parentIc',
+                        e.target.value
+                      )
+                    }
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 block">
+                    Pekerjaan Ibu Bapa:
+                  </label>
+                  <input
+                    type="text"
+                    value={overrides[editingStudentId].parentOccupation}
+                    onChange={(e) =>
+                      updateOverrideField(
+                        editingStudentId,
+                        'parentOccupation',
+                        e.target.value.toUpperCase()
+                      )
+                    }
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 block">
+                    Hubungan:
+                  </label>
+                  <input
+                    type="text"
+                    value={overrides[editingStudentId].relationship}
+                    onChange={(e) =>
+                      updateOverrideField(
+                        editingStudentId,
+                        'relationship',
+                        e.target.value.toUpperCase()
+                      )
+                    }
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] text-slate-400 block">
+                    Alamat Penuh Rumah:
+                  </label>
+                  <input
+                    type="text"
+                    value={overrides[editingStudentId].homeAddress}
+                    onChange={(e) =>
+                      updateOverrideField(
+                        editingStudentId,
+                        'homeAddress',
+                        e.target.value.toUpperCase()
+                      )
+                    }
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 block">
+                    No. Tel Bimbit [HP]:
+                  </label>
+                  <input
+                    type="text"
+                    value={overrides[editingStudentId].mobilePhone}
+                    onChange={(e) =>
+                      updateOverrideField(
+                        editingStudentId,
+                        'mobilePhone',
+                        e.target.value
+                      )
+                    }
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 block">
+                    No. Tel Pejabat:
+                  </label>
+                  <input
+                    type="text"
+                    value={overrides[editingStudentId].officePhone}
+                    onChange={(e) =>
+                      updateOverrideField(
+                        editingStudentId,
+                        'officePhone',
+                        e.target.value
+                      )
+                    }
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* ===================================================================== */}
-        {/* PRINTABLE A4 BATCH DOCUMENT AREA (JPN SARAWAK SPPK 1, 2 & 3)          */}
-        {/* ===================================================================== */}
-        <div
-          id="sppk-batch-print-sheet"
-          className="space-y-6 print:space-y-0 print-portrait-sheet"
-        >
-          {selectedStudentsResolved.map((st, idx) => (
-            <React.Fragment key={`student_pack_${st.id}_${idx}`}>
-              {/* ---------------- BORANG SPPK 1 (7-ROW DECLARATION + CAP SEKOLAH) ---------------- */}
-              {showSppk1 && (
-                <div className="print-portrait-page bg-white text-black max-w-[794px] mx-auto rounded-2xl shadow-2xl border border-slate-300 p-7 sm:p-9 text-[11px] leading-snug print:rounded-none print:shadow-none print:border-none print:p-4">
-                  {/* JPN Sarawak Header */}
-                  <div className="flex items-start justify-between gap-3 border-b-2 border-black pb-2.5 mb-3">
-                    <div className="flex items-center gap-3">
-                      {/* Jata Negara / KPM Official Emblem SVG */}
-                      <div className="w-12 h-12 flex items-center justify-center shrink-0 border border-slate-300 rounded-lg p-1 bg-white">
-                        <svg viewBox="0 0 64 64" className="w-full h-full" aria-label="Jata Negara">
-                          <circle cx="32" cy="18" r="7" fill="#FACC15" stroke="#0F172A" strokeWidth="1.5" />
-                          <path d="M18 26 L46 26 L43 46 L32 54 L21 46 Z" fill="#0F172A" stroke="#FACC15" strokeWidth="2" />
-                          <path d="M23 30 L41 30 L39 44 L32 49 L25 44 Z" fill="#DC2626" />
-                          <rect x="28" y="31" width="8" height="14" fill="#FFFFFF" />
-                          <path d="M10 48 Q32 58 54 48" fill="none" stroke="#FACC15" strokeWidth="3" />
-                        </svg>
+        {/* Right Live A4 Preview Pane */}
+        <div className="lg:col-span-8 bg-slate-800/90 overflow-y-auto p-4 sm:p-8 flex justify-center">
+          <div id="sppk-printable-bundle" className="space-y-8 print:space-y-0">
+            {activeParticipants.map((p, pIdx) => {
+              const showSppk1 = formFilter === 'ALL' || formFilter === 'SPPK1';
+              const showSppk2 = formFilter === 'ALL' || formFilter === 'SPPK2';
+              const showSppk3 = formFilter === 'ALL' || formFilter === 'SPPK3';
+
+              return (
+                <React.Fragment key={`${p.studentId}_${pIdx}`}>
+                  {/* =====================================================================
+                      PAGE 1: BORANG SPPK 1 (100% EXACT MATCH TO OFFICIAL JPNS PDF)
+                     ===================================================================== */}
+                  {showSppk1 && (
+                    <div
+                      className="print-page-break bg-white text-black shadow-2xl mx-auto"
+                      style={{
+                        width: '210mm',
+                        minHeight: '297mm',
+                        padding: '12mm 18mm 12mm 18mm',
+                        boxSizing: 'border-box',
+                        fontFamily: 'Arial, Helvetica, sans-serif',
+                        fontSize: '10.5pt',
+                        lineHeight: 1.32,
+                        color: '#000000',
+                        backgroundColor: '#ffffff',
+                      }}
+                    >
+                      <OfficialHeader formCode="Borang SPPK 1" />
+
+                      {/* Main Title */}
+                      <div
+                        style={{
+                          textAlign: 'center',
+                          fontWeight: 'bold',
+                          textDecoration: 'underline',
+                          fontSize: '11.5pt',
+                          marginBottom: '4px',
+                        }}
+                      >
+                        BORANG AKUAN/KEBENARAN IBU BAPA/ PENJAGA
                       </div>
-                      <SchoolLogo
-                        src={effectiveSchoolLogo}
-                        schoolCode={activeSchoolCode}
-                        className="w-11 h-11 bg-white border-slate-300 shrink-0"
-                      />
-                      <div>
-                        <div className="text-[11px] font-black uppercase tracking-wider leading-tight">
-                          KEMENTERIAN PENDIDIKAN MALAYSIA
-                        </div>
-                        <div className="text-[11px] font-black uppercase tracking-wide text-slate-800 leading-tight">
-                          JABATAN PENDIDIKAN NEGERI SARAWAK
-                        </div>
-                        <div className="text-[10px] font-bold uppercase text-slate-700 mt-0.5">
-                          {effectiveSchoolName} ({activeSchoolCode})
-                        </div>
-                      </div>
-                    </div>
-                    <div className="border-2 border-black px-3 py-1 text-xs font-black uppercase tracking-wider shrink-0">
-                      {sppk1Label}
-                    </div>
-                  </div>
 
-                  <div className="text-center mb-3">
-                    <h1 className="text-xs font-black uppercase underline underline-offset-4 tracking-wide">
-                      BORANG KEBENARAN IBU BAPA / PENJAGA MENYERTAI PROGRAM / AKTIVITI
-                    </h1>
-                  </div>
-
-                  {/* Exact 7-Row Bordered Declaration Box */}
-                  <table className="w-full border-collapse border-2 border-black text-[11px] mb-4">
-                    <tbody>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100 w-44">
-                          1. Nama Program / Pertandingan
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5 font-bold uppercase" colSpan={3}>
-                          {programName || '-'}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100">
-                          2. Penganjur &amp; Peringkat
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5" colSpan={3}>
-                          {organizer || '-'} · Peringkat: <strong>{level || '-'}</strong>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100">
-                          3. Tarikh &amp; Masa
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5">
-                          {formattedDateRange}
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100 w-24">
-                          Masa
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5">{masa || '-'}</td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100">
-                          4. Tempat &amp; Guru Pengiring
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5" colSpan={3}>
-                          <strong>Tempat:</strong> {venue || '-'} · <strong>Guru Pengiring:</strong>{' '}
-                          {selectedTeacherName || '-'} ({teacherPhone || '-'})
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100">
-                          5. Maklumat Murid
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5" colSpan={3}>
-                          <div>
-                            <strong>Nama:</strong> <span className="uppercase">{st.name}</span> ·{' '}
-                            <strong>Tahun/Kelas:</strong> {st.className || '-'}
-                          </div>
-                          <div>
-                            <strong>No. KP / MyKid:</strong> <span className="font-mono">{st.icNumber || '-'}</span> ·{' '}
-                            <strong>Tarikh Lahir:</strong> {st.birthDate || '-'} ({st.age || '-'}) ·{' '}
-                            <strong>Jantina:</strong> {st.gender || '-'}
-                          </div>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100">
-                          6. Maklumat Ibu Bapa / Penjaga
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5" colSpan={3}>
-                          <div>
-                            <strong>Nama:</strong> <span className="uppercase">{st.guardian1Name || '........................................'}</span>{' '}
-                            ({st.guardian1Relation || 'Penjaga'}) · <strong>No. KP:</strong>{' '}
-                            <span className="font-mono">{st.guardian1Ic || '....................'}</span>
-                          </div>
-                          <div>
-                            <strong>Pekerjaan:</strong> {st.guardian1Occupation || '....................'} ·{' '}
-                            <strong>Tel Bimbit:</strong> <span className="font-mono">{st.guardian1Mobile || '-'}</span>
-                            {st.guardian1Office ? ` / Pej: ${st.guardian1Office}` : ''}
-                          </div>
-                          <div>
-                            <strong>Alamat:</strong> {st.fullAddress || '................................................................'}
-                          </div>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-2 font-bold bg-slate-100 align-top">
-                          7. Akuan Kebenaran &amp; Keizinan Rawatan
-                        </td>
-                        <td className="border border-black px-2.5 py-2 text-justify space-y-1.5 text-[10.5px]" colSpan={3}>
-                          <p>
-                            Saya seperti nama dan maklumat di atas dengan ini <strong>MEMBENARKAN</strong> anak / jagaan saya menyertai program/pertandingan tersebut. Saya sedia maklum bahawa pihak sekolah dan Jabatan Pendidikan Negeri Sarawak akan mengambil segala langkah keselamatan yang sewajarnya.
-                          </p>
-                          <p>
-                            Saya juga memberi kebenaran kepada pihak sekolah / Guru Pengiring untuk mendapatkan rawatan kecemasan / pembedahan bagi anak / jagaan saya sekiranya berlaku kecemasan dan saya tidak dapat dihubungi dengan serta-merta.
-                          </p>
-                          <div className="grid grid-cols-2 gap-6 pt-4">
-                            <div>
-                              <div className="h-8 border-b border-black" />
-                              <div className="mt-1 font-bold">Tandatangan Ibu Bapa / Penjaga</div>
-                              <div>Nama: {st.guardian1Name || '....................................'}</div>
-                            </div>
-                            <div className="pt-5 space-y-1">
-                              <div><strong>No. KP:</strong> {st.guardian1Ic || '............................'}</div>
-                              <div><strong>Tarikh:</strong> ....................................</div>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  {/* Bottom Pengesahan Pihak Sekolah + Double-Circle Cap Sekolah */}
-                  <div className="border border-black p-3 flex items-center justify-between gap-6">
-                    <div className="flex-1 space-y-3 text-[10.5px]">
-                      <div className="font-black uppercase underline underline-offset-2">
-                        PENGESAHAN PIHAK SEKOLAH
-                      </div>
-                      <p>
-                        Adalah disahkan bahawa murid di atas adalah murid berdaftar di{' '}
-                        <strong>{effectiveSchoolName}</strong> dan mendapat kelulusan pihak sekolah untuk menyertai program di atas.
-                      </p>
-                      <div className="grid grid-cols-2 gap-6 pt-3">
-                        <div>
-                          <div className="h-8 border-b border-black" />
-                          <div className="font-bold mt-1">Tandatangan Guru Besar / PK</div>
-                          <div>Nama: {guruBesarName || '....................................'}</div>
-                        </div>
-                        <div className="pt-6">
-                          <div><strong>Tarikh:</strong> ....................................</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Double-Circle Cap Sekolah */}
-                    <div className="w-28 h-28 rounded-full border-2 border-dashed border-slate-700 flex items-center justify-center p-1 shrink-0">
-                      <div className="w-full h-full rounded-full border border-slate-700 flex flex-col items-center justify-center text-center px-1.5">
-                        <span className="text-[7px] font-black uppercase leading-tight">
-                          CAP RASMI SEKOLAH
-                        </span>
-                        <span className="text-[7px] font-bold uppercase text-slate-600 leading-tight mt-0.5 line-clamp-2">
-                          {effectiveSchoolName}
-                        </span>
-                        <span className="text-[8px] font-mono font-black mt-0.5">
-                          {activeSchoolCode}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ---------------- BORANG SPPK 2 (JPN SARAWAK: SEBELUM PROGRAM + 6x6 SEJARAH PERUBATAN) ---------------- */}
-              {showSppk2 && (
-                <div className="print-portrait-page bg-white text-black max-w-[794px] mx-auto rounded-2xl shadow-2xl border border-slate-300 p-7 sm:p-9 text-[11px] leading-snug print:rounded-none print:shadow-none print:border-none print:p-4">
-                  {/* JPN Sarawak Header */}
-                  <div className="flex items-start justify-between gap-3 border-b-2 border-black pb-2.5 mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-11 h-11 flex items-center justify-center shrink-0 border border-slate-300 rounded-lg p-1 bg-white">
-                        <svg viewBox="0 0 64 64" className="w-full h-full" aria-label="Jata Negara">
-                          <circle cx="32" cy="18" r="7" fill="#FACC15" stroke="#0F172A" strokeWidth="1.5" />
-                          <path d="M18 26 L46 26 L43 46 L32 54 L21 46 Z" fill="#0F172A" stroke="#FACC15" strokeWidth="2" />
-                          <path d="M23 30 L41 30 L39 44 L32 49 L25 44 Z" fill="#DC2626" />
-                          <rect x="28" y="31" width="8" height="14" fill="#FFFFFF" />
-                          <path d="M10 48 Q32 58 54 48" fill="none" stroke="#FACC15" strokeWidth="3" />
-                        </svg>
-                      </div>
-                      <SchoolLogo
-                        src={effectiveSchoolLogo}
-                        schoolCode={activeSchoolCode}
-                        className="w-10 h-10 bg-white border-slate-300 shrink-0"
-                      />
-                      <div>
-                        <div className="text-[11px] font-black uppercase tracking-wider leading-tight">
-                          KEMENTERIAN PENDIDIKAN MALAYSIA · JABATAN PENDIDIKAN NEGERI SARAWAK
-                        </div>
-                        <div className="text-[10px] font-bold uppercase text-slate-700">
-                          {effectiveSchoolName} ({activeSchoolCode})
-                        </div>
-                      </div>
-                    </div>
-                    <div className="border-2 border-black px-3 py-1 text-xs font-black uppercase tracking-wider shrink-0">
-                      {sppk2Label}
-                    </div>
-                  </div>
-
-                  <div className="text-center mb-3">
-                    <h1 className="text-xs font-black uppercase underline underline-offset-4">
-                      BORANG DEKLARASI PESERTA SEBELUM PROGRAM
-                    </h1>
-                  </div>
-
-                  {/* Maklumat Peserta & Program */}
-                  <table className="w-full border-collapse border border-black mb-3 text-[10.5px]">
-                    <tbody>
-                      <tr>
-                        <td className="border border-black px-2 py-1 font-bold bg-slate-100 w-36">
-                          Nama Peserta
-                        </td>
-                        <td className="border border-black px-2 py-1 font-bold uppercase" colSpan={3}>
-                          {st.name}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2 py-1 font-bold bg-slate-100">
-                          No. KP / MyKid
-                        </td>
-                        <td className="border border-black px-2 py-1 font-mono">{st.icNumber || '-'}</td>
-                        <td className="border border-black px-2 py-1 font-bold bg-slate-100 w-28">
-                          Tahun / Kelas
-                        </td>
-                        <td className="border border-black px-2 py-1 font-bold">{st.className || '-'}</td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2 py-1 font-bold bg-slate-100">
-                          Tarikh Lahir / Jantina
-                        </td>
-                        <td className="border border-black px-2 py-1">
-                          {st.birthDate || '-'} {st.age ? `(${st.age})` : ''} · {st.gender || '-'}
-                        </td>
-                        <td className="border border-black px-2 py-1 font-bold bg-slate-100">
-                          Nama Program
-                        </td>
-                        <td className="border border-black px-2 py-1 font-bold uppercase">{programName || '-'}</td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2 py-1 font-bold bg-slate-100">
-                          Tarikh / Tempat
-                        </td>
-                        <td className="border border-black px-2 py-1" colSpan={3}>
-                          {formattedDateRange} · {venue || '-'}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2 py-1 font-bold bg-slate-100">
-                          Waris Kecemasan
-                        </td>
-                        <td className="border border-black px-2 py-1" colSpan={3}>
-                          <strong>1.</strong> {st.guardian1Name || '-'} ({st.guardian1Relation || 'Penjaga'}) · Tel:{' '}
-                          <span className="font-mono">{st.guardian1Mobile || '-'}</span>
-                          {st.guardian2Name ? `  |  2. ${st.guardian2Name} (${st.guardian2Mobile || '-'})` : ''}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  {/* Exact 6-row x 6-column SEJARAH PERUBATAN Table */}
-                  <div className="mb-3">
-                    <div className="font-black uppercase bg-slate-200 px-2 py-1 border border-black border-b-0 text-[10.5px]">
-                      SEJARAH PERUBATAN (TANDAKAN [✓] PADA RUANGAN BERKENAAN)
-                    </div>
-                    <table className="w-full border-collapse border border-black text-[10px]">
-                      <thead>
-                        <tr className="bg-slate-100">
-                          <th className="border border-black px-1.5 py-1.5 text-center w-8">Bil</th>
-                          <th className="border border-black px-2 py-1.5 text-left">
-                            Jenis Penyakit / Sejarah Perubatan
-                          </th>
-                          <th className="border border-black px-1.5 py-1.5 text-center w-24">
-                            Pernah Menghidap (Ya / Tidak)
-                          </th>
-                          <th className="border border-black px-1.5 py-1.5 text-center w-24">
-                            Masih Menghidap (Ya / Tidak)
-                          </th>
-                          <th className="border border-black px-1.5 py-1.5 text-center w-20">
-                            Tahun / Tempoh
-                          </th>
-                          <th className="border border-black px-2 py-1.5 text-left w-36">
-                            Catatan / Ubat-ubatan
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(
-                          [
-                            ['1', 'Asma / Lelah / Masalah Pernafasan', st.health.asthma, st.health.asthmaNote],
-                            ['2', 'Alahan (Ubat-ubatan / Makanan / Lain-lain)', st.health.allergy, st.health.allergyNote],
-                            ['3', 'Masalah Jantung / Tekanan Darah Tinggi', st.health.heart, st.health.heartNote],
-                            ['4', 'Sawan / Epilepsi / Kerap Pengsan', st.health.seizure, st.health.seizureNote],
-                            ['5', 'Kencing Manis (Diabetes) / Penyakit Kronik', st.health.diabetes, st.health.diabetesNote],
-                            ['6', 'Kecederaan Fizikal / Pembedahan Terkini', st.health.other, st.health.otherNote],
-                          ] as [string, string, boolean, string][]
-                        ).map(([no, title, hasCond, note]) => (
-                          <tr key={no}>
-                            <td className="border border-black px-1.5 py-2 text-center font-bold">{no}</td>
-                            <td className="border border-black px-2 py-2">{title}</td>
-                            <td className="border border-black px-1.5 py-2 text-center font-bold">
-                              {hasCond ? '[✓] Ya  [ ] Tidak' : '[ ] Ya  [✓] Tidak'}
-                            </td>
-                            <td className="border border-black px-1.5 py-2 text-center font-bold">
-                              {hasCond ? '[✓] Ya  [ ] Tidak' : '[ ] Ya  [✓] Tidak'}
-                            </td>
-                            <td className="border border-black px-1.5 py-2 text-center">
-                              {hasCond ? 'Aktif' : '-'}
-                            </td>
-                            <td className="border border-black px-2 py-2">{note || '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Pengesahan Kesihatan Sebelum Program */}
-                  <div className="border border-black p-3 space-y-3 text-[10.5px]">
-                    <p className="text-justify">
-                      Saya mengesahkan bahawa anak / jagaan saya berada dalam keadaan sihat secara fizikal dan mental sebelum menyertai program ini dan segala deklarasi sejarah perubatan di atas adalah benar.
-                    </p>
-                    <div className="grid grid-cols-2 gap-8 pt-2">
-                      <div>
-                        <div className="h-9 border-b border-black" />
-                        <div className="mt-1 font-bold">Tandatangan Ibu Bapa / Penjaga</div>
-                        <div>Nama: {st.guardian1Name || '........................................'}</div>
-                      </div>
-                      <div className="space-y-1 pt-3">
-                        <div><strong>No. KP:</strong> {st.guardian1Ic || '........................................'}</div>
-                        <div><strong>Tarikh:</strong> ........................................</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ---------------- BORANG SPPK 3 (JPN SARAWAK: SELEPAS PROGRAM — 2-COL SAKIT/RAWATAN) ---------------- */}
-              {showSppk3 && (
-                <div className="print-portrait-page bg-white text-black max-w-[794px] mx-auto rounded-2xl shadow-2xl border border-slate-300 p-7 sm:p-9 text-[11px] leading-snug print:rounded-none print:shadow-none print:border-none print:p-4">
-                  {/* JPN Sarawak Header */}
-                  <div className="flex items-start justify-between gap-3 border-b-2 border-black pb-2.5 mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-11 h-11 flex items-center justify-center shrink-0 border border-slate-300 rounded-lg p-1 bg-white">
-                        <svg viewBox="0 0 64 64" className="w-full h-full" aria-label="Jata Negara">
-                          <circle cx="32" cy="18" r="7" fill="#FACC15" stroke="#0F172A" strokeWidth="1.5" />
-                          <path d="M18 26 L46 26 L43 46 L32 54 L21 46 Z" fill="#0F172A" stroke="#FACC15" strokeWidth="2" />
-                          <path d="M23 30 L41 30 L39 44 L32 49 L25 44 Z" fill="#DC2626" />
-                          <rect x="28" y="31" width="8" height="14" fill="#FFFFFF" />
-                          <path d="M10 48 Q32 58 54 48" fill="none" stroke="#FACC15" strokeWidth="3" />
-                        </svg>
-                      </div>
-                      <SchoolLogo
-                        src={effectiveSchoolLogo}
-                        schoolCode={activeSchoolCode}
-                        className="w-10 h-10 bg-white border-slate-300 shrink-0"
-                      />
-                      <div>
-                        <div className="text-[11px] font-black uppercase tracking-wider leading-tight">
-                          KEMENTERIAN PENDIDIKAN MALAYSIA · JABATAN PENDIDIKAN NEGERI SARAWAK
-                        </div>
-                        <div className="text-[10px] font-bold uppercase text-slate-700">
-                          {effectiveSchoolName} ({activeSchoolCode})
-                        </div>
-                      </div>
-                    </div>
-                    <div className="border-2 border-black px-3 py-1 text-xs font-black uppercase tracking-wider shrink-0">
-                      {sppk3Label}
-                    </div>
-                  </div>
-
-                  <div className="text-center mb-4">
-                    <h1 className="text-xs font-black uppercase underline underline-offset-4">
-                      BORANG DEKLARASI PESERTA SELEPAS PROGRAM
-                    </h1>
-                  </div>
-
-                  <table className="w-full border-collapse border border-black mb-4 text-[10.5px]">
-                    <tbody>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100 w-40">
-                          Nama Peserta
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5 font-bold uppercase" colSpan={3}>
-                          {st.name}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100">
-                          No. KP / MyKid
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5 font-mono">{st.icNumber || '-'}</td>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100 w-28">
-                          Tahun / Kelas
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5 font-bold">{st.className || '-'}</td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100">
-                          Nama Program
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5 font-bold uppercase" colSpan={3}>
-                          {programName || '-'}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100">
-                          Tarikh &amp; Tempat
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5" colSpan={3}>
-                          {formattedDateRange} · {venue || '-'}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black px-2.5 py-1.5 font-bold bg-slate-100">
-                          Guru Pengiring
-                        </td>
-                        <td className="border border-black px-2.5 py-1.5" colSpan={3}>
-                          {selectedTeacherName || '-'} ({teacherPhone || '-'})
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  {/* Exact 2-Column JENIS SAKIT / KECEDERAAN | JENIS RAWATAN Table */}
-                  <div className="mb-4">
-                    <div className="font-black uppercase bg-slate-200 px-2.5 py-1.5 border border-black border-b-0 text-[10.5px]">
-                      REKOD KESIHATAN / KECEDERAAN PESERTA SEMASA &amp; SELEPAS PROGRAM
-                    </div>
-                    <table className="w-full border-collapse border-2 border-black text-[11px]">
-                      <thead>
-                        <tr className="bg-slate-100">
-                          <th className="border border-black px-3 py-2 text-left w-1/2 font-black uppercase">
-                            JENIS SAKIT / KECEDERAAN
-                          </th>
-                          <th className="border border-black px-3 py-2 text-left w-1/2 font-black uppercase">
-                            JENIS RAWATAN / TINDAKAN YANG DIBERIKAN
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr>
-                          <td className="border border-black px-3 py-4 align-top h-24">
-                            {st.health.postIllness || 'Tiada sakit / kecederaan dilaporkan sepanjang program.'}
-                          </td>
-                          <td className="border border-black px-3 py-4 align-top h-24">
-                            {st.health.postTreatment || 'Tiada rawatan diperlukan. Murid berada dalam keadaan sihat.'}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td className="border border-black px-3 py-4 align-top h-16 text-slate-400">
-                            &nbsp;
-                          </td>
-                          <td className="border border-black px-3 py-4 align-top h-16 text-slate-400">
-                            &nbsp;
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Status Pengakuan Selepas Program */}
-                  <div className="border border-black p-3 space-y-4 text-[10.5px]">
-                    <div className="font-bold">
-                      Status Kesihatan Peserta Selepas Tamat Program:{' '}
-                      <span className="ml-2">[ &nbsp; ] SIHAT &amp; SELAMAT</span>
-                      <span className="ml-4">[ &nbsp; ] MEMERLUKAN PEMANTAUAN / RAWATAN LANJUT</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-8 pt-2">
-                      <div>
-                        <div className="h-10 border-b border-black" />
-                        <div className="mt-1 font-bold">Tandatangan Guru Pengiring</div>
-                        <div>Nama: {selectedTeacherName || '........................................'}</div>
-                        <div>Tarikh &amp; Masa: ........................................</div>
-                      </div>
-                      <div>
-                        <div className="h-10 border-b border-black" />
-                        <div className="mt-1 font-bold">Tandatangan Ibu Bapa / Penjaga (Terima Murid)</div>
-                        <div>Nama: {st.guardian1Name || '........................................'}</div>
-                        <div>Tarikh &amp; Masa: ........................................</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </React.Fragment>
-          ))}
-
-          {/* ---------------- BONUS TAB: LAMPIRAN KENDERAAN & SENARAI RASMI PESERTA ---------------- */}
-          {showKenderaan && (
-            <div className="print-portrait-page bg-white text-black max-w-[794px] mx-auto rounded-2xl shadow-2xl border border-slate-300 p-8 sm:p-10 text-[11px] leading-snug print:rounded-none print:shadow-none print:border-none print:p-4">
-              {/* Header */}
-              <div className="flex items-start justify-between gap-4 border-b-2 border-black pb-2.5 mb-3">
-                <div className="flex items-center gap-3">
-                  <SchoolLogo
-                    src={effectiveSchoolLogo}
-                    schoolCode={activeSchoolCode}
-                    className="w-12 h-12 bg-white border-slate-300 shrink-0"
-                  />
-                  <div>
-                    <div className="text-sm font-black uppercase">{effectiveSchoolName}</div>
-                    <div className="text-[10px] text-slate-700 font-semibold">
-                      Kod Sekolah: {activeSchoolCode}
-                      {effectiveSchoolAddress ? ` · ${effectiveSchoolAddress}` : ''}
-                    </div>
-                  </div>
-                </div>
-                <div className="border-2 border-black px-3 py-1 text-xs font-black uppercase tracking-wider shrink-0">
-                  {sppk3Label}
-                </div>
-              </div>
-
-              <div className="text-center mb-3">
-                <h1 className="text-sm font-black uppercase underline underline-offset-4">
-                  BORANG KEBENARAN MENGGUNAKAN KENDERAAN SENDIRI GURU PENGIRING &amp; SENARAI RASMI PESERTA
-                </h1>
-              </div>
-
-              {/* Seksyen A: Teacher & Vehicle */}
-              <div className="mb-3">
-                <div className="font-black uppercase bg-slate-200 px-2 py-1 border border-black border-b-0">
-                  A. MAKLUMAT GURU PENGIRING &amp; KENDERAAN
-                </div>
-                <table className="w-full border-collapse border border-black">
-                  <tbody>
-                    <tr>
-                      <td className="border border-black px-2 py-1 font-bold w-44 bg-slate-50">
-                        Nama Guru Pengiring
-                      </td>
-                      <td className="border border-black px-2 py-1 font-bold uppercase" colSpan={3}>
-                        {selectedTeacherName || '-'}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="border border-black px-2 py-1 font-bold bg-slate-50">
-                        No. Kad Pengenalan
-                      </td>
-                      <td className="border border-black px-2 py-1 font-mono">
-                        {teacherIc || '-'}
-                      </td>
-                      <td className="border border-black px-2 py-1 font-bold w-32 bg-slate-50">
-                        No. Telefon Bimbit
-                      </td>
-                      <td className="border border-black px-2 py-1 font-mono">
-                        {teacherPhone || '-'}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="border border-black px-2 py-1 font-bold bg-slate-50">
-                        Jawatan / Gred
-                      </td>
-                      <td className="border border-black px-2 py-1">
-                        {teacherPosition || 'PPP'} ({teacherGrade || '-'})
-                      </td>
-                      <td className="border border-black px-2 py-1 font-bold bg-slate-50">
-                        Kelas Lesen Memandu
-                      </td>
-                      <td className="border border-black px-2 py-1 font-mono font-bold">
-                        {licenseClass || 'D'}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="border border-black px-2 py-1 font-bold bg-slate-50">
-                        Jenis / Model Kenderaan
-                      </td>
-                      <td className="border border-black px-2 py-1 uppercase">
-                        {vehicleModel || '....................................'}
-                      </td>
-                      <td className="border border-black px-2 py-1 font-bold bg-slate-50">
-                        No. Pendaftaran
-                      </td>
-                      <td className="border border-black px-2 py-1 font-mono font-black uppercase">
-                        {vehiclePlateNo || '....................'}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Seksyen B: Competition & Journey */}
-              <div className="mb-3">
-                <div className="font-black uppercase bg-slate-200 px-2 py-1 border border-black border-b-0">
-                  B. MAKLUMAT PERTANDINGAN &amp; PERJALANAN
-                </div>
-                <table className="w-full border-collapse border border-black">
-                  <tbody>
-                    <tr>
-                      <td className="border border-black px-2 py-1 font-bold w-44 bg-slate-50">
-                        Nama Pertandingan / Program
-                      </td>
-                      <td className="border border-black px-2 py-1 font-bold uppercase" colSpan={3}>
-                        {programName || '-'}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="border border-black px-2 py-1 font-bold bg-slate-50">
-                        Tarikh Pergi &amp; Balik
-                      </td>
-                      <td className="border border-black px-2 py-1">{formattedDateRange}</td>
-                      <td className="border border-black px-2 py-1 font-bold w-32 bg-slate-50">
-                        Masa
-                      </td>
-                      <td className="border border-black px-2 py-1">{masa || '-'}</td>
-                    </tr>
-                    <tr>
-                      <td className="border border-black px-2 py-1 font-bold bg-slate-50">
-                        Tempat Pertandingan
-                      </td>
-                      <td className="border border-black px-2 py-1">{venue || '-'}</td>
-                      <td className="border border-black px-2 py-1 font-bold bg-slate-50">
-                        Penganjur
-                      </td>
-                      <td className="border border-black px-2 py-1">
-                        {organizer || '-'} ({level || '-'})
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Seksyen C: Master Table of Participating Students */}
-              <div className="mb-4">
-                <div className="font-black uppercase bg-slate-200 px-2 py-1 border border-black border-b-0">
-                  C. SENARAI RASMI PESERTA MURID YANG DIIRINGI ({selectedStudentsResolved.length} ORANG)
-                </div>
-                <table className="w-full border-collapse border border-black text-[10px]">
-                  <thead>
-                    <tr className="bg-slate-100">
-                      <th className="border border-black px-1.5 py-1 text-center w-8">Bil</th>
-                      <th className="border border-black px-2 py-1 text-left">Nama Murid</th>
-                      <th className="border border-black px-2 py-1 text-left w-28">No. KP / MyKid</th>
-                      <th className="border border-black px-2 py-1 text-center w-20">Tahun</th>
-                      <th className="border border-black px-2 py-1 text-left">
-                        Nama Ibu Bapa / Penjaga
-                      </th>
-                      <th className="border border-black px-2 py-1 text-left w-28">
-                        No. Tel Kecemasan
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedStudentsResolved.length === 0 ? (
-                      <tr>
-                        <td
-                          colSpan={6}
-                          className="border border-black px-3 py-4 text-center text-slate-500 italic"
+                      {/* 7-Row Exact Boxed Grid Table */}
+                      <div
+                        style={{
+                          border: '1px solid #000000',
+                          width: '100%',
+                          fontSize: '10.5pt',
+                        }}
+                      >
+                        {/* Row 1: Saya, | [Parent Name] */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            borderBottom: '1px solid #000000',
+                            minHeight: '24px',
+                          }}
                         >
-                          Tiada murid dipilih lagi. Sila pilih peserta pada panel di atas.
-                        </td>
-                      </tr>
-                    ) : (
-                      selectedStudentsResolved.map((st, idx) => (
-                        <tr key={`row_${st.id}_${idx}`}>
-                          <td className="border border-black px-1.5 py-1 text-center font-bold">
-                            {idx + 1}
-                          </td>
-                          <td className="border border-black px-2 py-1 font-bold uppercase">
-                            {st.name}
-                          </td>
-                          <td className="border border-black px-2 py-1 font-mono">
-                            {st.icNumber || '-'}
-                          </td>
-                          <td className="border border-black px-2 py-1 text-center">
-                            {st.className || '-'}
-                          </td>
-                          <td className="border border-black px-2 py-1 uppercase">
-                            {st.guardian1Name || st.guardian2Name || '-'}
-                          </td>
-                          <td className="border border-black px-2 py-1 font-mono">
-                            {st.guardian1Mobile || st.guardian2Mobile || '-'}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                          <div
+                            style={{
+                              width: '17%',
+                              borderRight: '1px solid #000000',
+                              padding: '2px 6px',
+                            }}
+                          >
+                            Saya,
+                          </div>
+                          <div
+                            style={{
+                              width: '83%',
+                              padding: '2px 8px',
+                              fontWeight: 'bold',
+                            }}
+                          >
+                            {p.parentName}
+                          </div>
+                        </div>
 
-              {/* Seksyen D: Teacher Declaration & Guru Besar Approval */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="border border-black p-3 space-y-3">
-                  <div className="font-black uppercase text-[10px] border-b border-black pb-1">
-                    D1. PERAKUAN GURU PENGIRING
-                  </div>
-                  <p className="text-[10px] text-justify">
-                    Saya mengaku bahawa kenderaan di atas berada dalam keadaan baik dan selamat digunakan, mempunyai lesen memandu, cukai jalan serta perlindungan insurans yang sah untuk membawa murid di atas ke destinasi yang dinyatakan.
-                  </p>
-                  <div className="pt-4">
-                    <div className="h-8 border-b border-black" />
-                    <div className="mt-1 text-[10px]">
-                      <strong>Tandatangan Guru Pengiring</strong>
-                      <div>Nama: {selectedTeacherName || '........................................'}</div>
-                      <div>Tarikh: ........................................</div>
-                    </div>
-                  </div>
-                </div>
+                        {/* Row 2: No. Kad Pengenalan | [Parent IC] | Ibu Bapa/Penjaga kepada */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            borderBottom: '1px solid #000000',
+                            minHeight: '24px',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '26%',
+                              borderRight: '1px solid #000000',
+                              padding: '2px 6px',
+                            }}
+                          >
+                            No. Kad Pengenalan
+                          </div>
+                          <div
+                            style={{
+                              width: '40%',
+                              borderRight: '1px solid #000000',
+                              padding: '2px 8px',
+                              fontWeight: 'bold',
+                            }}
+                          >
+                            {p.parentIc}
+                          </div>
+                          <div
+                            style={{
+                              width: '34%',
+                              padding: '2px 6px',
+                              textAlign: 'right',
+                            }}
+                          >
+                            Ibu Bapa/Penjaga kepada
+                          </div>
+                        </div>
 
-                <div className="border border-black p-3 space-y-3">
-                  <div className="font-black uppercase text-[10px] border-b border-black pb-1">
-                    D2. KELULUSAN GURU BESAR
-                  </div>
-                  <div className="text-[10px] space-y-1">
-                    <div className="font-bold">Permohonan ini adalah:</div>
-                    <div className="flex items-center gap-4 font-bold pt-0.5">
-                      <span>[ &nbsp; ] DILULUSKAN</span>
-                      <span>[ &nbsp; ] TIDAK DILULUSKAN</span>
-                    </div>
-                  </div>
-                  <div className="pt-5">
-                    <div className="h-8 border-b border-black" />
-                    <div className="mt-1 text-[10px]">
-                      <strong>Tandatangan &amp; Cap Rasmi Guru Besar</strong>
-                      <div>Nama: {guruBesarName || '........................................'}</div>
-                      <div>Tarikh: ........................................</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+                        {/* Row 3: murid yang bernama | [Student Name] | dalam */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            borderBottom: '1px solid #000000',
+                            minHeight: '24px',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '26%',
+                              borderRight: '1px solid #000000',
+                              padding: '2px 6px',
+                            }}
+                          >
+                            murid yang bernama
+                          </div>
+                          <div
+                            style={{
+                              width: '62%',
+                              borderRight: '1px solid #000000',
+                              padding: '2px 8px',
+                              fontWeight: 'bold',
+                            }}
+                          >
+                            {p.studentName}
+                          </div>
+                          <div
+                            style={{
+                              width: '12%',
+                              padding: '2px 6px',
+                              textAlign: 'right',
+                            }}
+                          >
+                            dalam
+                          </div>
+                        </div>
 
-          {/* Fallback when 0 students selected */}
-          {!showKenderaan && selectedStudentsResolved.length === 0 && (
-            <div className="print:hidden max-w-[794px] mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-400">
-              Sila pilih sekurang-kurangnya seorang murid pada bahagian <strong>3. Pilih Peserta Murid</strong> di atas untuk memaparkan Borang SPPK 1, 2 &amp; 3 JPN Sarawak.
-            </div>
-          )}
+                        {/* Row 4: Tahun/Tingkatan | [Class/Year] | yang sedang belajar di sekolah */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            borderBottom: '1px solid #000000',
+                            minHeight: '24px',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '21%',
+                              borderRight: '1px solid #000000',
+                              padding: '2px 6px',
+                            }}
+                          >
+                            Tahun/Tingkatan
+                          </div>
+                          <div
+                            style={{
+                              width: '43%',
+                              borderRight: '1px solid #000000',
+                              padding: '2px 8px',
+                              fontWeight: 'bold',
+                            }}
+                          >
+                            {p.className}
+                          </div>
+                          <div
+                            style={{
+                              width: '36%',
+                              padding: '2px 6px',
+                              textAlign: 'right',
+                            }}
+                          >
+                            yang sedang belajar di sekolah
+                          </div>
+                        </div>
+
+                        {/* Row 5: [alamat penuh] | [School Name & Full Address] | dengan ini */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            borderBottom: '1px solid #000000',
+                            minHeight: '24px',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '21%',
+                              borderRight: '1px solid #000000',
+                              padding: '2px 6px',
+                            }}
+                          >
+                            [alamat penuh]
+                          </div>
+                          <div
+                            style={{
+                              width: '64%',
+                              borderRight: '1px solid #000000',
+                              padding: '2px 8px',
+                              fontWeight: 'bold',
+                              fontSize: '9.5pt',
+                            }}
+                          >
+                            {schoolFullAddress}
+                          </div>
+                          <div
+                            style={{
+                              width: '15%',
+                              padding: '2px 6px',
+                              textAlign: 'right',
+                            }}
+                          >
+                            dengan ini
+                          </div>
+                        </div>
+
+                        {/* Row 6: mengizinkan anak saya untuk menyertai | [Program Name] */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            borderBottom: '1px solid #000000',
+                            minHeight: '42px',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '45%',
+                              borderRight: '1px solid #000000',
+                              padding: '3px 6px',
+                            }}
+                          >
+                            mengizinkan anak saya untuk menyertai
+                          </div>
+                          <div
+                            style={{
+                              width: '55%',
+                              padding: '3px 8px',
+                              fontWeight: 'bold',
+                            }}
+                          >
+                            {programName}
+                          </div>
+                        </div>
+
+                        {/* Row 7: yang diadakan mulai | [Start] | hingga | [End] | di | [Venue] */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            minHeight: '38px',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '25%',
+                              borderRight: '1px solid #000000',
+                              padding: '3px 6px',
+                            }}
+                          >
+                            yang diadakan mulai
+                          </div>
+                          <div
+                            style={{
+                              width: '17%',
+                              borderRight: '1px solid #000000',
+                              padding: '3px 6px',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                            }}
+                          >
+                            {startFormatted}
+                          </div>
+                          <div
+                            style={{
+                              width: '10%',
+                              borderRight: '1px solid #000000',
+                              padding: '3px 6px',
+                            }}
+                          >
+                            hingga
+                          </div>
+                          <div
+                            style={{
+                              width: '15%',
+                              borderRight: '1px solid #000000',
+                              padding: '3px 6px',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                            }}
+                          >
+                            {endFormatted}
+                          </div>
+                          <div
+                            style={{
+                              width: '5%',
+                              borderRight: '1px solid #000000',
+                              padding: '3px 6px',
+                            }}
+                          >
+                            di
+                          </div>
+                          <div
+                            style={{
+                              width: '28%',
+                              padding: '3px 6px',
+                              fontWeight: 'bold',
+                              fontSize: '9.5pt',
+                            }}
+                          >
+                            {venue}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Numbered Clauses 2, 3, 4 */}
+                      <div
+                        style={{
+                          marginTop: '14px',
+                          textAlign: 'justify',
+                          fontSize: '10.5pt',
+                        }}
+                      >
+                        <p style={{ margin: '0 0 12px 0' }}>
+                          2.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Saya faham bahawa segala langkah keselamatan telah dan akan diambil oleh pihak penganjur. Walaupun demikian saya mengaku bahawa anak saya perlu mematuhi peraturan-peraturan dan arahan sepanjang aktiviti / program dijalankan termasuk dalam masa perjalanan pergi dan balik.
+                        </p>
+                        <p style={{ margin: '0 0 12px 0' }}>
+                          3.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Saya mengesahkan bahawa anak saya tidak mengidap sebarang penyakit kritikal dan membenarkan beliau menyertai aktiviti ini.
+                        </p>
+                        <p style={{ margin: '0 0 14px 0' }}>
+                          4.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Saya juga mengizinkan anak saya supaya diberi rawatan/perubatan/pembedahan jika keadaan memerlukan tindakan segera untuk berbuat demikian.
+                        </p>
+                        <p style={{ margin: '0 0 14px 0' }}>Sekian, Terima kasih.</p>
+                        <p style={{ margin: '0 0 12px 0' }}>Saya yang benar,</p>
+                      </div>
+
+                      {/* Parent Signature & Details Block */}
+                      <div style={{ paddingLeft: '8px', fontSize: '10.5pt' }}>
+                        {/* Tandatangan */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <div style={{ width: '25%' }}>Tandatangan</div>
+                          <div style={{ width: '4%' }}>:</div>
+                          <div
+                            style={{
+                              width: '65%',
+                              borderBottom: '1px solid #000000',
+                              minHeight: '18px',
+                            }}
+                          />
+                        </div>
+
+                        {/* Nama */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <div style={{ width: '25%' }}>Nama</div>
+                          <div style={{ width: '4%' }}>:</div>
+                          <div
+                            style={{
+                              width: '65%',
+                              borderBottom: '1px solid #000000',
+                              minHeight: '18px',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                            }}
+                          >
+                            {p.parentName}
+                          </div>
+                        </div>
+
+                        {/* No. Kad Pengenalan */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '6px' }}>
+                          <div style={{ width: '25%' }}>No. Kad Pengenalan</div>
+                          <div style={{ width: '4%' }}>:</div>
+                          <div
+                            style={{
+                              width: '65%',
+                              borderBottom: '1px solid #000000',
+                              minHeight: '18px',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                            }}
+                          >
+                            {p.parentIc}
+                          </div>
+                        </div>
+
+                        {/* Pekerjaan */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <div style={{ width: '25%' }}>Pekerjaan</div>
+                          <div style={{ width: '4%' }}>:</div>
+                          <div
+                            style={{
+                              width: '65%',
+                              borderBottom: '1px solid #000000',
+                              minHeight: '18px',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                            }}
+                          >
+                            {p.parentOccupation}
+                          </div>
+                        </div>
+
+                        {/* Alamat Penuh Rumah (2 lines like official form) */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <div style={{ width: '25%' }}>Alamat Penuh Rumah</div>
+                          <div style={{ width: '4%' }}>:</div>
+                          <div
+                            style={{
+                              width: '65%',
+                              borderBottom: '1px solid #000000',
+                              minHeight: '18px',
+                              fontWeight: 'bold',
+                              fontSize: '9.5pt',
+                              paddingLeft: '4px',
+                            }}
+                          >
+                            {p.homeAddress}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <div style={{ width: '29%' }} />
+                          <div
+                            style={{
+                              width: '65%',
+                              borderBottom: '1px solid #000000',
+                              minHeight: '14px',
+                            }}
+                          />
+                        </div>
+
+                        {/* Telefon : [Rumah], [Pejabat], [HP] */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <div style={{ width: '25%' }}>Telefon</div>
+                          <div style={{ width: '4%' }}>:</div>
+                          <div style={{ width: '13%' }}>[Rumah]</div>
+                          <div style={{ width: '4%' }}>:</div>
+                          <div
+                            style={{
+                              width: '48%',
+                              borderBottomStyle: 'dashed',
+                              borderBottomWidth: '1.5px',
+                              borderBottomColor: '#000000',
+                              minHeight: '18px',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                            }}
+                          >
+                            {p.homePhone}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <div style={{ width: '29%' }} />
+                          <div style={{ width: '13%' }}>[Pejabat]</div>
+                          <div style={{ width: '4%' }}>:</div>
+                          <div
+                            style={{
+                              width: '48%',
+                              borderBottom: '1px solid #000000',
+                              minHeight: '18px',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                            }}
+                          >
+                            {p.officePhone}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '14px' }}>
+                          <div style={{ width: '29%' }} />
+                          <div style={{ width: '13%' }}>[HP]</div>
+                          <div style={{ width: '4%' }}>:</div>
+                          <div
+                            style={{
+                              width: '48%',
+                              borderBottom: '1px solid #000000',
+                              minHeight: '18px',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                            }}
+                          >
+                            {p.mobilePhone}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Thick Horizontal Line separating Pengesahan Pihak Sekolah */}
+                      <div
+                        style={{
+                          borderTop: '2.5px solid #000000',
+                          marginTop: '6px',
+                          paddingTop: '8px',
+                        }}
+                      >
+                        <div style={{ fontWeight: 'bold', marginBottom: '36px' }}>
+                          Pengesahan Pihak Sekolah
+                        </div>
+
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-end',
+                          }}
+                        >
+                          {/* Left: Signature & Details */}
+                          <div style={{ width: '58%' }}>
+                            <div
+                              style={{
+                                borderBottom: '1.5px solid #000000',
+                                width: '260px',
+                                marginBottom: '3px',
+                              }}
+                            />
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                width: '260px',
+                                fontWeight: 'bold',
+                                marginBottom: '10px',
+                              }}
+                            >
+                              <span>(</span>
+                              <span>{principalName}</span>
+                              <span>)</span>
+                            </div>
+                            <div style={{ fontWeight: 'bold', marginBottom: '12px' }}>
+                              Tandatangan Pengetua/Guru Besar
+                            </div>
+                            <div style={{ fontWeight: 'bold', marginBottom: '14px' }}>
+                              Cop Jawatan:
+                            </div>
+                            <div style={{ fontWeight: 'bold', display: 'flex', alignItems: 'flex-end' }}>
+                              <span>Tarikh:&nbsp;</span>
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  width: '215px',
+                                  borderBottom: '1.5px solid #000000',
+                                  textAlign: 'center',
+                                }}
+                              >
+                                {tarikhPengesahan}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Right: Cap Sekolah Circle */}
+                          <div
+                            style={{
+                              width: '35%',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              marginRight: '18px',
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: '92px',
+                                height: '92px',
+                                border: '1.5px solid #000000',
+                                borderRadius: '50%',
+                                marginBottom: '6px',
+                              }}
+                            />
+                            <div style={{ fontWeight: 'bold', fontSize: '10.5pt' }}>
+                              Cap Sekolah
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* =====================================================================
+                      PAGE 2: BORANG SPPK 2 (100% EXACT MATCH TO OFFICIAL JPNS PDF)
+                     ===================================================================== */}
+                  {showSppk2 && (
+                    <div
+                      className="print-page-break bg-white text-black shadow-2xl mx-auto"
+                      style={{
+                        width: '210mm',
+                        minHeight: '297mm',
+                        padding: '12mm 18mm 12mm 18mm',
+                        boxSizing: 'border-box',
+                        fontFamily: 'Arial, Helvetica, sans-serif',
+                        fontSize: '10.5pt',
+                        lineHeight: 1.35,
+                        color: '#000000',
+                        backgroundColor: '#ffffff',
+                      }}
+                    >
+                      <OfficialHeader formCode="Borang SPPK 2" />
+
+                      {/* Main Title */}
+                      <div
+                        style={{
+                          textAlign: 'center',
+                          fontWeight: 'bold',
+                          textDecoration: 'underline',
+                          fontSize: '11.5pt',
+                          marginBottom: '14px',
+                        }}
+                      >
+                        BORANG DEKLARASI PESERTA SEBELUM PROGRAM
+                      </div>
+
+                      {/* Participant Top Lines */}
+                      <div style={{ marginBottom: '14px' }}>
+                        {/* PROGRAM */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            PROGRAM :
+                          </span>
+                          <div
+                            style={{
+                              flex: 1,
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {programName}
+                          </div>
+                        </div>
+
+                        {/* TARIKH ... HINGGA ... */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px', paddingLeft: '4px' }}>
+                            TARIKH :
+                          </span>
+                          <div
+                            style={{
+                              width: '28%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {startFormatted}
+                          </div>
+                          <span style={{ whiteSpace: 'nowrap', margin: '0 8px' }}>
+                            HINGGA :
+                          </span>
+                          <div
+                            style={{
+                              flex: 1,
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {endFormatted}
+                          </div>
+                        </div>
+
+                        {/* NAMA PENUH */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            NAMA PENUH (Mengikut Kad Pengenalan/Sijil Lahir :
+                          </span>
+                          <div
+                            style={{
+                              flex: 1,
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.studentName}
+                          </div>
+                        </div>
+
+                        {/* ALAMAT ... NO TELEFON */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '14px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            ALAMAT:
+                          </span>
+                          <div
+                            style={{
+                              width: '45%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              fontSize: '9pt',
+                              paddingLeft: '4px',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.homeAddress}
+                          </div>
+                          <span style={{ whiteSpace: 'nowrap', margin: '0 6px' }}>
+                            NO TELEFON :
+                          </span>
+                          <div
+                            style={{
+                              width: '28%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.mobilePhone}
+                          </div>
+                        </div>
+
+                        {/* JANTINA ... UMUR */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            JANTINA :
+                          </span>
+                          <div
+                            style={{
+                              width: '26%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.gender}
+                          </div>
+                          <span style={{ whiteSpace: 'nowrap', margin: '0 8px 0 18px' }}>
+                            UMUR:
+                          </span>
+                          <div
+                            style={{
+                              width: '28%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.age}
+                          </div>
+                        </div>
+
+                        {/* TARIKH LAHIR ... NOMBOR KAD PENGENALAN */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '14px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            TARIKH LAHIR:
+                          </span>
+                          <div
+                            style={{
+                              width: '28%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.birthDate}
+                          </div>
+                          <span style={{ whiteSpace: 'nowrap', margin: '0 6px 0 14px' }}>
+                            NOMBOR KAD PENGENALAN:
+                          </span>
+                          <div
+                            style={{
+                              flex: 1,
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.studentIc}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Emergency Contact Block */}
+                      <div style={{ marginBottom: '14px' }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>
+                          PIHAK YANG PERLU DIHUBUNGI JIKA BERLAKUNYA KECEDERAAN ATAU KEMALANGAN:
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '5px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>NAMA:</span>
+                          <div
+                            style={{
+                              width: '48%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.parentName}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '5px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>HUBUNGAN:</span>
+                          <div
+                            style={{
+                              width: '43%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.relationship}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '5px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>ALAMAT:</span>
+                          <div
+                            style={{
+                              width: '48%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              fontSize: '9pt',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.homeAddress}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '5px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>NO.TELEFON:</span>
+                          <div
+                            style={{
+                              width: '40%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.officePhone || p.homePhone}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '12px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>NO. TEL. BIMBIT:</span>
+                          <div
+                            style={{
+                              width: '40%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.mobilePhone}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* SEJARAH PERUBATAN */}
+                      <div>
+                        <div style={{ fontWeight: 'bold', marginBottom: '2px' }}>
+                          SEJARAH PERUBATAN
+                        </div>
+                        <div style={{ marginBottom: '2px' }}>
+                          Pernahkah anda menerima immunisasi Tetanus? YA / TIDAK &nbsp;(Sila bulatkan)
+                        </div>
+                        <div style={{ marginBottom: '4px' }}>
+                          Sila nyatakan anggaran tarikh immunsasi/penuja yang diambil: _____/_______/______.
+                        </div>
+                        <div style={{ fontWeight: 'bold', marginBottom: '2px' }}>
+                          Sila tandakan /
+                        </div>
+
+                        {/* 2-Column Side-by-Side Medical Checklist Table */}
+                        <table
+                          style={{
+                            width: '100%',
+                            borderCollapse: 'collapse',
+                            fontSize: '10.5pt',
+                          }}
+                        >
+                          <thead>
+                            <tr>
+                              <th style={{ width: '37%', border: 'none' }} />
+                              <th
+                                style={{
+                                  width: '6.5%',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  textAlign: 'center',
+                                  paddingBottom: '2px',
+                                }}
+                              >
+                                Ya
+                              </th>
+                              <th
+                                style={{
+                                  width: '6.5%',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  textAlign: 'center',
+                                  paddingBottom: '2px',
+                                }}
+                              >
+                                Tidak
+                              </th>
+                              <th style={{ width: '37%', border: 'none' }} />
+                              <th
+                                style={{
+                                  width: '6.5%',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  textAlign: 'center',
+                                  paddingBottom: '2px',
+                                }}
+                              >
+                                Ya
+                              </th>
+                              <th
+                                style={{
+                                  width: '6.5%',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  textAlign: 'center',
+                                  paddingBottom: '2px',
+                                }}
+                              >
+                                Tidak
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {[
+                              {
+                                left: 'Kecederaan pada sendi atau tulang',
+                                right: 'Kecederaan atau pembedahan terkini',
+                              },
+                              {
+                                left: 'Alah sengatan lebah, ubat-ubatan, air laut dll.',
+                                right: 'Masalah Penafasan/Penyakit asma',
+                              },
+                              {
+                                left: 'Mabuk Laut atau pergerakan',
+                                right: 'Sawan',
+                              },
+                              {
+                                left: 'Masalah psikologi atau kelakuan',
+                                right: 'Diabetes',
+                              },
+                              {
+                                left: 'Migrain/ pening kepala yang teruk',
+                                right: 'Lain-lain masalah (nyatakan)',
+                              },
+                            ].map((row, rIdx) => (
+                              <tr key={rIdx}>
+                                <td
+                                  style={{
+                                    border: '1px solid #000000',
+                                    padding: '4px 6px',
+                                    verticalAlign: 'top',
+                                  }}
+                                >
+                                  {row.left}
+                                </td>
+                                <td
+                                  style={{
+                                    border: '1px solid #000000',
+                                    textAlign: 'center',
+                                    verticalAlign: 'middle',
+                                  }}
+                                />
+                                <td
+                                  style={{
+                                    border: '1px solid #000000',
+                                    textAlign: 'center',
+                                    verticalAlign: 'middle',
+                                    fontWeight: 'bold',
+                                  }}
+                                >
+                                  {preTickMedicalNo ? '/' : ''}
+                                </td>
+                                <td
+                                  style={{
+                                    border: '1px solid #000000',
+                                    padding: '4px 6px',
+                                    verticalAlign: 'top',
+                                  }}
+                                >
+                                  {row.right}
+                                </td>
+                                <td
+                                  style={{
+                                    border: '1px solid #000000',
+                                    textAlign: 'center',
+                                    verticalAlign: 'middle',
+                                  }}
+                                />
+                                <td
+                                  style={{
+                                    border: '1px solid #000000',
+                                    textAlign: 'center',
+                                    verticalAlign: 'middle',
+                                    fontWeight: 'bold',
+                                  }}
+                                >
+                                  {preTickMedicalNo ? '/' : ''}
+                                </td>
+                              </tr>
+                            ))}
+
+                            {/* Row 6: Full-width infectious disease question */}
+                            <tr>
+                              <td
+                                colSpan={4}
+                                style={{
+                                  border: '1px solid #000000',
+                                  padding: '5px 6px',
+                                  textAlign: 'justify',
+                                }}
+                              >
+                                Pernahkah anda sebulan yang lalu menghadapi sebarang penyakit berjangkit ataupun terdedah kepada mereka yang mengalami penyakit cirit-birit . atau adakah anda pembawa kepada sebarang penyakit?
+                              </td>
+                              <td
+                                style={{
+                                  border: '1px solid #000000',
+                                  textAlign: 'center',
+                                  verticalAlign: 'middle',
+                                }}
+                              />
+                              <td
+                                style={{
+                                  border: '1px solid #000000',
+                                  textAlign: 'center',
+                                  verticalAlign: 'middle',
+                                  fontWeight: 'bold',
+                                }}
+                              >
+                                {preTickMedicalNo ? '/' : ''}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+
+                        <div
+                          style={{
+                            marginTop: '6px',
+                            fontStyle: 'italic',
+                            textAlign: 'justify',
+                            fontSize: '10pt',
+                          }}
+                        >
+                          Sekiranya anda menjawab <strong>Ya</strong> pada <strong>SEBARANG</strong> soalan di atas, sila berikan maklumat terperinci di ruang yang disediakan. Sila nyatakan jika keadaan sekarang atau yang lepas perlu diberi perhatian yang lebih semasa aktiviti berlangsung. Lampiran kertas tambahan sekiranya yang disediakan tidak mencukupi.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* =====================================================================
+                      PAGE 3: BORANG SPPK 3 (100% EXACT MATCH TO OFFICIAL JPNS PDF)
+                     ===================================================================== */}
+                  {showSppk3 && (
+                    <div
+                      className="print-page-break bg-white text-black shadow-2xl mx-auto"
+                      style={{
+                        width: '210mm',
+                        minHeight: '297mm',
+                        padding: '12mm 18mm 12mm 18mm',
+                        boxSizing: 'border-box',
+                        fontFamily: 'Arial, Helvetica, sans-serif',
+                        fontSize: '10.5pt',
+                        lineHeight: 1.35,
+                        color: '#000000',
+                        backgroundColor: '#ffffff',
+                      }}
+                    >
+                      <OfficialHeader formCode="Borang SPPK 3" />
+
+                      {/* Main Title */}
+                      <div
+                        style={{
+                          textAlign: 'center',
+                          fontWeight: 'bold',
+                          textDecoration: 'underline',
+                          fontSize: '11.5pt',
+                          marginBottom: '14px',
+                        }}
+                      >
+                        BORANG DEKLARASI PESERTA SELEPAS PROGRAM
+                      </div>
+
+                      {/* Participant Top Lines */}
+                      <div style={{ marginBottom: '14px' }}>
+                        {/* PROGRAM */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            PROGRAM :
+                          </span>
+                          <div
+                            style={{
+                              flex: 1,
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {programName}
+                          </div>
+                        </div>
+
+                        {/* TARIKH ... HINGGA ... */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px', paddingLeft: '4px' }}>
+                            TARIKH :
+                          </span>
+                          <div
+                            style={{
+                              width: '28%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {startFormatted}
+                          </div>
+                          <span style={{ whiteSpace: 'nowrap', margin: '0 8px' }}>
+                            HINGGA :
+                          </span>
+                          <div
+                            style={{
+                              flex: 1,
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {endFormatted}
+                          </div>
+                        </div>
+
+                        {/* NAMA PENUH */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            NAMA PENUH (Mengikut Kad Pengenalan/Sijil Lahir :
+                          </span>
+                          <div
+                            style={{
+                              flex: 1,
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.studentName}
+                          </div>
+                        </div>
+
+                        {/* ALAMAT ... NO TELEFON */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '14px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            ALAMAT:
+                          </span>
+                          <div
+                            style={{
+                              width: '45%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              fontSize: '9pt',
+                              paddingLeft: '4px',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.homeAddress}
+                          </div>
+                          <span style={{ whiteSpace: 'nowrap', margin: '0 6px' }}>
+                            NO TELEFON :
+                          </span>
+                          <div
+                            style={{
+                              width: '28%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.mobilePhone}
+                          </div>
+                        </div>
+
+                        {/* JANTINA ... UMUR */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '10px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            JANTINA :
+                          </span>
+                          <div
+                            style={{
+                              width: '26%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.gender}
+                          </div>
+                          <span style={{ whiteSpace: 'nowrap', margin: '0 8px 0 18px' }}>
+                            UMUR:
+                          </span>
+                          <div
+                            style={{
+                              width: '28%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.age}
+                          </div>
+                        </div>
+
+                        {/* TARIKH LAHIR ... NOMBOR KAD PENGENALAN */}
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '14px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>
+                            TARIKH LAHIR:
+                          </span>
+                          <div
+                            style={{
+                              width: '28%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.birthDate}
+                          </div>
+                          <span style={{ whiteSpace: 'nowrap', margin: '0 6px 0 14px' }}>
+                            NOMBOR KAD PENGENALAN:
+                          </span>
+                          <div
+                            style={{
+                              flex: 1,
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              textAlign: 'center',
+                              minHeight: '18px',
+                            }}
+                          >
+                            {p.studentIc}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Emergency Contact Block */}
+                      <div style={{ marginBottom: '14px' }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>
+                          PIHAK YANG PERLU DIHUBUNGI JIKA BERLAKUNYA KECEDERAAN ATAU KEMALANGAN:
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '5px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>NAMA:</span>
+                          <div
+                            style={{
+                              width: '54%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.parentName}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '5px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>HUBUNGAN:</span>
+                          <div
+                            style={{
+                              width: '49%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.relationship}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '5px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>ALAMAT:</span>
+                          <div
+                            style={{
+                              width: '52%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              fontSize: '9pt',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.homeAddress}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '5px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>NO.TELEFON:</span>
+                          <div
+                            style={{
+                              width: '46%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.officePhone || p.homePhone}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: '14px' }}>
+                          <span style={{ whiteSpace: 'nowrap', marginRight: '6px' }}>NO. TEL. BIMBIT:</span>
+                          <div
+                            style={{
+                              width: '44%',
+                              borderBottom: '1px solid #000000',
+                              fontWeight: 'bold',
+                              paddingLeft: '4px',
+                              minHeight: '17px',
+                            }}
+                          >
+                            {p.mobilePhone}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* SAKIT/KECEDERAAN/RAWATAN SEMASA PROGRAM */}
+                      <div>
+                        <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>
+                          SAKIT/KECEDERAAN/RAWATAN SEMASA PROGRAM
+                        </div>
+                        <div style={{ marginBottom: '2px' }}>
+                          Adakah anda mendapat sakit / kecederaan? &nbsp;YA / TIDAK &nbsp;(Sila bulatkan)
+                        </div>
+                        <div style={{ marginBottom: '2px' }}>
+                          Adakah anda mendapat rawatan? &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;YA / TIDAK &nbsp;(Sila bulatkan)
+                        </div>
+                        <div style={{ marginBottom: '14px' }}>
+                          Sila nyatakan tarikh : _____/_______/____ Tempat Rawatan : ____________________
+                        </div>
+
+                        <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                          Sekiranya anda menjawab Ya pada SEBARANG soalan di atas, sila berikan maklumat terperinci di ruang yang disediakan.
+                        </div>
+
+                        {/* 2-Column Boxed Table: JENIS SAKIT/KECEDERAAN | JENIS RAWATAN */}
+                        <table
+                          style={{
+                            width: '100%',
+                            borderCollapse: 'collapse',
+                            border: '1px solid #000000',
+                            fontSize: '10.5pt',
+                          }}
+                        >
+                          <thead>
+                            <tr>
+                              <th
+                                style={{
+                                  width: '50%',
+                                  border: '1px solid #000000',
+                                  padding: '6px',
+                                  fontWeight: 'bold',
+                                  textAlign: 'center',
+                                }}
+                              >
+                                JENIS SAKIT/KECEDERAAN
+                              </th>
+                              <th
+                                style={{
+                                  width: '50%',
+                                  border: '1px solid #000000',
+                                  padding: '6px',
+                                  fontWeight: 'bold',
+                                  textAlign: 'center',
+                                }}
+                              >
+                                JENIS RAWATAN
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td
+                                style={{
+                                  border: '1px solid #000000',
+                                  height: '215px',
+                                  verticalAlign: 'top',
+                                  padding: '8px',
+                                }}
+                              >
+                                {p.jenisSakitKecederaan || ''}
+                              </td>
+                              <td
+                                style={{
+                                  border: '1px solid #000000',
+                                  height: '215px',
+                                  verticalAlign: 'top',
+                                  padding: '8px',
+                                }}
+                              >
+                                {p.jenisRawatan || ''}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+
+                        <div
+                          style={{
+                            marginTop: '6px',
+                            fontWeight: 'bold',
+                            fontStyle: 'italic',
+                            textAlign: 'justify',
+                            fontSize: '10pt',
+                          }}
+                        >
+                          Sila nyatakan jika keadaan sekarang perlu diberi perhatian yang lebih dan lampirkan kertas tambahan sekiranya ruang yang disediakan tidak mencukupi.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
