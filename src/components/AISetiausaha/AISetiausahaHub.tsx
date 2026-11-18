@@ -1550,63 +1550,120 @@ export interface MinitPKPAAgendaItem {
   statusMaklumBalas: string;
 }
 
-function defaultMinitAgendaItems(portfolio: FullMySGPortfolioItem, academicYear: string): MinitPKPAAgendaItem[] {
-  return [
+export function renumberMinitAgendaItems(items: MinitPKPAAgendaItem[]): MinitPKPAAgendaItem[] {
+  return items.map((item, idx) => {
+    const newBilBase = String(idx + 1);
+    const newBil = `${newBilBase}.0`;
+    const updatedFormal = item.formalText
+      ? item.formalText.replace(/^(\d+)\.(\d+)\b/gm, `${newBilBase}.$2`)
+      : '';
+    return {
+      ...item,
+      bil: newBil,
+      formalText: updatedFormal,
+    };
+  });
+}
+
+export function buildMinitAgendaItemsFromFokusList(
+  portfolio: FullMySGPortfolioItem,
+  sessionBadge: string,
+  rawFokusItems: string[]
+): MinitPKPAAgendaItem[] {
+  const fokusList =
+    rawFokusItems.length > 0
+      ? rawFokusItems
+      : [
+          `Penyelarasan Takwim Tahunan & Ketetapan Pelaksanaan ${portfolio.jawatankuasaInduk} Sesi ${sessionBadge}`,
+          `Semakan Sasaran KPI, Pelan Strategik Organisasi (PSO) & Agihan Tugas (${portfolio.kodMySG})`,
+          `Penyelarasan Pengumpulan Evidens One Page Report (OPR) bagi ${portfolio.skpmCodeDisplay}`,
+          `Pengurusan Peruntukan Kewangan / PCG, Bahan Bantu Mengajar & Dokumentasi Fail Induk`,
+        ];
+
+  const baseOpening: MinitPKPAAgendaItem[] = [
     {
       id: 'ag-1',
       bil: '1.0',
       title: 'Perutusan Pengerusi',
-      rawKeywords: 'Pengerusi ucap terima kasih & hala tuju sesi ' + academicYear,
-      formalText: `1.1 Pengerusi mengucapkan ribuan terima kasih atas kehadiran semua ahli ${portfolio.jawatankuasaInduk} bagi Sesi Akademik ${academicYear}.\n1.2 Pengerusi menegaskan agar semua perancangan unit dilaksanakan mengikut piawaian SKPM Kualiti@Sekolah (${portfolio.skpmCodeDisplay}).`,
+      rawKeywords: `Ucapan alu-aluan Pengerusi & ketetapan ${portfolio.jawatankuasaInduk}`,
+      formalText: `1.1 Pengerusi mengucapkan ribuan terima kasih atas kehadiran semua ahli mesyuarat ${portfolio.jawatankuasaInduk}.\n1.2 Pengerusi menegaskan pematuhan garis panduan KPM dan sasaran Skor 4 SKPM Kualiti@Sekolah (${portfolio.skpmCodeDisplay}).`,
       tindakan: 'Makluman',
-      statusMaklumBalas: 'Telah diambil maklum oleh semua ahli mesyuarat.',
+      statusMaklumBalas: 'Telah diambil maklum oleh semua ahli.',
     },
     {
       id: 'ag-2',
       bil: '2.0',
       title: 'Pengesahan Minit Mesyuarat Yang Lalu',
-      rawKeywords: 'Dicadang & disokong sebulat suara',
-      formalText: `2.1 Minit mesyuarat yang lalu telah dibentangkan dan disahkan tanpa sebarang pindaan dengan cadangan serta sokongan sebulat suara ahli mesyuarat.`,
+      rawKeywords: 'Disahkan tanpa pindaan sebulat suara',
+      formalText: `2.1 Minit mesyuarat yang lalu telah dibentangkan dan disahkan tanpa pindaan atas cadangan dan sokongan sebulat suara ahli mesyuarat.`,
       tindakan: 'Makluman',
-      statusMaklumBalas: 'Minit mesyuarat lepas telah disahkan dan difailkan.',
+      statusMaklumBalas: 'Minit lepas telah disahkan.',
     },
     {
       id: 'ag-3',
       bil: '3.0',
-      title: 'Perkara-perkara Berbangkit (Maklum Balas PKPA Bil. 2/1991)',
-      rawKeywords: 'Tindakan mesyuarat lepas telah selesai',
-      formalText: `3.1 Mesyuarat mengambil maklum bahawa semua ketetapan daripada mesyuarat yang lalu telah diambil tindakan sewajarnya mengikut Borang Maklum Balas PKPA Bil. 2/1991.`,
+      title: 'Perkara-perkara Berbangkit',
+      rawKeywords: 'Maklum balas PKPA Bil. 2/1991 telah diambil tindakan',
+      formalText: `3.1 Semua perkara berbangkit daripada mesyuarat yang lalu telah diambil tindakan sewajarnya mengikut Borang Maklum Balas PKPA Bil. 2/1991.`,
       tindakan: portfolio.jawatanRasmi,
-      statusMaklumBalas: 'Semua tindakan berbangkit telah selesai dilaksanakan 100%.',
+      statusMaklumBalas: 'Tindakan berbangkit telah selesai 100%.',
     },
     {
       id: 'ag-4',
       bil: '4.0',
-      title: `Fokus Utama: Perancangan Takwim & KPI ${portfolio.jawatankuasaInduk}`,
-      rawKeywords: `Penyelarasan program tahunan, KPI & pengurusan fail ${portfolio.kodMySG}`,
-      formalText: `4.1 Mesyuarat memutuskan agar semua program utama di bawah ${portfolio.jawatankuasaInduk} dilaksanakan mengikut takwim Sesi ${academicYear} dan didokumentasikan dalam bentuk One Page Report (OPR) SKPM.\n4.2 Semua ahli jawatankuasa diminta mengemas kini rekod dan evidens pelaksanaan secara berkala.`,
+      title: 'Fokus / Perbincangan Utama Mesyuarat',
+      rawKeywords: `Pembentangan & perbincangan ${fokusList.length} agenda fokus utama ${portfolio.jawatankuasaInduk} Sesi ${sessionBadge}`,
+      formalText: `4.1 Mesyuarat beralih kepada sesi pembentangan dan perbincangan ${fokusList.length} agenda fokus utama ${portfolio.jawatankuasaInduk} bagi Sesi ${sessionBadge} seperti yang diperincikan dalam perkara 5.0 hingga ${4 + fokusList.length}.0 di bawah.`,
+      tindakan: 'Makluman',
+      statusMaklumBalas: 'Telah diambil maklum.',
+    },
+  ];
+
+  const expandedFokusCards: MinitPKPAAgendaItem[] = fokusList.map((fItem, idx) => {
+    const num = 5 + idx;
+    return {
+      id: `ag-fokus-${idx + 1}`,
+      bil: `${num}.0`,
+      title: fItem,
+      rawKeywords: `Perbincangan & ketetapan pelaksanaan: ${fItem}`,
+      formalText: `${num}.1 Mesyuarat membincangkan secara terperinci perkara "${fItem}" dan memutuskan agar pelaksanaan dijalankan mengikut takwim Sesi ${sessionBadge} serta didokumentasikan melalui Poster OPR SKPM (${portfolio.skpmCodeDisplay}).`,
       tindakan: 'Penyelaras & Semua AJK',
-      statusMaklumBalas: 'Takwim tahunan dan jadual kerja unit sedang dilaksanakan mengikut jadual.',
-    },
+      statusMaklumBalas: 'Pelaksanaan program sedang berjalan mengikut jadual.',
+    };
+  });
+
+  const halLainNum = 5 + fokusList.length;
+  const penutupNum = 6 + fokusList.length;
+
+  const closingItems: MinitPKPAAgendaItem[] = [
     {
-      id: 'ag-5',
-      bil: '5.0',
+      id: `ag-hal-lain`,
+      bil: `${halLainNum}.0`,
       title: 'Hal-hal Lain',
-      rawKeywords: 'Kerjasama berpasukan & pematuhan tarikh akhir pelaporan',
-      formalText: `5.1 Pengerusi mengingatkan agar sebarang kekangan pelaksanaan dilaporkan segera kepada pihak pentadbiran untuk tindakan intervensi bersama.`,
+      rawKeywords: 'Penyelarasan dokumentasi fail & tarikh akhir OPR',
+      formalText: `${halLainNum}.1 Pengerusi mengingatkan semua ahli agar melengkapkan pelaporan OPR dan fail unit dalam tempoh 7 hari bekerja selepas program selesai.`,
       tindakan: 'Semua Ahli Jawatankuasa',
-      statusMaklumBalas: 'Pemantauan berterusan oleh Setiausaha dan Penyelaras.',
+      statusMaklumBalas: 'Pemantauan berterusan oleh Setiausaha.',
     },
     {
-      id: 'ag-6',
-      bil: '6.0',
+      id: `ag-penutup`,
+      bil: `${penutupNum}.0`,
       title: 'Penutup',
-      rawKeywords: 'Mesyuarat ditangguhkan pada jam 4.00 petang',
-      formalText: `6.1 Mesyuarat ditangguhkan pada jam 4:00 petang dengan ucapan terima kasih daripada Pengerusi.`,
+      rawKeywords: 'Mesyuarat ditangguhkan dengan ucapan terima kasih',
+      formalText: `${penutupNum}.1 Mesyuarat ditangguhkan dengan ucapan terima kasih daripada Pengerusi.`,
       tindakan: 'Makluman',
       statusMaklumBalas: '-',
     },
   ];
+
+  return [...baseOpening, ...expandedFokusCards, ...closingItems];
+}
+
+function defaultMinitAgendaItems(
+  portfolio: FullMySGPortfolioItem,
+  academicYear: string
+): MinitPKPAAgendaItem[] {
+  return buildMinitAgendaItemsFromFokusList(portfolio, academicYear, []);
 }
 
 function formalizeSinglePKPAItem(
@@ -1619,26 +1676,38 @@ function formalizeSinglePKPAItem(
   if (cleanLines.length === 0) {
     return item;
   }
+  const isPenutup = /^penutup|penangguhan/i.test(item.title.trim());
+  const isHalLain = /^hal[- ]?hal\s+lain/i.test(item.title.trim());
+  const isFokusIntro =
+    idx === 3 && /^fokus\s*\/\s*perbincangan\s+utama/i.test(item.title.trim());
+
   const paragraphs = cleanLines.map((line, subIdx) => {
     const cap = line.charAt(0).toUpperCase() + line.slice(1);
     if (idx === 0) {
       return `${paraBase}.${subIdx + 1} Pengerusi memaklumkan bahawa ${cap.toLowerCase()} perlu diberi perhatian utama oleh semua ahli ${portfolio.jawatankuasaInduk}.`;
     }
-    return `${paraBase}.${subIdx + 1} Mesyuarat membincangkan perkara berkaitan ${cap.toLowerCase()} dan memutuskan agar tindakan penyelarasan dilaksanakan mengikut ketetapan ${portfolio.skpmCodeDisplay}.`;
+    if (isPenutup) {
+      return `${paraBase}.${subIdx + 1} Mesyuarat ditangguhkan dengan ucapan terima kasih daripada Pengerusi (${cap}).`;
+    }
+    return `${paraBase}.${subIdx + 1} Mesyuarat membincangkan perkara berkaitan "${item.title}" (${cap}) dan memutuskan agar tindakan penyelarasan dilaksanakan mengikut ketetapan ${portfolio.skpmCodeDisplay}.`;
   });
+
+  const defaultTindakan =
+    idx === 0 || idx === 1 || isFokusIntro || isPenutup
+      ? 'Makluman'
+      : isHalLain
+      ? 'Semua Ahli Jawatankuasa'
+      : 'Penyelaras & Semua AJK';
 
   return {
     ...item,
     formalText: paragraphs.join('\n'),
-    tindakan:
-      item.tindakan && item.tindakan.trim()
-        ? item.tindakan
-        : idx === 0 || idx === 1 || idx === 5
-        ? 'Makluman'
-        : 'Penyelaras & Semua AJK',
+    tindakan: item.tindakan && item.tindakan.trim() ? item.tindakan : defaultTindakan,
     statusMaklumBalas:
       item.statusMaklumBalas && item.statusMaklumBalas.trim() && item.statusMaklumBalas !== '-'
         ? item.statusMaklumBalas
+        : defaultTindakan === 'Makluman'
+        ? '-'
         : 'Tindakan sedang diambil oleh pegawai bertanggungjawab mengikut jadual.',
   };
 }
@@ -1855,9 +1924,6 @@ export const AISetiausahaHub: React.FC<Props> = ({
     schoolSettings?.schoolName || schoolName || 'SJK (C) CHUNG HUA BALINGIAN';
   const effectiveSchoolLogo =
     schoolSettings?.schoolLogo || (schoolSettings as any)?.logoUrl || '';
-  const principalName =
-    (schoolSettings as any)?.principalName || 'ENCIK WONG ING SENG';
-
   // Active sub-module tab
   const [activeTab, setActiveTab] = useState<'OPR' | 'MEMO' | 'MINIT' | 'LANTIKAN'>('OPR');
 
@@ -1883,6 +1949,31 @@ export const AISetiausahaHub: React.FC<Props> = ({
   const [bannerMsg, setBannerMsg] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
   const [showArchiveDrawer, setShowArchiveDrawer] = useState<boolean>(false);
   const [sppkModalData, setSppkModalData] = useState<SPPKInitialData | null>(null);
+
+  // Requirement 1: Resolve `principalName` dynamically from real `personnel` loaded from Firestore (NO hardcoded fake name)
+  const principalName = useMemo(() => {
+    const matchedFromPersonnel = personnel.find((p) => {
+      const cat = String((p as any).category || '').trim().toUpperCase();
+      const sub = String((p as any).subRole || '').trim().toUpperCase();
+      const pos = String((p as any).position || (p as any).role || '').trim();
+      return (
+        cat === 'PRINCIPAL' ||
+        sub === 'GB' ||
+        /\bGURU\s+BESAR\b|^GB$/i.test(pos)
+      );
+    });
+    if (matchedFromPersonnel?.name) {
+      return String(matchedFromPersonnel.name).trim().toUpperCase();
+    }
+    const settingsPrincipal = String((schoolSettings as any)?.principalName || '').trim();
+    if (settingsPrincipal) {
+      return settingsPrincipal.toUpperCase();
+    }
+    if (String(currentUser?.role || '').toUpperCase() === 'PRINCIPAL' && currentUser?.name) {
+      return String(currentUser.name).trim().toUpperCase();
+    }
+    return 'GURU BESAR';
+  }, [personnel, schoolSettings, currentUser]);
 
   // -------------------- TAB 1: OPR PINTAR SKPM STATE --------------------
   const [skpmRadarFilter, setSkpmRadarFilter] = useState<string>('Semua');
@@ -1930,14 +2021,37 @@ export const AISetiausahaHub: React.FC<Props> = ({
   const [memoTempat, setMemoTempat] = useState<string>('Bilik Mesyuarat SJK(C) Chung Hua Balingian');
   const [memoPengerusi, setMemoPengerusi] = useState<string>(principalName);
   const [memoJawatanPengerusi, setMemoJawatanPengerusi] = useState<string>('Guru Besar');
-  const [memoRecipientMode, setMemoRecipientMode] = useState<'COMMITTEE_ONLY' | 'ALL_TEACHERS'>(
-    'COMMITTEE_ONLY'
+  const [memoSetiausaha, setMemoSetiausaha] = useState<string>(
+    (currentUser?.name || 'SETIAUSAHA').toUpperCase()
   );
+  const [memoJawatanSetiausaha, setMemoJawatanSetiausaha] = useState<string>(
+    'Setiausaha Pengurusan & Minit Mesyuarat Guru'
+  );
+  const [memoRecipientMode, setMemoRecipientMode] = useState<
+    'COMMITTEE_ONLY' | 'ALL_TEACHERS' | 'NONE'
+  >('COMMITTEE_ONLY');
   const [memoSelectedTeachers, setMemoSelectedTeachers] = useState<InvitedCommitteeTeacher[]>([]);
   const [memoAiHint, setMemoAiHint] = useState<string>('');
   const [memoFokusText, setMemoFokusText] = useState<string>(
     'Penyelarasan Takwim & Ketetapan Pelaksanaan Unit Sesi 2026\nPembentangan Sasaran KPI & Pelan Strategik Organisasi (PSO)\nPenyelarasan Dokumentasi Evidens One Page Report (OPR) SKPM Kualiti@Sekolah\nPengurusan PCG, BBM & Penyeliaan Berkala'
   );
+  const [memoWaModalData, setMemoWaModalData] = useState<{
+    title: string;
+    pillar: MySGPillar;
+    jawatankuasaInduk: string;
+    tarikh: string;
+    masa: string;
+    tempat: string;
+    sessionLabel: string;
+    waText: string;
+    recipients: Array<{
+      teacherId: string;
+      teacherName: string;
+      committeeRole: string;
+      phone: string;
+    }>;
+  } | null>(null);
+  const [waTextCopied, setWaTextCopied] = useState<boolean>(false);
 
   // -------------------- TAB 3: MINIT PKPA 2/1991 STATE --------------------
   const [minitDocId, setMinitDocId] = useState<string>('');
@@ -1959,6 +2073,16 @@ export const AISetiausahaHub: React.FC<Props> = ({
   const [minitAttendance, setMinitAttendance] = useState<MinitAttendanceRecord[]>([]);
   const [minitAgendaItems, setMinitAgendaItems] = useState<MinitPKPAAgendaItem[]>([]);
 
+  // Update `memoPengerusi` and `minitPengerusi` automatically once `personnel` finishes loading
+  useEffect(() => {
+    if (!memoDocId) {
+      setMemoPengerusi(principalName);
+    }
+    if (!minitDocId && !minitSourceMemoId) {
+      setMinitPengerusi(`${principalName} (Guru Besar)`);
+    }
+  }, [principalName, memoDocId, minitDocId, minitSourceMemoId]);
+
   // -------------------- TAB 4: SURAT LANTIKAN MYSG STATE --------------------
   const [lantikanMode, setLantikanMode] = useState<'INDIVIDU_BERSEPADU' | 'IKUT_PORTFOLIO'>(
     'INDIVIDU_BERSEPADU'
@@ -1969,7 +2093,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
   );
   const [lantikanRujKami, setLantikanRujKami] = useState<string>('YCC3404/500-MYSG/2026(01)');
 
-  // Requirement 4: Use ONLY real teachers loaded from Firestore `personnel` when non-empty
+  // Use ONLY real teachers loaded from Firestore `personnel` when non-empty
   const teacherRoster = useMemo(() => {
     const map = new Map<string, { id: string; name: string; role: string }>();
     if (personnel.length > 0) {
@@ -1997,29 +2121,190 @@ export const AISetiausahaHub: React.FC<Props> = ({
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [personnel]);
 
-  // Currently selected Level 2 portfolio
+  // ============================================================================
+  // REQUIREMENT 3: STRICT ROLE-BASED VISIBILITY ON JAWATANKUASA SELECTOR & ARCHIVE
+  // ============================================================================
+  const userRbacScope = useMemo(() => {
+    const roleUp = String(currentUser?.role || '').trim().toUpperCase();
+    const userSub = String((currentUser as any)?.subRole || '').trim().toUpperCase();
+    const userNameUp = String(currentUser?.name || '').trim().toUpperCase();
+    const userIdUp = String((currentUser as any)?.id || (currentUser as any)?.teacherId || '')
+      .trim()
+      .toUpperCase();
+
+    const matchedPerson = personnel.find((p) => {
+      const pName = String(p.name || '').trim().toUpperCase();
+      const pId = String(p.id || '').trim().toUpperCase();
+      return (userNameUp && pName === userNameUp) || (userIdUp && pId === userIdUp);
+    });
+
+    const pSub = String((matchedPerson as any)?.subRole || userSub || '')
+      .trim()
+      .toUpperCase();
+    const pCat = String((matchedPerson as any)?.category || '').trim().toUpperCase();
+    const pPos = String(
+      (matchedPerson as any)?.position ||
+        (matchedPerson as any)?.role ||
+        (currentUser as any)?.position ||
+        ''
+    ).trim();
+
+    if (
+      roleUp === 'PRINCIPAL' ||
+      roleUp === 'ADMIN' ||
+      roleUp === 'SYSTEM_ADMIN' ||
+      pSub === 'GB' ||
+      pCat === 'PRINCIPAL' ||
+      /\bGURU\s+BESAR\b|^GB$/i.test(pPos)
+    ) {
+      return {
+        tier: 'GB_ADMIN' as const,
+        allowedPillars: ['PENTADBIRAN', 'KURIKULUM', 'HEM', 'KOKURIKULUM'] as MySGPillar[],
+        userNameUp,
+        userIdUp,
+        personIdUp: String(matchedPerson?.id || '').trim().toUpperCase(),
+      };
+    }
+
+    if (pSub === 'PKP' || /PK\s*PENTADBIRAN|PK\s*1|\bPKP\b/i.test(pPos)) {
+      return {
+        tier: 'PKP' as const,
+        allowedPillars: ['PENTADBIRAN', 'KURIKULUM'] as MySGPillar[],
+        userNameUp,
+        userIdUp,
+        personIdUp: String(matchedPerson?.id || '').trim().toUpperCase(),
+      };
+    }
+
+    if (pSub === 'PKHEM' || /PK\s*HEM|HAL\s+EHWAL\s+MURID|\bPKHEM\b/i.test(pPos)) {
+      return {
+        tier: 'PKHEM' as const,
+        allowedPillars: ['HEM'] as MySGPillar[],
+        userNameUp,
+        userIdUp,
+        personIdUp: String(matchedPerson?.id || '').trim().toUpperCase(),
+      };
+    }
+
+    if (pSub === 'PKKK' || /PK\s*KOKURIKULUM|\bPKKK\b/i.test(pPos)) {
+      return {
+        tier: 'PKKK' as const,
+        allowedPillars: ['KOKURIKULUM'] as MySGPillar[],
+        userNameUp,
+        userIdUp,
+        personIdUp: String(matchedPerson?.id || '').trim().toUpperCase(),
+      };
+    }
+
+    return {
+      tier: 'GURU' as const,
+      allowedPillars: ['PENTADBIRAN', 'KURIKULUM', 'HEM', 'KOKURIKULUM'] as MySGPillar[],
+      userNameUp,
+      userIdUp,
+      personIdUp: String(matchedPerson?.id || '').trim().toUpperCase(),
+    };
+  }, [currentUser, personnel]);
+
+  const isTeacherAppointedInPortfolio = (p: FullMySGPortfolioItem): boolean => {
+    const { userNameUp, userIdUp, personIdUp } = userRbacScope;
+    const assignedName = String(p.assignedTeacherName || '').trim().toUpperCase();
+    const assignedId = String(p.assignedTeacherId || '').trim().toUpperCase();
+    const isPenyelaras =
+      (Boolean(userNameUp) && assignedName === userNameUp) ||
+      (Boolean(userIdUp) && (assignedId === userIdUp || assignedName === userIdUp)) ||
+      (Boolean(personIdUp) && assignedId === personIdUp);
+
+    if (isPenyelaras) return true;
+
+    return (p.ahliList || []).some((a) => {
+      if (!a) return false;
+      const aName = String(a.teacherName || (a as any).name || '').trim().toUpperCase();
+      const aId = String(a.teacherId || '').trim().toUpperCase();
+      return (
+        (Boolean(userNameUp) && aName === userNameUp) ||
+        (Boolean(userIdUp) && (aId === userIdUp || aName === userIdUp)) ||
+        (Boolean(personIdUp) && aId === personIdUp)
+      );
+    });
+  };
+
+  // Filtered portfolios visible to the current user according to RBAC rules
+  const visiblePortfolios = useMemo(() => {
+    if (userRbacScope.tier === 'GB_ADMIN') {
+      return portfolios;
+    }
+    if (
+      userRbacScope.tier === 'PKP' ||
+      userRbacScope.tier === 'PKHEM' ||
+      userRbacScope.tier === 'PKKK'
+    ) {
+      return portfolios.filter((p) => userRbacScope.allowedPillars.includes(p.pillar));
+    }
+    // Regular teacher (`GURU`): ONLY portfolios where appointed as Penyelaras or Ahli Jawatankuasa (AJK)
+    return portfolios.filter((p) => isTeacherAppointedInPortfolio(p));
+  }, [portfolios, userRbacScope]);
+
+  // Visible Level 1 Pillars (hide disallowed or empty Teras tabs for PK / GURU)
+  const visiblePillars = useMemo((): MySGPillar[] => {
+    const allOrder: MySGPillar[] = ['PENTADBIRAN', 'KURIKULUM', 'HEM', 'KOKURIKULUM'];
+    if (userRbacScope.tier === 'GB_ADMIN') return allOrder;
+    if (
+      userRbacScope.tier === 'PKP' ||
+      userRbacScope.tier === 'PKHEM' ||
+      userRbacScope.tier === 'PKKK'
+    ) {
+      return allOrder.filter((pil) => userRbacScope.allowedPillars.includes(pil));
+    }
+    return allOrder.filter((pil) => visiblePortfolios.some((p) => p.pillar === pil));
+  }, [userRbacScope, visiblePortfolios]);
+
+  // Ensure `selectedPillar` and `selectedKodMySG` stay inside `visiblePillars` & `visiblePortfolios`
+  useEffect(() => {
+    if (visiblePortfolios.length === 0) return;
+    if (!visiblePillars.includes(selectedPillar)) {
+      const nextPil = visiblePillars[0];
+      if (nextPil) {
+        setSelectedPillar(nextPil);
+        const firstInPil = visiblePortfolios.find((p) => p.pillar === nextPil);
+        if (firstInPil) setSelectedKodMySG(firstInPil.kodMySG);
+      }
+      return;
+    }
+    const inCurrentPillar = visiblePortfolios.filter((p) => p.pillar === selectedPillar);
+    if (!inCurrentPillar.some((p) => p.kodMySG === selectedKodMySG)) {
+      if (inCurrentPillar[0]) {
+        setSelectedKodMySG(inCurrentPillar[0].kodMySG);
+      } else if (visiblePortfolios[0]) {
+        setSelectedPillar(visiblePortfolios[0].pillar);
+        setSelectedKodMySG(visiblePortfolios[0].kodMySG);
+      }
+    }
+  }, [visiblePillars, visiblePortfolios, selectedPillar, selectedKodMySG]);
+
+  // Currently selected Level 2 portfolio (null if a GURU has 0 assigned committees)
   const selectedPortfolio = useMemo(() => {
+    if (visiblePortfolios.length === 0) return undefined;
     return (
-      portfolios.find((p) => p.kodMySG === selectedKodMySG) ||
-      portfolios.find((p) => p.pillar === selectedPillar) ||
-      portfolios[0]
+      visiblePortfolios.find((p) => p.kodMySG === selectedKodMySG) ||
+      visiblePortfolios.find((p) => p.pillar === selectedPillar) ||
+      visiblePortfolios[0]
     );
-  }, [portfolios, selectedKodMySG, selectedPillar]);
+  }, [visiblePortfolios, selectedKodMySG, selectedPillar]);
 
-  // Portfolios under the selected Level 1 Pillar
+  // Portfolios under the selected Level 1 Pillar (scoped to visiblePortfolios)
   const pillarPortfolios = useMemo(() => {
-    return portfolios.filter((p) => p.pillar === selectedPillar);
-  }, [portfolios, selectedPillar]);
+    return visiblePortfolios.filter((p) => p.pillar === selectedPillar);
+  }, [visiblePortfolios, selectedPillar]);
 
-  // Pillar counts (22, 22, 19, 16)
+  // Pillar counts scoped to visiblePortfolios
   const pillarCounts = useMemo(() => {
     return {
-      PENTADBIRAN: portfolios.filter((p) => p.pillar === 'PENTADBIRAN').length,
-      KURIKULUM: portfolios.filter((p) => p.pillar === 'KURIKULUM').length,
-      HEM: portfolios.filter((p) => p.pillar === 'HEM').length,
-      KOKURIKULUM: portfolios.filter((p) => p.pillar === 'KOKURIKULUM').length,
+      PENTADBIRAN: visiblePortfolios.filter((p) => p.pillar === 'PENTADBIRAN').length,
+      KURIKULUM: visiblePortfolios.filter((p) => p.pillar === 'KURIKULUM').length,
+      HEM: visiblePortfolios.filter((p) => p.pillar === 'HEM').length,
+      KOKURIKULUM: visiblePortfolios.filter((p) => p.pillar === 'KOKURIKULUM').length,
     };
-  }, [portfolios]);
+  }, [visiblePortfolios]);
 
   // Compute assigned Penyelaras + Ahli Jawatankuasa (AJK) for the active portfolio
   const currentCommitteeMembers = useMemo((): InvitedCommitteeTeacher[] => {
@@ -2221,18 +2506,124 @@ export const AISetiausahaHub: React.FC<Props> = ({
     loadHubData();
   }, [effectiveSchoolCode, selectedAcademicYear]);
 
-  // Filter `rawSchoolDocs` by `selectedAcademicYear` (matching ANY year in `academicYears`) or show all when `archiveSessionScope === 'ALL'`
+  // Deterministically classify any document or Makluman meeting into its exact Pillar (PENTADBIRAN / KURIKULUM / HEM / KOKURIKULUM)
+  const inferDocumentPillar = useMemo(() => {
+    return (d: Partial<AISetiausahaDocument> & { domain?: string }): MySGPillar => {
+      if (d.kodMySG) {
+        const matched = portfolios.find((p) => p.kodMySG === d.kodMySG);
+        if (matched) return matched.pillar;
+      }
+      const explicitPil = String(d.pillar || '').trim().toUpperCase();
+      const text = `${d.programTitle || d.tajukMesyuarat || ''} ${d.jawatankuasaInduk || ''}`.toUpperCase();
+
+      const hasPentadbiranKeyword =
+        /PENTADBIRAN|PENGURUSAN|MESYUARAT\s+GURU|MESYUARAT\s+STAF|KEWANGAN|ASET|SKPM|PBPPP|SPLKPM|LDP|PIBG|PIBKS|PERANCANGAN\s+STRATEGIK|PEMBENTUKAN\s+JAWATANKUASA|DIALOG\s+PRESTASI\s+PENGURUSAN|TAKWIM\s+PENGURUSAN|JK0[1-9]|JK1[0-5]/i.test(
+          text
+        ) &&
+        !/MESYUARAT\s+(JAWATANKUASA\s+)?KURIKULUM|MESYUARAT\s+(JAWATANKUASA\s+)?HEM|MESYUARAT\s+(JAWATANKUASA\s+)?HAL\s+EHWAL\s+MURID|MESYUARAT\s+(JAWATANKUASA\s+)?KOKURIKULUM|PANITIA/i.test(
+          text
+        );
+      if (hasPentadbiranKeyword) return 'PENTADBIRAN';
+
+      if (
+        /KOKURIKULUM|SUKAN|UNIT\s+BERUNIFORM|KELAB|PERSATUAN|KOAKADEMIK|MERENTAS\s+DESA|PAJSK|PERKHEMAHAN|KARNIVAL/i.test(
+          text
+        )
+      ) {
+        return 'KOKURIKULUM';
+      }
+
+      if (
+        /\bHEM\b|HAL\s+EHWAL\s+MURID|DISIPLIN|PENGAWAS|SPBT|RMT|KWAMP|BANTUAN|3K|KESELAMATAN|KEBAJIKAN|APDM|SSDM|KAUNSELING|KEHADIRAN\s+MURID/i.test(
+          text
+        )
+      ) {
+        return 'HEM';
+      }
+
+      if (
+        /KURIKULUM|PANITIA|\bPBD\b|\bUASA\b|PEMULIHAN|TRANSISI|JADUAL\s+WAKTU|PEPERIKSAAN|\bPBS\b|NILAM|\bPSS\b|PUSAT\s+SUMBER|PRASEKOLAH|PDPC|AKADEMIK/i.test(
+          text
+        )
+      ) {
+        return 'KURIKULUM';
+      }
+
+      if (
+        explicitPil === 'PENTADBIRAN' ||
+        explicitPil === 'KURIKULUM' ||
+        explicitPil === 'HEM' ||
+        explicitPil === 'KOKURIKULUM'
+      ) {
+        return explicitPil as MySGPillar;
+      }
+
+      const domUp = String(d.domain || '').trim().toUpperCase();
+      if (
+        domUp === 'PENTADBIRAN' ||
+        domUp === 'KURIKULUM' ||
+        domUp === 'HEM' ||
+        domUp === 'KOKURIKULUM'
+      ) {
+        return domUp as MySGPillar;
+      }
+
+      return 'PENTADBIRAN';
+    };
+  }, [portfolios]);
+
+  // Helper to check if a document is within the current user's RBAC visibility scope
+  const isDocumentVisibleToUser = useMemo(() => {
+    const visibleKodSet = new Set(visiblePortfolios.map((p) => p.kodMySG));
+    const visibleJkSet = new Set(
+      visiblePortfolios.map((p) => String(p.jawatankuasaInduk || '').trim().toUpperCase())
+    );
+    return (d: AISetiausahaDocument): boolean => {
+      if (userRbacScope.tier === 'GB_ADMIN') return true;
+      const preparedUp = String(d.preparedByName || d.createdBy || '').trim().toUpperCase();
+      if (userRbacScope.userNameUp && preparedUp.includes(userRbacScope.userNameUp)) {
+        return true;
+      }
+      const docPil = inferDocumentPillar(d);
+      if (
+        userRbacScope.tier === 'PKP' ||
+        userRbacScope.tier === 'PKHEM' ||
+        userRbacScope.tier === 'PKKK'
+      ) {
+        if (docPil && userRbacScope.allowedPillars.includes(docPil)) return true;
+        if (d.kodMySG && visibleKodSet.has(d.kodMySG)) return true;
+        return false;
+      }
+      // Regular teacher (`GURU`): only documents for their assigned Jawatankuasa or created by them
+      if (d.kodMySG && visibleKodSet.has(d.kodMySG)) return true;
+      const docJk = String(d.jawatankuasaInduk || '').trim().toUpperCase();
+      if (docJk && visibleJkSet.has(docJk)) return true;
+      return false;
+    };
+  }, [userRbacScope, visiblePortfolios, inferDocumentPillar]);
+
+  // Filter `rawSchoolDocs` by RBAC visibility + `selectedPillar` + `selectedAcademicYear` (matching ANY year in `academicYears`) or show all sessions when `archiveSessionScope === 'ALL'`
   const allDocs = useMemo(() => {
-    if (archiveSessionScope === 'ALL') return rawSchoolDocs;
+    const rbacAndPillarDocs = rawSchoolDocs.filter(
+      (d) => isDocumentVisibleToUser(d) && inferDocumentPillar(d) === selectedPillar
+    );
+    if (archiveSessionScope === 'ALL') return rbacAndPillarDocs;
     const yr = selectedAcademicYear.slice(0, 4);
-    return rawSchoolDocs.filter((d) => {
+    return rbacAndPillarDocs.filter((d) => {
       const yrs =
         Array.isArray(d.academicYears) && d.academicYears.length > 0
           ? d.academicYears
           : [d.academicYear || '2026'];
       return yrs.some((y) => y === selectedAcademicYear || String(y).startsWith(yr));
     });
-  }, [rawSchoolDocs, selectedAcademicYear, archiveSessionScope]);
+  }, [
+    rawSchoolDocs,
+    isDocumentVisibleToUser,
+    inferDocumentPillar,
+    selectedPillar,
+    selectedAcademicYear,
+    archiveSessionScope,
+  ]);
 
   // Synchronize default fields ONLY when no saved document (`oprDocId`, `memoDocId`, `minitDocId`, `minitSourceMemoId`) is active
   useEffect(() => {
@@ -2265,6 +2656,8 @@ export const AISetiausahaHub: React.FC<Props> = ({
       );
       setMemoBilangan(`Bil. 1/${selectedAcademicYear}`);
       setMemoRujKami(`${effectiveSchoolCode}/${selectedPortfolio.fileRefPrefix}/01`);
+      setMemoSetiausaha(assignedCoordinator);
+      setMemoJawatanSetiausaha(selectedPortfolio.jawatanRasmi);
 
       if (currentCommitteeMembers.length > 0) {
         setMemoRecipientMode('COMMITTEE_ONLY');
@@ -2368,11 +2761,12 @@ export const AISetiausahaHub: React.FC<Props> = ({
   useEffect(() => {
     if (!lantikanTeacherKey && teacherRoster.length > 0) {
       const firstAssigned =
+        visiblePortfolios.find((p) => Boolean(p.assignedTeacherName))?.assignedTeacherName ||
         portfolios.find((p) => Boolean(p.assignedTeacherName))?.assignedTeacherName ||
         teacherRoster[0].name;
       setLantikanTeacherKey(firstAssigned);
     }
-  }, [teacherRoster, portfolios, lantikanTeacherKey]);
+  }, [teacherRoster, visiblePortfolios, portfolios, lantikanTeacherKey]);
 
   const handleAddCustomYear = async () => {
     const clean = newYearStr.trim();
@@ -2399,7 +2793,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
     }
   };
 
-  // Filtered documents by kind (and merged Makluman meetings for Memo import)
+  // Filtered documents by kind (strictly isolated by `selectedPillar` so PENTADBIRAN meetings are never mixed with KURIKULUM / HEM / KOKURIKULUM)
   const oprDocs = useMemo(() => allDocs.filter((d) => d.docKind === 'OPR'), [allDocs]);
   const memoDocs = useMemo(() => {
     const savedMemos = allDocs.filter((d) => d.docKind === 'MEMO');
@@ -2409,15 +2803,40 @@ export const AISetiausahaHub: React.FC<Props> = ({
         .filter(Boolean)
     );
     const extraMakluman = maklumanMeetings.filter((m) => {
+      if (!isDocumentVisibleToUser(m)) return false;
+      if (inferDocumentPillar(m) !== selectedPillar) return false;
       const mTitle = String(m.programTitle || '').trim().toUpperCase();
       if (mTitle && savedTitles.has(mTitle)) return false;
       if (archiveSessionScope === 'ALL') return true;
       const yrs = m.academicYears || [m.academicYear || '2026'];
       return yrs.includes(selectedAcademicYear);
     });
-    return [...savedMemos, ...extraMakluman];
-  }, [allDocs, maklumanMeetings, archiveSessionScope, selectedAcademicYear]);
-  const minitDocs = useMemo(() => allDocs.filter((d) => d.docKind === 'MINIT'), [allDocs]);
+    const combined = [...savedMemos, ...extraMakluman];
+    return combined.sort((a, b) => {
+      const aMatch = selectedPortfolio && a.kodMySG === selectedPortfolio.kodMySG ? 1 : 0;
+      const bMatch = selectedPortfolio && b.kodMySG === selectedPortfolio.kodMySG ? 1 : 0;
+      if (aMatch !== bMatch) return bMatch - aMatch;
+      return String(b.tarikh || '').localeCompare(String(a.tarikh || ''));
+    });
+  }, [
+    allDocs,
+    maklumanMeetings,
+    isDocumentVisibleToUser,
+    inferDocumentPillar,
+    selectedPillar,
+    selectedPortfolio,
+    archiveSessionScope,
+    selectedAcademicYear,
+  ]);
+  const minitDocs = useMemo(() => {
+    const list = allDocs.filter((d) => d.docKind === 'MINIT');
+    return list.sort((a, b) => {
+      const aMatch = selectedPortfolio && a.kodMySG === selectedPortfolio.kodMySG ? 1 : 0;
+      const bMatch = selectedPortfolio && b.kodMySG === selectedPortfolio.kodMySG ? 1 : 0;
+      if (aMatch !== bMatch) return bMatch - aMatch;
+      return String(b.tarikh || '').localeCompare(String(a.tarikh || ''));
+    });
+  }, [allDocs, selectedPortfolio]);
 
   // SKPM Radar counts across OPR docs
   const skpmRadarCounts = useMemo(() => {
@@ -2712,6 +3131,52 @@ export const AISetiausahaHub: React.FC<Props> = ({
     setActiveTab('OPR');
   };
 
+  const resolveInvitedTeachersFromMemoDoc = (
+    d: AISetiausahaDocument
+  ): InvitedCommitteeTeacher[] => {
+    if (Array.isArray(d.invitedTeachers) && d.invitedTeachers.length > 0) {
+      return d.invitedTeachers;
+    }
+    const rawNames = Array.isArray(d.recipientNames) ? d.recipientNames : [];
+    const rawIds = Array.isArray(d.recipientIds) ? d.recipientIds : [];
+    if (rawNames.length > 0 || rawIds.length > 0) {
+      const matched: InvitedCommitteeTeacher[] = [];
+      const seen = new Set<string>();
+      rawIds.forEach((rid) => {
+        const t = teacherRoster.find((r) => r.id === rid);
+        if (t && !seen.has(t.name.toUpperCase())) {
+          seen.add(t.name.toUpperCase());
+          const jkMatch = currentCommitteeMembers.find(
+            (m) => m.teacherName.toUpperCase() === t.name.toUpperCase()
+          );
+          matched.push({
+            teacherId: t.id,
+            teacherName: t.name,
+            committeeRole: jkMatch?.committeeRole || t.role || 'Ahli Jawatankuasa (AJK)',
+          });
+        }
+      });
+      rawNames.forEach((rname, idx) => {
+        const cleanName = String(rname || '').trim();
+        if (!cleanName || seen.has(cleanName.toUpperCase())) return;
+        seen.add(cleanName.toUpperCase());
+        const t = teacherRoster.find(
+          (r) => r.name.trim().toUpperCase() === cleanName.toUpperCase()
+        );
+        const jkMatch = currentCommitteeMembers.find(
+          (m) => m.teacherName.toUpperCase() === cleanName.toUpperCase()
+        );
+        matched.push({
+          teacherId: t?.id || rawIds[idx] || `INV_${idx}`,
+          teacherName: t?.name || cleanName,
+          committeeRole: jkMatch?.committeeRole || t?.role || 'Ahli Jawatankuasa (AJK)',
+        });
+      });
+      if (matched.length > 0) return matched;
+    }
+    return [];
+  };
+
   const handleLoadSavedMemo = (d: AISetiausahaDocument) => {
     setMemoDocId(d.id.startsWith('makluman_ref_') ? '' : d.id);
     if (d.kodMySG) {
@@ -2721,16 +3186,36 @@ export const AISetiausahaHub: React.FC<Props> = ({
         setSelectedKodMySG(matched.kodMySG);
       }
     }
-    setMemoTitle(d.programTitle || '');
+    setMemoTitle(d.programTitle || d.tajukMesyuarat || '');
     if (d.skpmCodeBadge) setMemoRujKami(d.skpmCodeBadge);
-    setMemoTarikhMesyuarat(d.tarikh || new Date().toISOString().slice(0, 10));
-    setMemoMasa(d.masa || '2:15 petang');
-    setMemoTempat(d.tempat || 'Bilik Mesyuarat');
-    if (Array.isArray(d.invitedTeachers) && d.invitedTeachers.length > 0) {
-      setMemoSelectedTeachers(d.invitedTeachers);
+    setMemoTarikhMesyuarat(
+      d.tarikh || d.tarikhMesyuarat || new Date().toISOString().slice(0, 10)
+    );
+    setMemoMasa(d.masa || d.masaMesyuarat || '2:15 petang');
+    setMemoTempat(d.tempat || d.tempatMesyuarat || 'Bilik Mesyuarat');
+    const matchedPort = d.kodMySG ? portfolios.find((p) => p.kodMySG === d.kodMySG) : selectedPortfolio;
+    if (d.preparedByName) {
+      setMemoSetiausaha(d.preparedByName.toUpperCase());
+    } else if (matchedPort?.assignedTeacherName) {
+      setMemoSetiausaha(matchedPort.assignedTeacherName.toUpperCase());
     }
-    if (Array.isArray(d.agendaList) && d.agendaList.length > 0) {
-      const sanitized = cleanFokusAgendaText(d.agendaList);
+    if (d.preparedByTitle) {
+      setMemoJawatanSetiausaha(d.preparedByTitle);
+    } else if (matchedPort?.jawatanRasmi) {
+      setMemoJawatanSetiausaha(matchedPort.jawatanRasmi);
+    }
+    const resolvedInvited = resolveInvitedTeachersFromMemoDoc(d);
+    if (resolvedInvited.length > 0) {
+      setMemoSelectedTeachers(resolvedInvited);
+    }
+    const rawAgendas =
+      Array.isArray(d.agendaList) && d.agendaList.length > 0
+        ? d.agendaList
+        : Array.isArray(d.agendaFokusUtama)
+        ? d.agendaFokusUtama
+        : [];
+    if (rawAgendas.length > 0) {
+      const sanitized = cleanFokusAgendaText(rawAgendas);
       if (sanitized) setMemoFokusText(sanitized);
     }
     setActiveTab('MEMO');
@@ -2742,15 +3227,16 @@ export const AISetiausahaHub: React.FC<Props> = ({
     setMinitSourceMemoId(d.sourceMemoId || '');
     const activePort =
       (d.kodMySG ? portfolios.find((p) => p.kodMySG === d.kodMySG) : undefined) ||
-      selectedPortfolio;
+      selectedPortfolio ||
+      portfolios[0];
     if (activePort) {
       setSelectedPillar(activePort.pillar);
       setSelectedKodMySG(activePort.kodMySG);
     }
-    setMinitTitle(d.programTitle || '');
-    setMinitTarikh(d.tarikh || new Date().toISOString().slice(0, 10));
-    setMinitMasa(d.masa || '2:15 petang – 4:15 petang');
-    setMinitTempat(d.tempat || 'Bilik Mesyuarat');
+    setMinitTitle(d.programTitle || d.tajukMesyuarat || '');
+    setMinitTarikh(d.tarikh || d.tarikhMesyuarat || new Date().toISOString().slice(0, 10));
+    setMinitMasa(d.masa || d.masaMesyuarat || '2:15 petang – 4:15 petang');
+    setMinitTempat(d.tempat || d.tempatMesyuarat || 'Bilik Mesyuarat');
     setMinitPengerusi(d.pengerusi || `${principalName} (Guru Besar)`);
     setMinitPencatat(
       d.preparedByName
@@ -2761,6 +3247,24 @@ export const AISetiausahaHub: React.FC<Props> = ({
     );
     if (Array.isArray(d.attendanceList) && d.attendanceList.length > 0) {
       setMinitAttendance(d.attendanceList);
+    } else if (Array.isArray(d.hadirNames) && d.hadirNames.length > 0) {
+      const thbList = Array.isArray(d.tidakHadirBersebab) ? d.tidakHadirBersebab : [];
+      const builtAtt: MinitAttendanceRecord[] = [
+        ...d.hadirNames.map((n, i) => ({
+          teacherId: `H_${i}`,
+          teacherName: n,
+          committeeRole: 'Ahli Mesyuarat',
+          status: 'HADIR' as const,
+        })),
+        ...thbList.map((t, i) => ({
+          teacherId: `THB_${i}`,
+          teacherName: t.name,
+          committeeRole: 'Ahli Mesyuarat',
+          status: 'TIDAK_HADIR_BERSEBAB' as const,
+          reason: t.sebab,
+        })),
+      ];
+      setMinitAttendance(builtAtt);
     }
     const restoredAgendas = parseMinitAgendaItemsFromSavedDoc(
       d,
@@ -2771,7 +3275,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
     setActiveTab('MINIT');
     setBannerMsg({
       type: 'info',
-      text: `Minit "${d.programTitle}" (${restoredAgendas.length} agenda & Borang Maklum Balas) dibuka semula dengan lengkap.`,
+      text: `Minit "${d.programTitle || d.tajukMesyuarat}" (${restoredAgendas.length} agenda & Borang Maklum Balas) dibuka semula dengan lengkap.`,
     });
   };
 
@@ -2847,6 +3351,9 @@ export const AISetiausahaHub: React.FC<Props> = ({
         `memo_${resolvedSession.primaryYear}_${Date.now()}`
       );
 
+    const isAllSelected =
+      teacherRoster.length > 0 && memoSelectedTeachers.length >= teacherRoster.length;
+
     const payload: AISetiausahaDocument = {
       id: docId,
       docKind: 'MEMO',
@@ -2860,18 +3367,28 @@ export const AISetiausahaHub: React.FC<Props> = ({
       skpmBucket: selectedPortfolio.skpmBucket,
       skpmCodeBadge: memoRujKami,
       programTitle: memoTitle.trim().toUpperCase(),
+      tajukMesyuarat: memoTitle.trim().toUpperCase(),
       tarikh: memoTarikhMesyuarat,
+      tarikhMesyuarat: memoTarikhMesyuarat,
       masa: memoMasa,
+      masaMesyuarat: memoMasa,
       tempat: memoTempat,
+      tempatMesyuarat: memoTempat,
       pengerusi: `${memoPengerusi} (${memoJawatanPengerusi})`,
       agendaList: fokusList,
+      agendaFokusUtama: fokusList,
       invitedTeachers: memoSelectedTeachers,
+      recipientMode: isAllSelected ? 'ALL_TEACHERS' : 'COMMITTEE_ONLY',
+      recipientIds: memoSelectedTeachers.map((t) => t.teacherId),
+      recipientNames: memoSelectedTeachers.map((t) => t.teacherName),
       preparedByName: (
+        memoSetiausaha.trim() ||
         selectedPortfolio.assignedTeacherName ||
         currentUser?.name ||
         'SETIAUSAHA'
       ).toUpperCase(),
-      preparedByTitle: selectedPortfolio.jawatanRasmi,
+      preparedByTitle:
+        memoJawatanSetiausaha.trim() || selectedPortfolio.jawatanRasmi,
       createdAt: memoTarikhSurat || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -2883,6 +3400,17 @@ export const AISetiausahaHub: React.FC<Props> = ({
 
     if (syncMaklumanAndWhatsApp) {
       const maklumanId = scopedDocId(effectiveSchoolCode, `makluman_memo_${docId}`);
+      const nowIso = new Date().toISOString();
+      const tindakanSummary = isAllSelected
+        ? 'SEMUA GURU'
+        : `${selectedPortfolio.jawatankuasaInduk} (${memoSelectedTeachers
+            .map((t) => t.teacherName)
+            .join(', ')})`;
+      const fokusDesc =
+        fokusList.length > 0
+          ? `Agenda Fokus: ${fokusList.join(' • ')}`
+          : `Mesyuarat Rasmi ${selectedPortfolio.jawatankuasaInduk}`;
+
       await setDoc(
         doc(db, 'makluman_tasks', maklumanId),
         deepSanitizeFirestore({
@@ -2891,52 +3419,145 @@ export const AISetiausahaHub: React.FC<Props> = ({
           academicYear: resolvedSession.primaryYear,
           academicYears: resolvedSession.academicYears,
           title: payload.programTitle,
-          category: 'MESYUARAT',
+          description: fokusDesc,
+          domain: selectedPortfolio.pillar,
           pillar: selectedPortfolio.pillar,
+          category: 'MESYUARAT',
+          source: 'AD_HOC',
           kodMySG: selectedPortfolio.kodMySG,
           jawatankuasaInduk: selectedPortfolio.jawatankuasaInduk,
           dueDate: memoTarikhMesyuarat,
+          dueTime: memoMasa,
           masa: memoMasa,
+          location: memoTempat,
           venue: memoTempat,
           rujKami: memoRujKami,
+          tindakanLabel: tindakanSummary,
+          priority: 'TINGGI',
+          targetType: isAllSelected ? 'SEMUA_GURU' : 'GURU_TERPILIH',
+          targetTeacherIds: memoSelectedTeachers.map((t) => t.teacherId),
           invitedTeachers: memoSelectedTeachers,
           targetTeachers: memoSelectedTeachers.map((t) => t.teacherName),
           agendaList: fokusList,
           sourceMemoId: docId,
-          createdAt: new Date().toISOString(),
+          completions: {},
+          whatsappLogs: {},
+          createdByTeacherId: String(
+            (currentUser as any)?.id || (currentUser as any)?.teacherId || 'SETIAUSAHA'
+          ),
+          createdByName: payload.preparedByName,
+          createdAt: nowIso,
+          updatedAt: nowIso,
         }),
         { merge: true }
-      ).catch(() => null);
+      );
 
-      const waText = `*MEMO PANGGILAN MESYUARAT RASMI — ${effectiveSchoolName} (${resolvedSession.badgeLabel})*\n*Ruj. Kami:* ${memoRujKami}\n*Tajuk:* ${payload.programTitle}\n*Tarikh:* ${memoTarikhMesyuarat}\n*Masa:* ${memoMasa}\n*Tempat:* ${memoTempat}\n*Pengerusi:* ${memoPengerusi} (${memoJawatanPengerusi})\n\n*Ahli Dijemput (${memoSelectedTeachers.length} orang):*\n${memoSelectedTeachers
-        .map((t, i) => `${i + 1}. ${t.teacherName} (${t.committeeRole})`)
-        .join('\n')}\n\n*Fokus Mesyuarat:*\n${fokusList.map((f) => `• ${f}`).join('\n')}`;
+      const waText = [
+        `*[MEMO PANGGILAN MESYUARAT RASMI — ${effectiveSchoolName} (${resolvedSession.badgeLabel})]*`,
+        `*Teras:* ${selectedPortfolio.pillar} (${selectedPortfolio.jawatankuasaInduk})`,
+        `*Ruj. Kami:* ${memoRujKami}`,
+        `*Tajuk:* ${payload.programTitle}`,
+        `*Tarikh:* ${memoTarikhMesyuarat}`,
+        `*Masa:* ${memoMasa}`,
+        `*Tempat:* ${memoTempat}`,
+        `*Pengerusi:* ${memoPengerusi} (${memoJawatanPengerusi})`,
+        ``,
+        `*Senarai Penerima / Ahli Dijemput (${memoSelectedTeachers.length} orang):*`,
+        ...(memoSelectedTeachers.length > 0
+          ? memoSelectedTeachers.map(
+              (t, i) => `${i + 1}. ${t.teacherName} (${t.committeeRole})`
+            )
+          : ['Semua Guru & Ahli Jawatankuasa Berkenaan']),
+        ``,
+        `*Agenda Fokus Mesyuarat:*`,
+        ...fokusList.map((f, i) => `2.4.${i + 1} ${f}`),
+        ``,
+        `*Disediakan oleh:* ${payload.preparedByName} (${payload.preparedByTitle})`,
+      ].join('\n');
 
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        navigator.clipboard.writeText(waText).catch(() => null);
+      // Copy to clipboard with synchronous textarea fallback
+      let copiedOk = false;
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard) {
+          await navigator.clipboard.writeText(waText);
+          copiedOk = true;
+        }
+      } catch {
+        copiedOk = false;
       }
+      if (!copiedOk && typeof document !== 'undefined') {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = waText;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          copiedOk = true;
+        } catch {
+          // ignore fallback error
+        }
+      }
+
+      // Resolve phone numbers for each invited recipient from `personnel` or `OFFICIAL_TEACHERS`
+      const formatWaPhone = (raw?: string): string => {
+        if (!raw) return '';
+        const digits = String(raw).replace(/\D/g, '');
+        if (!digits) return '';
+        if (digits.startsWith('60')) return digits;
+        if (digits.startsWith('0')) return `6${digits}`;
+        return `60${digits}`;
+      };
+
+      const recipientContacts = memoSelectedTeachers.map((inv) => {
+        const invNameUp = inv.teacherName.trim().toUpperCase();
+        const pMatch = personnel.find(
+          (p) =>
+            String(p.name || '').trim().toUpperCase() === invNameUp ||
+            String(p.id || '') === inv.teacherId
+        );
+        const otMatch = OFFICIAL_TEACHERS.find(
+          (ot) => String(ot.name || '').trim().toUpperCase() === invNameUp
+        );
+        const rawPhone =
+          (pMatch as any)?.phone ||
+          (pMatch as any)?.mobilePhone ||
+          (otMatch as any)?.phone ||
+          '';
+        return {
+          teacherId: inv.teacherId,
+          teacherName: inv.teacherName,
+          committeeRole: inv.committeeRole,
+          phone: formatWaPhone(rawPhone),
+        };
+      });
+
+      setWaTextCopied(copiedOk);
+      setMemoWaModalData({
+        title: payload.programTitle,
+        pillar: selectedPortfolio.pillar,
+        jawatankuasaInduk: selectedPortfolio.jawatankuasaInduk,
+        tarikh: memoTarikhMesyuarat,
+        masa: memoMasa,
+        tempat: memoTempat,
+        sessionLabel: resolvedSession.badgeLabel,
+        waText,
+        recipients: recipientContacts,
+      });
 
       await loadHubData();
       setBannerMsg({
         type: 'success',
-        text: `Memo telah disimpan (${resolvedSession.badgeLabel}), disegerakkan ke Paparan Makluman (${memoSelectedTeachers.length} guru) & teks WhatsApp disalin!`,
+        text: `✅ Memo "${payload.programTitle}" telah dihantar ke Paparan Makluman (${selectedPortfolio.pillar}) bagi ${memoSelectedTeachers.length} guru & panel penghantaran WhatsApp telah dibuka!`,
       });
-      void handleSyncSavedDocToDrive(
-        payload,
-        'ai-setiausaha-memo-sheet',
-        `Memo "${payload.programTitle}" disimpan (${resolvedSession.badgeLabel}), disegerakkan ke Makluman`
-      );
     } else {
       await loadHubData();
       setBannerMsg({
         type: 'success',
-        text: `Memo Panggilan "${payload.programTitle}" telah disimpan di bawah ${resolvedSession.badgeLabel} (${memoSelectedTeachers.length} penerima).`,
+        text: `Memo Panggilan "${payload.programTitle}" telah disimpan di bawah Teras ${selectedPortfolio.pillar} (${resolvedSession.badgeLabel} • ${memoSelectedTeachers.length} penerima).`,
       });
-      void handleSyncSavedDocToDrive(
-        payload,
-        'ai-setiausaha-memo-sheet',
-        `Memo Panggilan "${payload.programTitle}" disimpan (${resolvedSession.badgeLabel})`
-      );
     }
   };
 
@@ -2950,15 +3571,19 @@ export const AISetiausahaHub: React.FC<Props> = ({
         setSelectedKodMySG(matched.kodMySG);
       }
     }
-    const safeMemoTitle = String(memo.programTitle || 'MESYUARAT JAWATANKUASA').trim();
+    const safeMemoTitle = String(
+      memo.programTitle || memo.tajukMesyuarat || 'MESYUARAT JAWATANKUASA'
+    ).trim();
     setMinitTitle(
       safeMemoTitle.toUpperCase().startsWith('MINIT')
         ? safeMemoTitle
         : `MINIT ${safeMemoTitle}`
     );
-    setMinitTarikh(memo.tarikh || new Date().toISOString().slice(0, 10));
-    setMinitMasa(memo.masa || '2:15 petang – 4:15 petang');
-    setMinitTempat(memo.tempat || 'Bilik Mesyuarat');
+    setMinitTarikh(
+      memo.tarikh || memo.tarikhMesyuarat || new Date().toISOString().slice(0, 10)
+    );
+    setMinitMasa(memo.masa || memo.masaMesyuarat || '2:15 petang – 4:15 petang');
+    setMinitTempat(memo.tempat || memo.tempatMesyuarat || 'Bilik Mesyuarat');
     setMinitPengerusi(memo.pengerusi || `${principalName} (Guru Besar)`);
     setMinitPencatat(
       `${memo.preparedByName || currentUser?.name || 'SETIAUSAHA'} (${
@@ -2967,10 +3592,9 @@ export const AISetiausahaHub: React.FC<Props> = ({
     );
 
     // STRICT 1-TO-1 ATTENDEE FILTERING FROM MEMO PANGGILAN TO MINIT MESYUARAT
+    const resolvedFromMemo = resolveInvitedTeachersFromMemoDoc(memo);
     const memoInvited =
-      Array.isArray(memo.invitedTeachers) && memo.invitedTeachers.length > 0
-        ? memo.invitedTeachers
-        : currentCommitteeMembers;
+      resolvedFromMemo.length > 0 ? resolvedFromMemo : currentCommitteeMembers;
 
     setMinitAttendance(
       memoInvited.map((inv) => ({
@@ -2982,8 +3606,16 @@ export const AISetiausahaHub: React.FC<Props> = ({
     );
 
     const activePort =
-      portfolios.find((p) => p.kodMySG === memo.kodMySG) || selectedPortfolio;
-    const fokusFromMemo = cleanFokusAgendaLines(memo.agendaList);
+      portfolios.find((p) => p.kodMySG === memo.kodMySG) ||
+      selectedPortfolio ||
+      portfolios[0];
+    const rawMemoAgendas =
+      Array.isArray(memo.agendaList) && memo.agendaList.length > 0
+        ? memo.agendaList
+        : Array.isArray(memo.agendaFokusUtama)
+        ? memo.agendaFokusUtama
+        : [];
+    const fokusFromMemo = cleanFokusAgendaLines(rawMemoAgendas);
     if (fokusFromMemo.length > 0) {
       setMemoFokusText(fokusFromMemo.join('\n'));
     }
@@ -2992,77 +3624,17 @@ export const AISetiausahaHub: React.FC<Props> = ({
         ? memo.academicYears.join(' & ')
         : memo.academicYear || selectedAcademicYear;
 
-    const builtAgendas: MinitPKPAAgendaItem[] = [
-      {
-        id: 'ag-1',
-        bil: '1.0',
-        title: 'Perutusan Pengerusi',
-        rawKeywords: `Ucapan alu-aluan Pengerusi & ketetapan ${activePort.jawatankuasaInduk}`,
-        formalText: `1.1 Pengerusi mengucapkan ribuan terima kasih atas kehadiran semua ahli mesyuarat ${activePort.jawatankuasaInduk}.\n1.2 Pengerusi menegaskan pematuhan garis panduan KPM dan sasaran Skor 4 SKPM Kualiti@Sekolah (${activePort.skpmCodeDisplay}).`,
-        tindakan: 'Makluman',
-        statusMaklumBalas: 'Telah diambil maklum oleh semua ahli.',
-      },
-      {
-        id: 'ag-2',
-        bil: '2.0',
-        title: 'Pengesahan Minit Mesyuarat Yang Lalu',
-        rawKeywords: 'Disahkan tanpa pindaan sebulat suara',
-        formalText: `2.1 Minit mesyuarat yang lalu telah dibentangkan dan disahkan tanpa pindaan atas cadangan dan sokongan sebulat suara ahli mesyuarat.`,
-        tindakan: 'Makluman',
-        statusMaklumBalas: 'Minit lepas telah disahkan.',
-      },
-      {
-        id: 'ag-3',
-        bil: '3.0',
-        title: 'Perkara-perkara Berbangkit',
-        rawKeywords: 'Maklum balas PKPA Bil. 2/1991 telah diambil tindakan',
-        formalText: `3.1 Semua perkara berbangkit daripada mesyuarat yang lalu telah diambil tindakan sewajarnya mengikut Borang Maklum Balas PKPA Bil. 2/1991.`,
-        tindakan: activePort.jawatanRasmi,
-        statusMaklumBalas: 'Tindakan berbangkit telah selesai 100%.',
-      },
-      {
-        id: 'ag-4',
-        bil: '4.0',
-        title: 'Fokus / Perbincangan Utama Mesyuarat',
-        rawKeywords:
-          fokusFromMemo.join(' ; ') ||
-          `Perancangan & pelaksanaan program ${activePort.jawatankuasaInduk}`,
-        formalText:
-          fokusFromMemo.length > 0
-            ? fokusFromMemo
-                .map(
-                  (f, i) =>
-                    `4.${i + 1} Mesyuarat membincangkan perkara "${f}" dan memutuskan agar pelaksanaan dijalankan mengikut takwim Sesi ${sessionBadge} serta didokumentasikan melalui Poster OPR SKPM.`
-                )
-                .join('\n')
-            : `4.1 Mesyuarat memutuskan agar semua program di bawah ${activePort.jawatankuasaInduk} dilaksanakan mengikut takwim Sesi ${sessionBadge}.`,
-        tindakan: 'Penyelaras & Semua AJK',
-        statusMaklumBalas: 'Pelaksanaan program sedang berjalan mengikut jadual.',
-      },
-      {
-        id: 'ag-5',
-        bil: '5.0',
-        title: 'Hal-hal Lain',
-        rawKeywords: 'Penyelarasan dokumentasi fail & tarikh akhir OPR',
-        formalText: `5.1 Pengerusi mengingatkan semua ahli agar melengkapkan pelaporan OPR dan fail unit dalam tempoh 7 hari bekerja selepas program selesai.`,
-        tindakan: 'Semua Ahli Jawatankuasa',
-        statusMaklumBalas: 'Pemantauan berterusan oleh Setiausaha.',
-      },
-      {
-        id: 'ag-6',
-        bil: '6.0',
-        title: 'Penutup',
-        rawKeywords: 'Mesyuarat ditangguhkan dengan ucapan terima kasih',
-        formalText: `6.1 Mesyuarat ditangguhkan dengan ucapan terima kasih daripada Pengerusi.`,
-        tindakan: 'Makluman',
-        statusMaklumBalas: '-',
-      },
-    ];
+    // Requirement 4: Expand each Memo Fokus item into individual numbered Minit cards (5.0, 6.0, 7.0, 8.0, 9.0...)
+    const builtAgendas = buildMinitAgendaItemsFromFokusList(
+      activePort,
+      sessionBadge,
+      fokusFromMemo
+    );
     setMinitAgendaItems(builtAgendas);
     setActiveTab('MINIT');
     setBannerMsg({
       type: 'success',
-      text: `Memo "${memo.programTitle}" (Sesi ${sessionBadge}) diimport! Senarai kehadiran ditapis 1-ke-1 kepada ${memoInvited.length} ahli yang dijemput.`,
+      text: `Memo "${memo.programTitle}" (Sesi ${sessionBadge}) diimport! ${fokusFromMemo.length} Fokus dipecahkan kepada kad agenda 5.0–${4 + Math.max(1, fokusFromMemo.length)}.0 & kehadiran ditapis 1-ke-1 (${memoInvited.length} ahli).`,
     });
   };
 
@@ -3535,130 +4107,143 @@ export const AISetiausahaHub: React.FC<Props> = ({
           </span>
         </div>
 
-        {/* Level 1 Pillar Pills */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-          {[
-            {
-              id: 'PENTADBIRAN' as MySGPillar,
-              label: `1. PENTADBIRAN & PENGURUSAN (${pillarCounts.PENTADBIRAN})`,
-            },
-            {
-              id: 'KURIKULUM' as MySGPillar,
-              label: `2. KURIKULUM & AKADEMIK (${pillarCounts.KURIKULUM})`,
-            },
-            {
-              id: 'HEM' as MySGPillar,
-              label: `3. HAL EHWAL MURID (HEM) (${pillarCounts.HEM})`,
-            },
-            {
-              id: 'KOKURIKULUM' as MySGPillar,
-              label: `4. KOKURIKULUM & KOAKADEMIK (${pillarCounts.KOKURIKULUM})`,
-            },
-          ].map((pil) => {
-            const active = selectedPillar === pil.id;
-            return (
-              <button
-                key={pil.id}
-                type="button"
-                onClick={() => {
-                  setSelectedPillar(pil.id);
-                  const firstInPillar = portfolios.find((p) => p.pillar === pil.id);
-                  if (firstInPillar) {
-                    setSelectedKodMySG(firstInPillar.kodMySG);
+        {visiblePortfolios.length === 0 ? (
+          <div className="p-4 rounded-2xl bg-amber-950/70 border border-amber-500/60 text-amber-200 text-xs font-bold flex items-center gap-2.5">
+            <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0" />
+            <span>
+              Anda belum dilantik sebagai Penyelaras atau Ahli dalam mana-mana Jawatankuasa MySG bagi sesi ini.
+            </span>
+          </div>
+        ) : (
+          <>
+            {/* Level 1 Pillar Pills (filtered by RBAC visiblePillars) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {[
+                {
+                  id: 'PENTADBIRAN' as MySGPillar,
+                  label: `1. PENTADBIRAN & PENGURUSAN (${pillarCounts.PENTADBIRAN})`,
+                },
+                {
+                  id: 'KURIKULUM' as MySGPillar,
+                  label: `2. KURIKULUM & AKADEMIK (${pillarCounts.KURIKULUM})`,
+                },
+                {
+                  id: 'HEM' as MySGPillar,
+                  label: `3. HAL EHWAL MURID (HEM) (${pillarCounts.HEM})`,
+                },
+                {
+                  id: 'KOKURIKULUM' as MySGPillar,
+                  label: `4. KOKURIKULUM & KOAKADEMIK (${pillarCounts.KOKURIKULUM})`,
+                },
+              ]
+                .filter((pil) => visiblePillars.includes(pil.id))
+                .map((pil) => {
+                  const active = selectedPillar === pil.id;
+                  return (
+                    <button
+                      key={pil.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedPillar(pil.id);
+                        const firstInPillar = visiblePortfolios.find((p) => p.pillar === pil.id);
+                        if (firstInPillar) {
+                          setSelectedKodMySG(firstInPillar.kodMySG);
+                          setOprDocId('');
+                          setMemoDocId('');
+                          setMinitDocId('');
+                          setMinitSourceMemoId('');
+                        }
+                      }}
+                      className={`px-3.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wide border transition cursor-pointer ${
+                        active
+                          ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-600/25'
+                          : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      {pil.label}
+                    </button>
+                  );
+                })}
+            </div>
+
+            {/* Level 2 Dropdown + Right Info Card */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+              <div className="lg:col-span-6 bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col justify-center space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  PERINGKAT 2: PILIH JAWATANKUASA / PANITIA / UNIT ({pillarPortfolios.length} PORTFOLIO)
+                </label>
+                <select
+                  value={selectedPortfolio?.kodMySG || ''}
+                  onChange={(e) => {
+                    setSelectedKodMySG(e.target.value);
                     setOprDocId('');
                     setMemoDocId('');
                     setMinitDocId('');
                     setMinitSourceMemoId('');
-                  }
-                }}
-                className={`px-3.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wide border transition cursor-pointer ${
-                  active
-                    ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-600/25'
-                    : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:text-white'
-                }`}
-              >
-                {pil.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Level 2 Dropdown + Right Info Card */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
-          <div className="lg:col-span-6 bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col justify-center space-y-2">
-            <label className="text-[10px] font-black uppercase tracking-wider text-slate-400">
-              PERINGKAT 2: PILIH JAWATANKUASA / PANITIA / UNIT ({pillarPortfolios.length} PORTFOLIO)
-            </label>
-            <select
-              value={selectedPortfolio?.kodMySG || ''}
-              onChange={(e) => {
-                setSelectedKodMySG(e.target.value);
-                setOprDocId('');
-                setMemoDocId('');
-                setMinitDocId('');
-                setMinitSourceMemoId('');
-              }}
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white outline-none focus:border-indigo-500 cursor-pointer"
-            >
-              {pillarPortfolios.map((item, idx) => (
-                <option key={`${item.kodMySG}_${idx}`} value={item.kodMySG}>
-                  [{item.kodMySG}] {item.jawatanRasmi} — {item.jawatankuasaInduk}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Right Info Card */}
-          {selectedPortfolio && (
-            <div className="lg:col-span-6 bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded-lg bg-indigo-950 border border-indigo-600/60 text-indigo-300 text-[10px] font-mono font-black">
-                    {selectedPortfolio.kodMySG}
-                  </span>
-                  <span className="px-2.5 py-0.5 rounded-lg bg-teal-950 border border-teal-600/60 text-teal-300 text-[10px] font-black uppercase">
-                    {selectedPortfolio.skpmCodeDisplay}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-lg bg-amber-950/80 border border-amber-700/50 text-amber-300 text-[10px] font-black">
-                    {selectedPortfolio.tahapBeban} ({selectedPortfolio.mataBeban} Mata)
-                  </span>
-                </div>
+                  }}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white outline-none focus:border-indigo-500 cursor-pointer"
+                >
+                  {pillarPortfolios.map((item, idx) => (
+                    <option key={`${item.kodMySG}_${idx}`} value={item.kodMySG}>
+                      [{item.kodMySG}] {item.jawatanRasmi} — {item.jawatankuasaInduk}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div>
-                <div className="text-xs font-black text-white uppercase">
-                  {selectedPortfolio.jawatankuasaInduk} &bull;{' '}
-                  <span className="text-amber-300">{selectedPortfolio.jawatanRasmi}</span>
-                </div>
-                <div className="text-[11px] text-slate-400 mt-0.5">
-                  {selectedPortfolio.perincianTugas}
-                </div>
-              </div>
-
-              <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                <div className="flex flex-wrap items-center gap-3">
-                  <span>
-                    <strong className="text-teal-400">Penyelaras MySG:</strong>{' '}
-                    <span className="text-white font-bold">
-                      {selectedPortfolio.assignedTeacherName || 'Belum Dilantik (Master Data)'}
-                    </span>
-                  </span>
-                  <span>
-                    <strong className="text-indigo-400">Ahli Jawatankuasa (AJK):</strong>{' '}
-                    <span className="text-white font-bold">
-                      {(selectedPortfolio.ahliList || []).length} orang
-                    </span>
-                    {(selectedPortfolio.ahliList || []).length > 0 && (
-                      <span className="text-slate-400 ml-1">
-                        ({(selectedPortfolio.ahliList || []).map((a) => a.teacherName).join(', ')})
+              {/* Right Info Card */}
+              {selectedPortfolio && (
+                <div className="lg:col-span-6 bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="px-2.5 py-0.5 rounded-lg bg-indigo-950 border border-indigo-600/60 text-indigo-300 text-[10px] font-mono font-black">
+                        {selectedPortfolio.kodMySG}
                       </span>
-                    )}
-                  </span>
+                      <span className="px-2.5 py-0.5 rounded-lg bg-teal-950 border border-teal-600/60 text-teal-300 text-[10px] font-black uppercase">
+                        {selectedPortfolio.skpmCodeDisplay}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-lg bg-amber-950/80 border border-amber-700/50 text-amber-300 text-[10px] font-black">
+                        {selectedPortfolio.tahapBeban} ({selectedPortfolio.mataBeban} Mata)
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-black text-white uppercase">
+                      {selectedPortfolio.jawatankuasaInduk} &bull;{' '}
+                      <span className="text-amber-300">{selectedPortfolio.jawatanRasmi}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      {selectedPortfolio.perincianTugas}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span>
+                        <strong className="text-teal-400">Penyelaras MySG:</strong>{' '}
+                        <span className="text-white font-bold">
+                          {selectedPortfolio.assignedTeacherName || 'Belum Dilantik (Master Data)'}
+                        </span>
+                      </span>
+                      <span>
+                        <strong className="text-indigo-400">Ahli Jawatankuasa (AJK):</strong>{' '}
+                        <span className="text-white font-bold">
+                          {(selectedPortfolio.ahliList || []).length} orang
+                        </span>
+                        {(selectedPortfolio.ahliList || []).length > 0 && (
+                          <span className="text-slate-400 ml-1">
+                            ({(selectedPortfolio.ahliList || []).map((a) => a.teacherName).join(', ')})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
 
       {/* ====================================================================
@@ -4226,7 +4811,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
             {memoDocs.length > 0 && (
               <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-black uppercase text-indigo-300">
-                  Buka Memo Tersimpan:
+                  Buka Memo ({selectedPillar}):
                 </span>
                 <select
                   value={memoDocId}
@@ -4236,9 +4821,13 @@ export const AISetiausahaHub: React.FC<Props> = ({
                   }}
                   className="flex-1 min-w-[200px] bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-bold outline-none cursor-pointer"
                 >
-                  <option value="">-- Pilih Memo / Makluman ({memoDocs.length}) --</option>
+                  <option value="">
+                    -- Pilih Memo / Mesyuarat {selectedPillar} ({memoDocs.length}) --
+                  </option>
                   {memoDocs.map((m, idx) => {
-                    const isMakluman = String(m.id || '').startsWith('MAKLUMAN_MEMO_');
+                    const isMakluman =
+                      String(m.id || '').startsWith('MAKLUMAN_MEMO_') ||
+                      String(m.id || '').startsWith('makluman_ref_');
                     const yrs =
                       Array.isArray(m.academicYears) && m.academicYears.length > 0
                         ? m.academicYears.join(' & ')
@@ -4355,6 +4944,38 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
                   />
                 </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-amber-300 mb-1">
+                    Nama Setiausaha (Penyedia Memo)
+                  </label>
+                  <input
+                    type="text"
+                    list="memo-setiausaha-teacher-list"
+                    value={memoSetiausaha}
+                    onChange={(e) => setMemoSetiausaha(e.target.value.toUpperCase())}
+                    placeholder="Taip atau pilih nama Setiausaha"
+                    className="w-full bg-slate-950 border border-amber-500/40 focus:border-amber-400 rounded-xl px-3 py-2 text-xs text-white font-bold uppercase"
+                  />
+                  <datalist id="memo-setiausaha-teacher-list">
+                    {teacherRoster.map((t, i) => (
+                      <option key={`${t.id}_${i}`} value={t.name}>
+                        {t.role}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-amber-300 mb-1">
+                    Jawatan Setiausaha
+                  </label>
+                  <input
+                    type="text"
+                    value={memoJawatanSetiausaha}
+                    onChange={(e) => setMemoJawatanSetiausaha(e.target.value)}
+                    placeholder="cth: Setiausaha Pengurusan & Minit Mesyuarat Guru"
+                    className="w-full bg-slate-950 border border-amber-500/40 focus:border-amber-400 rounded-xl px-3 py-2 text-xs text-white"
+                  />
+                </div>
               </div>
 
               {/* SENARAI PENERIMA (DARIPADA PROFIL GURU) */}
@@ -4367,7 +4988,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     </span>
                   </label>
 
-                  <div className="inline-flex bg-slate-900 p-1 rounded-xl border border-slate-800 gap-1">
+                  <div className="inline-flex flex-wrap bg-slate-900 p-1 rounded-xl border border-slate-800 gap-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -4381,7 +5002,8 @@ export const AISetiausahaHub: React.FC<Props> = ({
                         );
                       }}
                       className={`px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer transition ${
-                        memoRecipientMode === 'ALL_TEACHERS'
+                        memoRecipientMode === 'ALL_TEACHERS' &&
+                        memoSelectedTeachers.length === teacherRoster.length
                           ? 'bg-indigo-600 text-white'
                           : 'text-slate-400 hover:text-white'
                       }`}
@@ -4392,17 +5014,31 @@ export const AISetiausahaHub: React.FC<Props> = ({
                       type="button"
                       onClick={() => {
                         setMemoRecipientMode('COMMITTEE_ONLY');
-                        if (currentCommitteeMembers.length > 0) {
-                          setMemoSelectedTeachers(currentCommitteeMembers);
-                        }
+                        setMemoSelectedTeachers(currentCommitteeMembers);
                       }}
                       className={`px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer transition ${
-                        memoRecipientMode === 'COMMITTEE_ONLY'
+                        memoRecipientMode === 'COMMITTEE_ONLY' &&
+                        memoSelectedTeachers.length > 0
                           ? 'bg-teal-600 text-white'
                           : 'text-slate-400 hover:text-white'
                       }`}
                     >
                       Ahli Jawatankuasa ({currentCommitteeMembers.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMemoRecipientMode('NONE');
+                        setMemoSelectedTeachers([]);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-black cursor-pointer transition ${
+                        memoSelectedTeachers.length === 0
+                          ? 'bg-rose-600 text-white'
+                          : 'text-rose-400 hover:bg-rose-950/60 hover:text-rose-200'
+                      }`}
+                      title="Nyahpilih semua penerima (Untick All)"
+                    >
+                      Nyahpilih Semua (Untick)
                     </button>
                   </div>
                 </div>
@@ -4524,6 +5160,39 @@ export const AISetiausahaHub: React.FC<Props> = ({
                         disabled={syncingDriveDocId !== null}
                         onClick={async () => {
                           await handleSaveMemo(false);
+                          const activeDoc =
+                            allDocs.find((x) => x.id === memoDocId) ||
+                            ({
+                              id:
+                                memoDocId ||
+                                scopedDocId(
+                                  effectiveSchoolCode,
+                                  `memo_${selectedAcademicYear}_${Date.now()}`
+                                ),
+                              docKind: 'MEMO',
+                              schoolCode: effectiveSchoolCode,
+                              academicYear: selectedAcademicYear,
+                              pillar: selectedPortfolio.pillar,
+                              kodMySG: selectedPortfolio.kodMySG,
+                              jawatankuasaInduk: selectedPortfolio.jawatankuasaInduk,
+                              jawatanRasmi: selectedPortfolio.jawatanRasmi,
+                              skpmBucket: selectedPortfolio.skpmBucket,
+                              skpmCodeBadge: memoRujKami,
+                              programTitle: memoTitle.trim().toUpperCase(),
+                              tarikh: memoTarikhMesyuarat,
+                              masa: memoMasa,
+                              tempat: memoTempat,
+                              agendaList: cleanFokusAgendaLines(memoFokusText),
+                              preparedByName: (
+                                memoSetiausaha.trim() ||
+                                selectedPortfolio.assignedTeacherName ||
+                                currentUser?.name ||
+                                'SETIAUSAHA'
+                              ).toUpperCase(),
+                              preparedByTitle:
+                                memoJawatanSetiausaha.trim() || selectedPortfolio.jawatanRasmi,
+                            } as AISetiausahaDocument);
+                          await handleSyncSavedDocToDrive(activeDoc, 'ai-setiausaha-memo-sheet');
                         }}
                         className="px-3.5 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/50 text-xs font-black flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                       >
@@ -4707,9 +5376,18 @@ export const AISetiausahaHub: React.FC<Props> = ({
                 <div>Saya yang menjalankan amanah,</div>
                 <div className="mt-10 border-b border-black w-56" />
                 <div className="font-black uppercase mt-1 text-xs">
-                  ({(selectedPortfolio.assignedTeacherName || currentUser?.name || 'SETIAUSAHA').toUpperCase()})
+                  (
+                  {(
+                    memoSetiausaha.trim() ||
+                    selectedPortfolio.assignedTeacherName ||
+                    currentUser?.name ||
+                    'SETIAUSAHA'
+                  ).toUpperCase()}
+                  )
                 </div>
-                <div className="text-xs">{selectedPortfolio.jawatanRasmi},</div>
+                <div className="text-xs">
+                  {memoJawatanSetiausaha.trim() || selectedPortfolio.jawatanRasmi},
+                </div>
                 <div className="text-xs">{selectedPortfolio.jawatankuasaInduk}</div>
                 <div className="text-[11px] text-slate-600 mt-2">
                   s.k. 1. Guru Besar {effectiveSchoolName} &bull; 2. Fail Induk ({selectedPortfolio.kodMySG})
@@ -4729,7 +5407,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2.5 flex-1">
               <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-500/50 text-amber-300 text-[11px] font-black uppercase">
-                IMPORT MEMO
+                IMPORT MEMO ({selectedPillar})
               </span>
               <select
                 value={minitSourceMemoId}
@@ -4739,9 +5417,13 @@ export const AISetiausahaHub: React.FC<Props> = ({
                 }}
                 className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-bold min-w-[250px] max-w-[360px] outline-none cursor-pointer"
               >
-                <option value="">-- Pilih Memo / Makluman ({memoDocs.length}) --</option>
+                <option value="">
+                  -- Pilih Memo / Mesyuarat {selectedPillar} ({memoDocs.length}) --
+                </option>
                 {memoDocs.map((m, idx) => {
-                  const isMakluman = String(m.id || '').startsWith('MAKLUMAN_MEMO_');
+                  const isMakluman =
+                    String(m.id || '').startsWith('MAKLUMAN_MEMO_') ||
+                    String(m.id || '').startsWith('makluman_ref_');
                   const yrs =
                     Array.isArray(m.academicYears) && m.academicYears.length > 0
                       ? m.academicYears.join(' & ')
@@ -4755,7 +5437,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
               </select>
 
               <span className="px-2.5 py-1 rounded-lg bg-teal-500/20 border border-teal-500/50 text-teal-300 text-[11px] font-black uppercase">
-                BUKA MINIT ({minitDocs.length})
+                BUKA MINIT {selectedPillar} ({minitDocs.length})
               </span>
               <select
                 value={minitDocId}
@@ -4765,7 +5447,9 @@ export const AISetiausahaHub: React.FC<Props> = ({
                 }}
                 className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-bold min-w-[240px] max-w-[340px] outline-none cursor-pointer"
               >
-                <option value="">-- Pilih Minit Tersimpan ({minitDocs.length}) --</option>
+                <option value="">
+                  -- Pilih Minit {selectedPillar} ({minitDocs.length}) --
+                </option>
                 {minitDocs.map((m, idx) => {
                   const yrs =
                     Array.isArray(m.academicYears) && m.academicYears.length > 0
@@ -5032,18 +5716,36 @@ export const AISetiausahaHub: React.FC<Props> = ({
                       <button
                         type="button"
                         onClick={() =>
-                          setMinitAgendaItems((prev) => [
-                            ...prev,
-                            {
-                              id: `ag-${Date.now()}`,
-                              bil: `${prev.length + 1}.0`,
-                              title: 'Perkara Tambahan',
-                              rawKeywords: '',
-                              formalText: '',
-                              tindakan: 'Semua AJK',
-                              statusMaklumBalas: 'Sedang diambil tindakan.',
-                            },
-                          ])
+                          setMinitAgendaItems((prev) => {
+                            const halLainIdx = prev.findIndex((it) =>
+                              /^hal[- ]?hal\s+lain/i.test(String(it.title || '').trim())
+                            );
+                            const penutupIdx = prev.findIndex((it) =>
+                              /^penutup|penangguhan/i.test(String(it.title || '').trim())
+                            );
+                            const insertIdx =
+                              halLainIdx >= 0
+                                ? halLainIdx
+                                : penutupIdx >= 0
+                                ? penutupIdx
+                                : prev.length;
+                            const nextNum = insertIdx + 1;
+                            const newCard: MinitPKPAAgendaItem = {
+                              id: `ag-fokus-${Date.now()}`,
+                              bil: `${nextNum}.0`,
+                              title: `Fokus Perbincangan Tambahan`,
+                              rawKeywords: 'Perbincangan & keputusan mesyuarat...',
+                              formalText: `${nextNum}.1 Mesyuarat membincangkan perkara ini dan memutuskan agar tindakan susulan dilaksanakan mengikut ketetapan jawatankuasa.`,
+                              tindakan: 'Penyelaras & Semua AJK',
+                              statusMaklumBalas: 'Pelaksanaan sedang berjalan mengikut jadual.',
+                            };
+                            const nextList = [
+                              ...prev.slice(0, insertIdx),
+                              newCard,
+                              ...prev.slice(insertIdx),
+                            ];
+                            return renumberMinitAgendaItems(nextList);
+                          })
                         }
                         className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-black cursor-pointer"
                       >
@@ -5052,7 +5754,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                  <div className="space-y-2.5 max-h-[520px] overflow-y-auto pr-1">
                     {minitAgendaItems.map((item, idx) => (
                       <div
                         key={item.id}
@@ -5083,34 +5785,61 @@ export const AISetiausahaHub: React.FC<Props> = ({
                             }
                             className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs font-bold text-white"
                           />
+                          {idx >= 4 &&
+                            !/^(?:hal[- ]?hal\s+lain|penutup|penangguhan)/i.test(
+                              item.title.trim()
+                            ) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setMinitAgendaItems((prev) =>
+                                    renumberMinitAgendaItems(prev.filter((_, i) => i !== idx))
+                                  )
+                                }
+                                title="Padam kad fokus ini & susun semula nombor"
+                                className="text-slate-500 hover:text-rose-400 p-1 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                         </div>
 
-                        <input
-                          type="text"
-                          value={item.rawKeywords}
-                          onChange={(e) =>
-                            setMinitAgendaItems((prev) =>
-                              prev.map((x, i) =>
-                                i === idx ? { ...x, rawKeywords: e.target.value } : x
+                        <div className="space-y-1">
+                          <label className="block text-[9.5px] font-black uppercase text-teal-300">
+                            Perbincangan / Catatan Ringkas (中文 / BM)
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={item.rawKeywords}
+                            onChange={(e) =>
+                              setMinitAgendaItems((prev) =>
+                                prev.map((x, i) =>
+                                  i === idx ? { ...x, rawKeywords: e.target.value } : x
+                                )
                               )
-                            )
-                          }
-                          placeholder="Nota Ringkas / Kata Kunci (中文 / BM)..."
-                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] text-teal-200"
-                        />
+                            }
+                            placeholder="Tuliskan isi perbincangan / keputusan mesyuarat bagi perkara ini (中文 / BM)..."
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] text-teal-200"
+                          />
+                        </div>
 
-                        <textarea
-                          rows={2}
-                          value={item.formalText}
-                          onChange={(e) =>
-                            setMinitAgendaItems((prev) =>
-                              prev.map((x, i) =>
-                                i === idx ? { ...x, formalText: e.target.value } : x
+                        <div className="space-y-1">
+                          <label className="block text-[9.5px] font-black uppercase text-slate-400">
+                            Teks Minit Rasmi (PKPA Bil. 2/1991)
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={item.formalText}
+                            onChange={(e) =>
+                              setMinitAgendaItems((prev) =>
+                                prev.map((x, i) =>
+                                  i === idx ? { ...x, formalText: e.target.value } : x
+                                )
                               )
-                            )
-                          }
-                          className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
-                        />
+                            }
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white"
+                          />
+                        </div>
 
                         <div className="grid grid-cols-2 gap-2">
                           <input
@@ -5847,6 +6576,141 @@ export const AISetiausahaHub: React.FC<Props> = ({
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PENGHANTARAN PAPARAN MAKLUMAN & WHATSAPP RASMI */}
+      {memoWaModalData && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-emerald-500/60 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-black uppercase">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>
+                    Berjaya Dihantar ke Paparan Makluman (Teras {memoWaModalData.pillar})
+                  </span>
+                </div>
+                <h3 className="text-base font-black text-white mt-1.5 uppercase">
+                  📲 Penghantaran WhatsApp &amp; Paparan Makluman Rasmi
+                </h3>
+                <p className="text-xs text-slate-400">
+                  {memoWaModalData.title} &bull; {memoWaModalData.tarikh} ({memoWaModalData.masa})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMemoWaModalData(null)}
+                className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+              >
+                ✕ Tutup
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-emerald-950/50 border border-emerald-700/50 text-xs text-emerald-200 space-y-1">
+              <div className="font-black">
+                ✅ Status Paparan Makluman Sekolah:
+              </div>
+              <div>
+                Mesyuarat ini telah direkodkan secara langsung di bawah komponen{' '}
+                <strong className="text-amber-300">{memoWaModalData.pillar}</strong> ({memoWaModalData.jawatankuasaInduk}) untuk{' '}
+                <strong>{memoWaModalData.recipients.length} orang guru terpilih</strong>.
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-black uppercase text-slate-300">
+                  Teks Rasmi WhatsApp (Boleh Disunting Sebelum Hantar):
+                </label>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      if (navigator.clipboard) {
+                        await navigator.clipboard.writeText(memoWaModalData.waText);
+                      }
+                    } catch {
+                      const ta = document.createElement('textarea');
+                      ta.value = memoWaModalData.waText;
+                      document.body.appendChild(ta);
+                      ta.select();
+                      document.execCommand('copy');
+                      document.body.removeChild(ta);
+                    }
+                    setWaTextCopied(true);
+                  }}
+                  className="px-3 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black cursor-pointer"
+                >
+                  {waTextCopied ? '✅ Teks Disalin!' : '📋 Salin Teks WhatsApp'}
+                </button>
+              </div>
+
+              <textarea
+                rows={7}
+                value={memoWaModalData.waText}
+                onChange={(e) => {
+                  setWaTextCopied(false);
+                  setMemoWaModalData({
+                    ...memoWaModalData,
+                    waText: e.target.value,
+                  });
+                }}
+                className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-slate-200 font-mono leading-relaxed"
+              />
+            </div>
+
+            {/* Direct Group Share Button */}
+            <div className="flex flex-wrap gap-2.5">
+              <a
+                href={`https://api.whatsapp.com/send?text=${encodeURIComponent(memoWaModalData.waText)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 transition"
+              >
+                <Send className="w-4 h-4" />
+                <span>📲 Hantar ke Kumpulan WhatsApp Sekolah (Buka WhatsApp)</span>
+              </a>
+            </div>
+
+            {/* Individual Recipient WhatsApp Dispatch List */}
+            {memoWaModalData.recipients.length > 0 && (
+              <div className="space-y-2 pt-2 border-t border-slate-800">
+                <div className="text-[11px] font-black uppercase text-indigo-300">
+                  Hantar Terus WhatsApp Kepada Penerima Terpilih ({memoWaModalData.recipients.length} Guru):
+                </div>
+                <div className="max-h-48 overflow-y-auto divide-y divide-slate-800/80 bg-slate-950 border border-slate-800 rounded-2xl">
+                  {memoWaModalData.recipients.map((r, i) => (
+                    <div
+                      key={`${r.teacherId}_${i}`}
+                      className="px-3.5 py-2 flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-bold text-white truncate">
+                          {i + 1}. {r.teacherName}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {r.committeeRole} {r.phone ? `• +${r.phone}` : '• (Tiada No. Telefon)'}
+                        </div>
+                      </div>
+                      <a
+                        href={
+                          r.phone
+                            ? `https://wa.me/${r.phone}?text=${encodeURIComponent(memoWaModalData.waText)}`
+                            : `https://api.whatsapp.com/send?text=${encodeURIComponent(memoWaModalData.waText)}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-[11px] font-black shrink-0 transition"
+                      >
+                        📲 WhatsApp
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

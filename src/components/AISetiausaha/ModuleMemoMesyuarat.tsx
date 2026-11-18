@@ -23,7 +23,12 @@ import {
   MYSG_DEFAULT_CATALOG,
   MySGJawatankuasaItem,
 } from '../../utils/mysgJawatankuasaCatalog';
-import { AISetiausahaDocument, InvitedCommitteeTeacher } from './types';
+import {
+  AISetiausahaDocument,
+  InvitedCommitteeTeacher,
+  resolveDocumentSessions,
+  cleanAgendaFokusLines,
+} from './types';
 import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
 import { triggerSmartPrint } from '../../utils/oprPrintHelper';
@@ -65,6 +70,9 @@ export const ModuleMemoMesyuarat: React.FC<Props> = ({
   const [tempatMesyuarat, setTempatMesyuarat] = useState<string>('Bilik Mesyuarat Sekolah');
   const [pengerusi, setPengerusi] = useState<string>(
     (schoolSettings as any)?.principalName || `Guru Besar ${schoolName}`
+  );
+  const [setiausahaName, setSetiausahaName] = useState<string>(
+    (currentUser.name || 'SETIAUSAHA').toUpperCase()
   );
 
   // Strict 1-to-1 invitee state
@@ -209,6 +217,9 @@ export const ModuleMemoMesyuarat: React.FC<Props> = ({
       setTajukMesyuarat(
         `MESYUARAT ${selectedCommittee.jawatankuasaInduk.toUpperCase()} BIL. 1/${academicYear}`
       );
+      if (selectedCommittee.assignedTeacherName) {
+        setSetiausahaName(selectedCommittee.assignedTeacherName.toUpperCase());
+      }
       applyCommitteeAutoSelection(selectedKodMySG, includePrincipalChair);
     }
   }, [selectedKodMySG, academicYear, mysgItems, fullTeacherRoster.length]);
@@ -262,27 +273,43 @@ export const ModuleMemoMesyuarat: React.FC<Props> = ({
     setStatusBanner(null);
     try {
       const nowIso = new Date().toISOString();
+      const resolvedSession = resolveDocumentSessions({
+        title: tajukMesyuarat,
+        tarikh: tarikhMesyuarat,
+        fallbackYear: academicYear,
+      });
       const memoId =
         selectedMemoId ||
-        scopedDocId(schoolCode, `memo_${academicYear.replace(/\//g, '-')}_${Date.now()}`);
+        scopedDocId(schoolCode, `memo_${resolvedSession.primaryYear.replace(/\//g, '-')}_${Date.now()}`);
+
+      const isAllSelected =
+        fullTeacherRoster.length > 0 && invitedTeachersList.length >= fullTeacherRoster.length;
 
       const memoDoc: AISetiausahaDocument = {
         id: memoId,
         docKind: 'MEMO',
         schoolCode,
-        academicYear,
+        academicYear: resolvedSession.primaryYear,
+        academicYears: resolvedSession.academicYears,
         pillar: selectedCommittee?.pillar || 'PENTADBIRAN',
         kodMySG: selectedKodMySG,
         jawatankuasaInduk:
           selectedCommittee?.jawatankuasaInduk || 'JK Pengurusan & Pentadbiran Sekolah',
         jawatanRasmi: selectedCommittee?.jawatanRasmi || 'Setiausaha Mesyuarat',
         programTitle: tajukMesyuarat.trim().toUpperCase(),
+        tajukMesyuarat: tajukMesyuarat.trim().toUpperCase(),
         tarikh: tarikhMesyuarat,
+        tarikhMesyuarat,
         masa: masaMesyuarat,
+        masaMesyuarat,
         tempat: tempatMesyuarat,
+        tempatMesyuarat,
         pengerusi,
         invitedTeachers: invitedTeachersList,
-        preparedByName: (currentUser.name || 'SETIAUSAHA').toUpperCase(),
+        recipientMode: isAllSelected ? 'ALL_TEACHERS' : 'COMMITTEE_ONLY',
+        recipientIds: invitedTeachersList.map((t) => t.teacherId),
+        recipientNames: invitedTeachersList.map((t) => t.teacherName),
+        preparedByName: (setiausahaName.trim() || currentUser.name || 'SETIAUSAHA').toUpperCase(),
         preparedByTitle:
           selectedCommittee?.jawatanRasmi || `Setiausaha Mesyuarat, ${schoolName}`,
         createdAt: nowIso,
@@ -337,6 +364,7 @@ export const ModuleMemoMesyuarat: React.FC<Props> = ({
     if (memo.masa) setMasaMesyuarat(memo.masa);
     if (memo.tempat) setTempatMesyuarat(memo.tempat);
     if (memo.pengerusi) setPengerusi(memo.pengerusi);
+    if (memo.preparedByName) setSetiausahaName(memo.preparedByName.toUpperCase());
     if (Array.isArray(memo.invitedTeachers)) {
       setInvitedTeacherIds(memo.invitedTeachers.map((t) => t.teacherId));
     }
@@ -471,6 +499,19 @@ export const ModuleMemoMesyuarat: React.FC<Props> = ({
             </div>
           </div>
 
+          <div>
+            <label className="text-[10px] font-bold text-amber-300 uppercase block mb-1">
+              Nama Setiausaha (Penyedia Memo)
+            </label>
+            <input
+              type="text"
+              value={setiausahaName}
+              onChange={(e) => setSetiausahaName(e.target.value.toUpperCase())}
+              placeholder="Taip nama Setiausaha"
+              className="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-2.5 py-2 text-xs text-white font-bold uppercase"
+            />
+          </div>
+
           {/* Step A: Auto-Selected Committee Roster (Penyelaras + Ahli) Checklist */}
           <div className="pt-2 border-t border-slate-800 space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -481,7 +522,7 @@ export const ModuleMemoMesyuarat: React.FC<Props> = ({
                 </span>
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() =>
@@ -498,6 +539,14 @@ export const ModuleMemoMesyuarat: React.FC<Props> = ({
                   className="px-2 py-1 rounded-lg bg-slate-800 text-slate-300 text-[10px] font-bold cursor-pointer"
                 >
                   Semua Guru
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInvitedTeacherIds([])}
+                  className="px-2 py-1 rounded-lg bg-rose-950 border border-rose-700 text-rose-300 text-[10px] font-bold cursor-pointer"
+                  title="Nyahpilih semua penerima (Untick All)"
+                >
+                  Nyahpilih Semua (Untick)
                 </button>
               </div>
             </div>
@@ -571,6 +620,7 @@ export const ModuleMemoMesyuarat: React.FC<Props> = ({
                   elementId: 'memo-panggilan-mesyuarat-sheet',
                   title: tajukMesyuarat,
                   orientation: 'portrait',
+                  onNotice: (msg) => setStatusBanner(msg),
                 })
               }
               className="py-2.5 px-3.5 rounded-xl bg-amber-500 text-slate-950 text-xs font-black uppercase flex items-center justify-center gap-1.5 cursor-pointer"
@@ -726,7 +776,7 @@ export const ModuleMemoMesyuarat: React.FC<Props> = ({
           <div className="pt-8">
             <div>Disediakan oleh,</div>
             <div className="mt-10 font-bold uppercase">
-              ({currentUser.name || (schoolSettings as any)?.principalName || 'SETIAUSAHA'})
+              ({(setiausahaName.trim() || currentUser.name || (schoolSettings as any)?.principalName || 'SETIAUSAHA').toUpperCase()})
             </div>
             <div>
               {selectedCommittee?.jawatanRasmi || 'Setiausaha Mesyuarat'}, {schoolName}

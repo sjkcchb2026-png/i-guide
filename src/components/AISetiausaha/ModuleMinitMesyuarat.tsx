@@ -23,6 +23,8 @@ import {
   MinitAttendanceRecord,
   MinitAttendanceStatus,
   TurutHadirRecord,
+  cleanAgendaFokusLines,
+  resolveDocumentSessions,
 } from './types';
 import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
@@ -78,20 +80,38 @@ export const ModuleMinitMesyuarat: React.FC<Props> = ({
   const applyMemoToMinit = (memo: AISetiausahaDocument) => {
     setSelectedMinitId(null);
     setSelectedSourceMemoId(memo.id);
-    const rawTitle = (memo.programTitle || '').toUpperCase();
+    const rawTitle = (memo.programTitle || memo.tajukMesyuarat || '').toUpperCase();
     const minitTitle = rawTitle.startsWith('MINIT ')
       ? rawTitle
       : `MINIT ${rawTitle}`;
     setTajuk(minitTitle);
-    if (memo.tarikh) setTarikh(memo.tarikh);
-    if (memo.masa) setMasa(memo.masa);
-    if (memo.tempat) setTempat(memo.tempat);
+    if (memo.tarikh || memo.tarikhMesyuarat) setTarikh(memo.tarikh || memo.tarikhMesyuarat || '');
+    if (memo.masa || memo.masaMesyuarat) setMasa(memo.masa || memo.masaMesyuarat || '');
+    if (memo.tempat || memo.tempatMesyuarat) setTempat(memo.tempat || memo.tempatMesyuarat || '');
     if (memo.pengerusi) setPengerusi(memo.pengerusi);
 
-    // Strictly populate Kehadiran ONLY from the Memo's `invitedTeachers`, defaulting all to HADIR
-    const invited: InvitedCommitteeTeacher[] = Array.isArray(memo.invitedTeachers)
-      ? memo.invitedTeachers
-      : [];
+    const rawMemoAgendas =
+      Array.isArray(memo.agendaList) && memo.agendaList.length > 0
+        ? memo.agendaList
+        : Array.isArray(memo.agendaFokusUtama)
+        ? memo.agendaFokusUtama
+        : [];
+    const cleanedAgendas = cleanAgendaFokusLines(rawMemoAgendas);
+    if (cleanedAgendas.length > 0) {
+      setAgendaFokus(cleanedAgendas.join(' | '));
+    }
+
+    // Strictly populate Kehadiran ONLY from the Memo's `invitedTeachers` (or legacy recipientNames), defaulting all to HADIR
+    const invited: InvitedCommitteeTeacher[] =
+      Array.isArray(memo.invitedTeachers) && memo.invitedTeachers.length > 0
+        ? memo.invitedTeachers
+        : Array.isArray(memo.recipientNames) && memo.recipientNames.length > 0
+        ? memo.recipientNames.map((name, idx) => ({
+            teacherId: (memo.recipientIds && memo.recipientIds[idx]) || `INV_${idx}`,
+            teacherName: name,
+            committeeRole: 'Ahli Mesyuarat',
+          }))
+        : [];
     setAttendanceList(
       invited.map((t) => ({
         teacherId: t.teacherId,
@@ -228,20 +248,34 @@ export const ModuleMinitMesyuarat: React.FC<Props> = ({
     setStatusMsg(null);
     try {
       const nowIso = new Date().toISOString();
+      const resolvedSession = resolveDocumentSessions({
+        title: tajuk,
+        agendaText: agendaFokus,
+        tarikh,
+        fallbackYear: academicYear,
+      });
       const minitId =
         selectedMinitId ||
-        scopedDocId(schoolCode, `minit_${academicYear.replace(/\//g, '-')}_${Date.now()}`);
+        scopedDocId(
+          schoolCode,
+          `minit_${resolvedSession.primaryYear.replace(/\//g, '-')}_${Date.now()}`
+        );
 
       const minitDoc: AISetiausahaDocument = {
         id: minitId,
         docKind: 'MINIT',
         sourceMemoId: selectedSourceMemoId || undefined,
         schoolCode,
-        academicYear,
+        academicYear: resolvedSession.primaryYear,
+        academicYears: resolvedSession.academicYears,
         programTitle: tajuk.trim().toUpperCase(),
+        tajukMesyuarat: tajuk.trim().toUpperCase(),
         tarikh,
+        tarikhMesyuarat: tarikh,
         masa,
+        masaMesyuarat: masa,
         tempat,
+        tempatMesyuarat: tempat,
         pengerusi,
         rawNotes: agendaFokus,
         attendanceList,
@@ -259,7 +293,7 @@ export const ModuleMinitMesyuarat: React.FC<Props> = ({
       setSelectedMinitId(minitId);
       await loadMemosAndMinits();
       setStatusMsg(
-        `Minit Mesyuarat PKPA berjaya disimpan (${attendanceList.filter((a) => a.status === 'HADIR').length}/${attendanceList.length} Hadir)!`
+        `Minit Mesyuarat PKPA berjaya disimpan di bawah ${resolvedSession.badgeLabel} (${attendanceList.filter((a) => a.status === 'HADIR').length}/${attendanceList.length} Hadir)!`
       );
     } catch (err: any) {
       setStatusMsg(`Gagal menyimpan Minit: ${err?.message || 'Ralat'}`);
@@ -271,10 +305,10 @@ export const ModuleMinitMesyuarat: React.FC<Props> = ({
   const handleLoadSavedMinit = (m: AISetiausahaDocument) => {
     setSelectedMinitId(m.id);
     setSelectedSourceMemoId(m.sourceMemoId || '');
-    setTajuk(m.programTitle);
-    setTarikh(m.tarikh);
-    if (m.masa) setMasa(m.masa);
-    if (m.tempat) setTempat(m.tempat);
+    setTajuk(m.programTitle || m.tajukMesyuarat || '');
+    setTarikh(m.tarikh || m.tarikhMesyuarat || '');
+    if (m.masa || m.masaMesyuarat) setMasa(m.masa || m.masaMesyuarat || '');
+    if (m.tempat || m.tempatMesyuarat) setTempat(m.tempat || m.tempatMesyuarat || '');
     if (m.pengerusi) setPengerusi(m.pengerusi);
     if (m.rawNotes) setAgendaFokus(m.rawNotes);
     setAttendanceList(Array.isArray(m.attendanceList) ? m.attendanceList : []);
@@ -327,7 +361,7 @@ export const ModuleMinitMesyuarat: React.FC<Props> = ({
               </option>
               {availableMemos.map((m, idx) => (
                 <option key={`${m.id}_${idx}`} value={m.id}>
-                  {m.tarikh} — {m.programTitle} ({(m.invitedTeachers || []).length} Guru Dijemput)
+                  {m.tarikh || m.tarikhMesyuarat} — {m.programTitle || m.tajukMesyuarat} ({(m.invitedTeachers || m.recipientNames || []).length} Guru Dijemput)
                 </option>
               ))}
             </select>
@@ -562,6 +596,7 @@ export const ModuleMinitMesyuarat: React.FC<Props> = ({
                   elementId: 'minit-mesyuarat-pkpa-sheet',
                   title: tajuk,
                   orientation: 'portrait',
+                  onNotice: (msg) => setStatusMsg(msg),
                 })
               }
               className="py-2.5 px-3.5 rounded-xl bg-amber-500 text-slate-950 text-xs font-black uppercase flex items-center justify-center gap-1.5 cursor-pointer"

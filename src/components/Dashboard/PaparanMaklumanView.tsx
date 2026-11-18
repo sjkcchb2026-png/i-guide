@@ -532,6 +532,42 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
   // 1. Subscribe to Firestore `makluman_tasks`
   useEffect(() => {
     let isMounted = true;
+
+    const normalizeMaklumanDomain = (raw: any): MaklumanDomain => {
+      const explicitDom = String(raw?.domain || '').trim().toUpperCase();
+      const explicitPillar = String(raw?.pillar || '').trim().toUpperCase();
+      if (explicitDom === 'CUTI') return 'CUTI';
+
+      if (
+        explicitPillar === 'PENTADBIRAN' ||
+        explicitPillar === 'KURIKULUM' ||
+        explicitPillar === 'HEM' ||
+        explicitPillar === 'KOKURIKULUM'
+      ) {
+        return explicitPillar as MaklumanDomain;
+      }
+
+      const text = `${raw?.title || ''} ${raw?.jawatankuasaInduk || ''} ${raw?.kodMySG || ''}`.toUpperCase();
+      const isPentadbiran =
+        /PENTADBIRAN|PENGURUSAN|MESYUARAT\s+GURU|MESYUARAT\s+STAF|KEWANGAN|ASET|SKPM|PBPPP|SPLKPM|LDP|PIBG|PIBKS|PERANCANGAN\s+STRATEGIK|PEMBENTUKAN\s+JAWATANKUASA|DIALOG\s+PRESTASI\s+PENGURUSAN|JK0[1-9]|JK1[0-5]/i.test(
+          text
+        ) &&
+        !/MESYUARAT\s+(JAWATANKUASA\s+)?KURIKULUM|MESYUARAT\s+(JAWATANKUASA\s+)?HEM|MESYUARAT\s+(JAWATANKUASA\s+)?HAL\s+EHWAL\s+MURID|MESYUARAT\s+(JAWATANKUASA\s+)?KOKURIKULUM|PANITIA/i.test(
+          text
+        );
+      if (isPentadbiran) return 'PENTADBIRAN';
+
+      if (
+        explicitDom === 'PENTADBIRAN' ||
+        explicitDom === 'KURIKULUM' ||
+        explicitDom === 'HEM' ||
+        explicitDom === 'KOKURIKULUM'
+      ) {
+        return explicitDom as MaklumanDomain;
+      }
+      return 'KURIKULUM';
+    };
+
     const q = query(collection(db, 'makluman_tasks'), orderBy('dueDate', 'asc'));
     const unsub = onSnapshot(
       q,
@@ -539,9 +575,38 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
         if (!isMounted) return;
         const loaded: MaklumanTaskItem[] = [];
         snap.forEach((d) => {
-          const data = d.data() as Omit<MaklumanTaskItem, 'id'>;
-          if (belongsToSchool(data, activeSchoolCode)) {
-            loaded.push({ id: d.id, ...data });
+          const raw = d.data() as any;
+          if (belongsToSchool(raw, activeSchoolCode)) {
+            const validCat: MaklumanCategory =
+              raw.category && CATEGORY_META[raw.category as MaklumanCategory]
+                ? (raw.category as MaklumanCategory)
+                : 'MESYUARAT';
+            const agendaSummary =
+              Array.isArray(raw.agendaList) && raw.agendaList.length > 0
+                ? `Agenda Fokus: ${raw.agendaList.join(' • ')}`
+                : '';
+            loaded.push({
+              ...raw,
+              id: d.id,
+              domain: normalizeMaklumanDomain(raw),
+              category: validCat,
+              source: raw.source || 'AD_HOC',
+              dueDate: raw.dueDate || todayStr,
+              dueTime: raw.dueTime || raw.masa || '',
+              location: raw.location || raw.venue || '',
+              description: raw.description || agendaSummary,
+              tindakanLabel:
+                raw.tindakanLabel ||
+                raw.jawatankuasaInduk ||
+                (Array.isArray(raw.targetTeachers) && raw.targetTeachers.length > 0
+                  ? raw.targetTeachers.join(', ')
+                  : 'SEMUA GURU'),
+              priority: raw.priority || 'TINGGI',
+              targetType: raw.targetType || 'SEMUA_GURU',
+              targetTeacherIds: Array.isArray(raw.targetTeacherIds) ? raw.targetTeacherIds : [],
+              completions: raw.completions || {},
+              whatsappLogs: raw.whatsappLogs || {},
+            });
           }
         });
         setItems(loaded);
@@ -556,7 +621,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       isMounted = false;
       unsub();
     };
-  }, [activeSchoolCode]);
+  }, [activeSchoolCode, todayStr]);
 
   // 1b. Subscribe to Firestore `koko_activities` to show ✅ Lihat OPR / Cipta OPR status on Makluman cards
   useEffect(() => {
@@ -882,7 +947,25 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
       if (targetIds.includes(p.teacherId) || supervisorIds.includes(p.teacherId)) return true;
     }
 
-    // 6. Name and Action Directive Matching in tindakanLabel, title, description
+    // 6. Match against `invitedTeachers` or `targetTeachers` arrays from AI Setiausaha Memos
+    const invitedArr: Array<{ teacherId?: string; teacherName?: string }> = Array.isArray(
+      (item as any).invitedTeachers
+    )
+      ? (item as any).invitedTeachers
+      : [];
+    const targetNamesArr: string[] = Array.isArray((item as any).targetTeachers)
+      ? (item as any).targetTeachers
+      : [];
+
+    if (
+      myName &&
+      (invitedArr.some((inv) => String(inv?.teacherName || '').trim().toUpperCase() === myName) ||
+        targetNamesArr.some((tn) => String(tn || '').trim().toUpperCase() === myName))
+    ) {
+      return true;
+    }
+
+    // 7. Name and Action Directive Matching in tindakanLabel, title, description
     const searchCorpus = `${item.tindakanLabel || ''} ${item.title || ''} ${item.description || ''}`.toUpperCase();
 
     // Check full name match
@@ -1525,7 +1608,13 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
               <button
                 key={dom}
                 type="button"
-                onClick={() => setDomainFilter(isSelected ? 'ALL' : dom)}
+                onClick={() => {
+                  const nextDom = isSelected ? 'ALL' : dom;
+                  setDomainFilter(nextDom);
+                  if (nextDom !== 'ALL') {
+                    setTimeHorizon('SEMUA');
+                  }
+                }}
                 className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
                   isSelected
                     ? `${meta.bgClass} ${meta.borderClass} ring-2 ring-indigo-400`

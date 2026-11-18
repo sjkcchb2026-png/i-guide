@@ -1,0 +1,3043 @@
+```python
+import os, zipfile
+
+print("Files in cwd:", os.listdir('.'))
+for f in os.listdir('.'):
+    if f.endswith('.zip'):
+        print(f, os.path.getsize(f))
+
+
+```
+
+```text
+Files in cwd: ['i-guide (2).zip', 'input_file_10.png', 'input_file_9.png', 'input_file_8.png', 'input_file_7.png', 'input_file_6.png', 'input_file_5.png', 'input_file_4.png', 'i-guide (1).zip', 'input_file_3.png', 'input_file_2.png', 'input_file_1.png', 'input_file_0.png']
+i-guide (2).zip 7287491
+i-guide (1).zip 7819207
+
+
+```
+
+```python
+import zipfile
+
+with zipfile.ZipFile('i-guide (2).zip', 'r') as z:
+    for path in [
+        'src/components/AISetiausaha/types.ts',
+        'src/components/AISetiausaha/AISetiausahaHub.tsx',
+        'src/components/AISetiausaha/ModuleMemoMesyuarat.tsx',
+        'src/components/AISetiausaha/ModuleMinitMesyuarat.tsx',
+    ]:
+        content = z.read(path).decode('utf-8', errors='ignore').splitlines()
+        print(f"\n================ {path} (lines={len(content)}) ================")
+        for i, l in enumerate(content[:140], 1):
+            print(f"{i:3d}: {l}")
+
+
+```
+
+```text
+
+================ src/components/AISetiausaha/types.ts (lines=191) ================
+  1: import { MySGPillar } from '../../utils/mysgJawatankuasaCatalog';
+  2: import { SKPMRadarBucket } from '../../utils/skpmCatalog';
+  3: 
+  4: export type SetiausahaModuleTab = 'OPR' | 'MEMO' | 'MINIT' | 'LANTIKAN';
+  5: 
+  6: export interface OPRPosterDocument {
+  7:   id: string;
+  8:   docKind: 'OPR';
+  9:   schoolCode: string;
+ 10:   academicYear: string;
+ 11:   pillar: MySGPillar;
+ 12:   kodMySG: string;
+ 13:   jawatankuasaInduk: string;
+ 14:   jawatanRasmi: string;
+ 15:   skpmBucket: SKPMRadarBucket;
+ 16:   skpmStandard: string;
+ 17:   skpmAspek: string;
+ 18:   skpmStandardKualiti: string;
+ 19:   programTitle: string;
+ 20:   tarikh: string;
+ 21:   masa: string;
+ 22:   tempat: string;
+ 23:   sasaran: string;
+ 24:   rawNotes: string;
+ 25:   objektif: string[];
+ 26:   pengisianAktiviti: string[];
+ 27:   impak: string[];
+ 28:   refleksiDanTindakanSusulan: string[];
+ 29:   photos: string[]; // Up to 3 circular photos (base64 compressed)
+ 30:   preparedByName: string;
+ 31:   preparedByTitle: string;
+ 32:   sourceModule?: 'AI_SETIAUSAHA' | 'KOKURIKULUM_OPR' | 'KOKURIKULUM_MEETING';
+ 33:   sourceActivityId?: string;
+ 34:   secondarySkpmBucket?: SKPMRadarBucket;
+ 35:   additionalSkpmBuckets?: SKPMRadarBucket[];
+ 36:   skpmAspek271Linked?: boolean;
+ 37:   skpmCodeBadge?: string;
+ 38:   peringkat?: string;
+ 39:   pencapaian?: string;
+ 40:   createdBy: string;
+ 41:   createdAt: string;
+ 42:   updatedAt: string;
+ 43: }
+ 44: 
+ 45: export interface MemoMesyuaratDocument {
+ 46:   id: string;
+ 47:   docKind: 'MEMO';
+ 48:   schoolCode: string;
+ 49:   academicYear: string;
+ 50:   pillar: MySGPillar;
+ 51:   kodMySG: string;
+ 52:   jawatankuasaInduk: string;
+ 53:   jawatanRasmi: string;
+ 54:   tajukMesyuarat: string;
+ 55:   bilangan: string;
+ 56:   rujukanKami: string;
+ 57:   tarikhSurat: string;
+ 58:   tarikhMesyuarat: string;
+ 59:   hariMesyuarat: string;
+ 60:   masaMesyuarat: string;
+ 61:   tempatMesyuarat: string;
+ 62:   pengerusiName: string;
+ 63:   pengerusiTitle: string;
+ 64:   recipientMode: 'SEMUA_GURU' | 'AHLI_TERPILIH';
+ 65:   recipientIds: string[];
+ 66:   recipientNames: string[];
+ 67:   agendaPerutusan: string;
+ 68:   agendaPengesahanMinit: string;
+ 69:   agendaPerkaraBerbangkit: string;
+ 70:   agendaFokusUtama: string[];
+ 71:   agendaHalLain: string;
+ 72:   agendaPenutup: string;
+ 73:   principalName: string;
+ 74:   principalTitle: string;
+ 75:   maklumanSyncedAt?: string;
+ 76:   createdBy: string;
+ 77:   createdAt: string;
+ 78:   updatedAt: string;
+ 79: }
+ 80: 
+ 81: export interface MinitAgendaEntry {
+ 82:   id: string;
+ 83:   paraNo: string;
+ 84:   agendaTitle: string;
+ 85:   rawNotes: string;
+ 86:   formalText: string;
+ 87:   tindakanType: 'MAKLUMAN' | 'TINDAKAN';
+ 88:   tindakanOwner: string;
+ 89:   maklumBalasStatus: string;
+ 90:   mukaSurat: string;
+ 91: }
+ 92: 
+ 93: export interface MinitMesyuaratDocument {
+ 94:   id: string;
+ 95:   docKind: 'MINIT';
+ 96:   schoolCode: string;
+ 97:   academicYear: string;
+ 98:   linkedMemoId?: string;
+ 99:   sourceMemoId?: string;
+100:   pillar: MySGPillar;
+101:   kodMySG: string;
+102:   jawatankuasaInduk: string;
+103:   tajukMesyuarat: string;
+104:   minitTitle?: string;
+105:   bilangan: string;
+106:   tarikh: string;
+107:   tarikhMesyuarat?: string;
+108:   masa: string;
+109:   masaMesyuarat?: string;
+110:   tempat: string;
+111:   tempatMesyuarat?: string;
+112:   pengerusi: string;
+113:   pengerusiName?: string;
+114:   pencatat: string;
+115:   preparedByName?: string;
+116:   hadirNames: string[];
+117:   attendanceList?: string[];
+118:   tidakHadirBersebab: string[];
+119:   turutHadir: string[];
+120:   agendaEntries: MinitAgendaEntry[];
+121:   agendaList?: unknown[];
+122:   rawNotes?: string | unknown[];
+123:   disahkanOlehName: string;
+124:   disahkanOlehTitle: string;
+125:   createdBy: string;
+126:   createdAt: string;
+127:   updatedAt: string;
+128: }
+129: 
+130: export interface SuratLantikanDocument {
+131:   id: string;
+132:   docKind: 'LANTIKAN';
+133:   schoolCode: string;
+134:   academicYear: string;
+135:   mode: 'INDIVIDU_BERSEPADU' | 'JAWATAN_TUNGGAL';
+136:   rujukanKami: string;
+137:   tarikhSurat: string;
+138:   teacherId?: string;
+139:   teacherName?: string;
+140:   kodMySG?: string;
+
+================ src/components/AISetiausaha/AISetiausahaHub.tsx (lines=1271) ================
+  1: import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+  2: import { onAuthStateChanged } from 'firebase/auth';
+  3: import { collection, deleteDoc, doc, getDocs, setDoc } from 'firebase/firestore';
+  4: import {
+  5:   Award,
+  6:   Bot,
+  7:   CheckCircle2,
+  8:   ClipboardList,
+  9:   FileBarChart2,
+ 10:   FolderKanban,
+ 11:   FolderOpen,
+ 12:   Layers,
+ 13:   Mail,
+ 14:   RefreshCw,
+ 15:   Search,
+ 16:   ShieldCheck,
+ 17:   Sparkles,
+ 18:   X,
+ 19: } from 'lucide-react';
+ 20: import { auth, db } from '../../firebase';
+ 21: import { PersonnelProfile, SchoolSettings, UserProfile } from '../../types';
+ 22: import { AcademicYearConfig, GovernanceAssignment } from '../../types/isepadu';
+ 23: import {
+ 24:   MYSG_DEFAULT_CATALOG,
+ 25:   MySGJawatankuasaItem,
+ 26:   MySGPillar,
+ 27:   PILLAR_DISPLAY_META,
+ 28: } from '../../utils/mysgJawatankuasaCatalog';
+ 29: import {
+ 30:   autoResolveKokoSKPM,
+ 31:   getKokoSKPMOption,
+ 32:   resolveSKPMForMySGItem,
+ 33:   SKPMKokoStandardCode,
+ 34: } from '../../utils/skpmCatalog';
+ 35: import { KokoActivity, KokoMeetingReport } from '../../types/kokurikulum';
+ 36: import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
+ 37: import {
+ 38:   belongsToSchool,
+ 39:   DEFAULT_SCHOOL_NAME,
+ 40:   DEFAULT_SCHOOL_SLOGAN,
+ 41:   normalizeActiveSchoolCode,
+ 42:   scopedDocId,
+ 43: } from '../../utils/schoolTenant';
+ 44: import {
+ 45:   AnySetiausahaDocument,
+ 46:   MemoMesyuaratDocument,
+ 47:   MinitMesyuaratDocument,
+ 48:   OPRPosterDocument,
+ 49:   SetiausahaMaklumanMeeting,
+ 50:   SetiausahaModuleTab,
+ 51:   SetiausahaPrefillPayload,
+ 52:   SuratLantikanDocument,
+ 53:   resolveDocSessionYear,
+ 54: } from './types';
+ 55: import { ModuleOPRPoster } from './ModuleOPRPoster';
+ 56: import { ModuleMemoMesyuarat } from './ModuleMemoMesyuarat';
+ 57: import { ModuleMinitMesyuarat } from './ModuleMinitMesyuarat';
+ 58: import { ModuleSuratLantikan } from './ModuleSuratLantikan';
+ 59: import SPPKCompetitionFormsModal from '../Kokurikulum/SPPKCompetitionFormsModal';
+ 60: 
+ 61: enum OperationType {
+ 62:   CREATE = 'create',
+ 63:   UPDATE = 'update',
+ 64:   DELETE = 'delete',
+ 65:   LIST = 'list',
+ 66:   GET = 'get',
+ 67:   WRITE = 'write',
+ 68: }
+ 69: 
+ 70: interface FirestoreErrorInfo {
+ 71:   error: string;
+ 72:   operationType: OperationType;
+ 73:   path: string | null;
+ 74:   authInfo: {
+ 75:     userId: string | undefined;
+ 76:     email: string | null | undefined;
+ 77:     emailVerified: boolean | undefined;
+ 78:     isAnonymous: boolean | undefined;
+ 79:     tenantId: string | null | undefined;
+ 80:     providerInfo: Array<{
+ 81:       providerId: string;
+ 82:       displayName: string | null;
+ 83:       email: string | null;
+ 84:       photoUrl: string | null;
+ 85:     }>;
+ 86:   };
+ 87: }
+ 88: 
+ 89: function handleFirestoreError(
+ 90:   error: unknown,
+ 91:   operationType: OperationType,
+ 92:   path: string | null
+ 93: ): string {
+ 94:   const errMsg = error instanceof Error ? error.message : String(error);
+ 95:   const errInfo: FirestoreErrorInfo = {
+ 96:     error: errMsg,
+ 97:     authInfo: {
+ 98:       userId: auth.currentUser?.uid,
+ 99:       email: auth.currentUser?.email,
+100:       emailVerified: auth.currentUser?.emailVerified,
+101:       isAnonymous: auth.currentUser?.isAnonymous,
+102:       tenantId: auth.currentUser?.tenantId,
+103:       providerInfo:
+104:         auth.currentUser?.providerData.map((provider) => ({
+105:           providerId: provider.providerId,
+106:           displayName: provider.displayName,
+107:           email: provider.email,
+108:           photoUrl: provider.photoURL,
+109:         })) || [],
+110:     },
+111:     operationType,
+112:     path,
+113:   };
+114:   console.error('Firestore Error:', JSON.stringify(errInfo));
+115:   return errMsg;
+116: }
+117: 
+118: interface AISetiausahaHubProps {
+119:   currentUser: UserProfile;
+120:   schoolSettings?: SchoolSettings | null;
+121:   prefill?: SetiausahaPrefillPayload | null;
+122:   onClearPrefill?: () => void;
+123: }
+124: 
+125: const PILLARS: MySGPillar[] = ['PENTADBIRAN', 'KURIKULUM', 'HEM', 'KOKURIKULUM'];
+126: 
+127: export const AISetiausahaHub: React.FC<AISetiausahaHubProps> = ({
+128:   currentUser,
+129:   schoolSettings,
+130:   prefill,
+131:   onClearPrefill,
+132: }) => {
+133:   const activeSchoolCode = useMemo(
+134:     () => normalizeActiveSchoolCode(currentUser.schoolCode || schoolSettings?.schoolCode),
+135:     [currentUser.schoolCode, schoolSettings?.schoolCode]
+136:   );
+137: 
+138:   const schoolName = schoolSettings?.schoolName || DEFAULT_SCHOOL_NAME;
+139:   const schoolLogo = schoolSettings?.schoolLogo || schoolSettings?.logoUrl;
+140:   const schoolSlogan = schoolSettings?.slogan || DEFAULT_SCHOOL_SLOGAN;
+
+================ src/components/AISetiausaha/ModuleMemoMesyuarat.tsx (lines=1067) ================
+  1: import React, { useEffect, useMemo, useRef, useState } from 'react';
+  2: import { doc, setDoc } from 'firebase/firestore';
+  3: import {
+  4:   Bell,
+  5:   CheckCircle2,
+  6:   Copy,
+  7:   Edit3,
+  8:   ExternalLink,
+  9:   FileDown,
+ 10:   Mail,
+ 11:   Plus,
+ 12:   Printer,
+ 13:   RefreshCw,
+ 14:   Save,
+ 15:   Sparkles,
+ 16:   Trash2,
+ 17: } from 'lucide-react';
+ 18: import { auth, db } from '../../firebase';
+ 19: import { PersonnelProfile } from '../../types';
+ 20: import { MySGJawatankuasaItem } from '../../utils/mysgJawatankuasaCatalog';
+ 21: import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
+ 22: import { scopedDocId } from '../../utils/schoolTenant';
+ 23: import SchoolLogo from '../SchoolLogo';
+ 24: import {
+ 25:   MemoMesyuaratDocument,
+ 26:   SetiausahaMaklumanMeeting,
+ 27:   resolveDocSessionYear,
+ 28: } from './types';
+ 29: 
+ 30: interface ModuleMemoMesyuaratProps {
+ 31:   schoolCode: string;
+ 32:   schoolName: string;
+ 33:   schoolLogo?: string;
+ 34:   schoolSlogan?: string;
+ 35:   academicYear: string;
+ 36:   currentUserName: string;
+ 37:   currentUserUid: string;
+ 38:   personnel: PersonnelProfile[];
+ 39:   selectedItem: MySGJawatankuasaItem;
+ 40:   savedDocs: MemoMesyuaratDocument[];
+ 41:   maklumanMeetings: SetiausahaMaklumanMeeting[];
+ 42:   maklumanPrefill?: { taskItem: SetiausahaMaklumanMeeting; nonce: number } | null;
+ 43:   docToLoad?: { doc: MemoMesyuaratDocument; nonce: number } | null;
+ 44:   onSaveDoc: (doc: Partial<MemoMesyuaratDocument> & { docKind: 'MEMO' }) => Promise<MemoMesyuaratDocument | null>;
+ 45:   onDeleteDoc: (id: string) => Promise<void>;
+ 46: }
+ 47: 
+ 48: const HARI_MELAYU = ['Ahad', 'Isnin', 'Selasa', 'Rabu', 'Khamis', 'Jumaat', 'Sabtu'];
+ 49: 
+ 50: function resolveHariFromDate(dateStr: string): string {
+ 51:   if (!dateStr) return 'Isnin';
+ 52:   const d = new Date(`${dateStr}T08:00:00`);
+ 53:   if (Number.isNaN(d.getTime())) return 'Isnin';
+ 54:   return HARI_MELAYU[d.getDay()] || 'Isnin';
+ 55: }
+ 56: 
+ 57: function formatMalayDate(dateStr: string): string {
+ 58:   if (!dateStr) return '-';
+ 59:   const months = [
+ 60:     'Januari',
+ 61:     'Februari',
+ 62:     'Mac',
+ 63:     'April',
+ 64:     'Mei',
+ 65:     'Jun',
+ 66:     'Julai',
+ 67:     'Ogos',
+ 68:     'September',
+ 69:     'Oktober',
+ 70:     'November',
+ 71:     'Disember',
+ 72:   ];
+ 73:   const parts = dateStr.split('-');
+ 74:   if (parts.length !== 3) return dateStr;
+ 75:   const year = parts[0];
+ 76:   const monthIdx = parseInt(parts[1], 10) - 1;
+ 77:   const day = parseInt(parts[2], 10);
+ 78:   return `${day} ${months[monthIdx] || parts[1]} ${year}`;
+ 79: }
+ 80: 
+ 81: export const ModuleMemoMesyuarat: React.FC<ModuleMemoMesyuaratProps> = ({
+ 82:   schoolCode,
+ 83:   schoolName,
+ 84:   schoolLogo,
+ 85:   schoolSlogan,
+ 86:   academicYear,
+ 87:   currentUserName,
+ 88:   currentUserUid,
+ 89:   personnel,
+ 90:   selectedItem,
+ 91:   savedDocs,
+ 92:   maklumanMeetings,
+ 93:   maklumanPrefill,
+ 94:   docToLoad,
+ 95:   onSaveDoc,
+ 96:   onDeleteDoc,
+ 97: }) => {
+ 98:   const principalProfile = useMemo(
+ 99:     () =>
+100:       personnel.find(
+101:         (p) =>
+102:           p.category === 'PRINCIPAL' ||
+103:           String(p.position || '').toUpperCase() === 'GB' ||
+104:           String(p.position || '').toUpperCase().includes('GURU BESAR')
+105:       ),
+106:     [personnel]
+107:   );
+108: 
+109:   const activeTeachers = useMemo(
+110:     () =>
+111:       personnel
+112:         .filter((p) => p.name && (!p.teachingStatus || p.teachingStatus === 'Aktif'))
+113:         .sort((a, b) => String(a.name).localeCompare(String(b.name))),
+114:     [personnel]
+115:   );
+116: 
+117:   const yearShort = (academicYear || '2026').slice(0, 4);
+118:   const defaultMeetingDate = useMemo(() => {
+119:     const d = new Date();
+120:     d.setDate(d.getDate() + 5);
+121:     return d.toISOString().slice(0, 10);
+122:   }, []);
+123: 
+124:   const [editingId, setEditingId] = useState<string | null>(null);
+125:   const [bilangan, setBilangan] = useState(`Bil. 1/${yearShort}`);
+126:   const [tajukMesyuarat, setTajukMesyuarat] = useState(
+127:     `MESYUARAT ${selectedItem.jawatankuasaInduk.toUpperCase()} BIL. 1/${yearShort}`
+128:   );
+129:   const [rujukanKami, setRujukanKami] = useState(
+130:     `${schoolCode}/600-1/1/${String(savedDocs.length + 1).padStart(2, '0')}`
+131:   );
+132:   const [tarikhSurat, setTarikhSurat] = useState(new Date().toISOString().slice(0, 10));
+133:   const [tarikhMesyuarat, setTarikhMesyuarat] = useState(defaultMeetingDate);
+134:   const [hariMesyuarat, setHariMesyuarat] = useState(resolveHariFromDate(defaultMeetingDate));
+135:   const [masaMesyuarat, setMasaMesyuarat] = useState('01:30 petang – 03:00 petang');
+136:   const [tempatMesyuarat, setTempatMesyuarat] = useState(`Bilik Mesyuarat ${schoolName}`);
+137: 
+138:   const [pengerusiName, setPengerusiName] = useState(
+139:     (principalProfile?.name || 'GURU BESAR').toUpperCase()
+140:   );
+
+================ src/components/AISetiausaha/ModuleMinitMesyuarat.tsx (lines=1454) ================
+  1: import React, { useEffect, useMemo, useRef, useState } from 'react';
+  2: import {
+  3:   CheckSquare,
+  4:   ClipboardList,
+  5:   Edit3,
+  6:   FileDown,
+  7:   FileText,
+  8:   FolderOpen,
+  9:   Plus,
+ 10:   Printer,
+ 11:   RefreshCw,
+ 12:   Save,
+ 13:   Sparkles,
+ 14:   Trash2,
+ 15: } from 'lucide-react';
+ 16: import { auth } from '../../firebase';
+ 17: import { PersonnelProfile } from '../../types';
+ 18: import { MySGJawatankuasaItem } from '../../utils/mysgJawatankuasaCatalog';
+ 19: import SchoolLogo from '../SchoolLogo';
+ 20: import {
+ 21:   MemoMesyuaratDocument,
+ 22:   MinitAgendaEntry,
+ 23:   MinitMesyuaratDocument,
+ 24:   SetiausahaMaklumanMeeting,
+ 25:   resolveDocSessionYear,
+ 26: } from './types';
+ 27: 
+ 28: interface ModuleMinitMesyuaratProps {
+ 29:   schoolCode: string;
+ 30:   schoolName: string;
+ 31:   schoolLogo?: string;
+ 32:   academicYear: string;
+ 33:   currentUserName: string;
+ 34:   personnel: PersonnelProfile[];
+ 35:   selectedItem: MySGJawatankuasaItem;
+ 36:   savedMemos: MemoMesyuaratDocument[];
+ 37:   savedDocs: MinitMesyuaratDocument[];
+ 38:   maklumanMeetings: SetiausahaMaklumanMeeting[];
+ 39:   maklumanPrefill?: { taskItem: SetiausahaMaklumanMeeting; nonce: number } | null;
+ 40:   docToLoad?: { doc: MinitMesyuaratDocument; nonce: number } | null;
+ 41:   onSaveDoc: (
+ 42:     doc: Partial<MinitMesyuaratDocument> & { docKind: 'MINIT' }
+ 43:   ) => Promise<MinitMesyuaratDocument | null>;
+ 44:   onDeleteDoc: (id: string) => Promise<void>;
+ 45: }
+ 46: 
+ 47: function buildDefaultEntries(committeeName: string): MinitAgendaEntry[] {
+ 48:   return [
+ 49:     {
+ 50:       id: 'sec_1',
+ 51:       paraNo: '1.0',
+ 52:       agendaTitle: 'PERUTUSAN PENGERUSI',
+ 53:       rawNotes:
+ 54:         'Pengerusi mengalu-alukan kehadiran ahli mesyuarat dan menekankan kerjasama berpasukan.',
+ 55:       formalText:
+ 56:         'Pengerusi memulakan mesyuarat dengan mengucapkan ribuan terima kasih atas kehadiran semua ahli mesyuarat dan mengingatkan kepentingan komitmen terhadap kecemerlangan sekolah.',
+ 57:       tindakanType: 'MAKLUMAN',
+ 58:       tindakanOwner: 'Makluman',
+ 59:       maklumBalasStatus: '',
+ 60:       mukaSurat: '1',
+ 61:     },
+ 62:     {
+ 63:       id: 'sec_2',
+ 64:       paraNo: '2.0',
+ 65:       agendaTitle: 'PENGESAHAN MINIT MESYUARAT YANG LALU',
+ 66:       rawNotes: 'Minit disahkan tanpa pindaan.',
+ 67:       formalText:
+ 68:         'Minit mesyuarat yang lalu dibentangkan dan disahkan tanpa sebarang pindaan.',
+ 69:       tindakanType: 'MAKLUMAN',
+ 70:       tindakanOwner: 'Makluman',
+ 71:       maklumBalasStatus: '',
+ 72:       mukaSurat: '1',
+ 73:     },
+ 74:     {
+ 75:       id: 'sec_3',
+ 76:       paraNo: '3.0',
+ 77:       agendaTitle: 'PERKARA-PERKARA BERBANGKIT',
+ 78:       rawNotes: 'Tiada perkara berbangkit.',
+ 79:       formalText:
+ 80:         'Tiada perkara berbangkit dibincangkan daripada minit mesyuarat yang lalu.',
+ 81:       tindakanType: 'MAKLUMAN',
+ 82:       tindakanOwner: 'Makluman',
+ 83:       maklumBalasStatus: '',
+ 84:       mukaSurat: '1',
+ 85:     },
+ 86:     {
+ 87:       id: 'sec_4_1',
+ 88:       paraNo: '4.1',
+ 89:       agendaTitle: `PERANCANGAN STRATEGIK & TAKWIM ${committeeName.toUpperCase()}`,
+ 90:       rawNotes:
+ 91:         'Semua guru penyelaras perlu kemaskini rekod dan hantar OPR selepas setiap aktiviti.',
+ 92:       formalText: `Mesyuarat mengambil maklum dan memutuskan agar semua guru penyelaras di bawah ${committeeName} melaksanakan program mengikut takwim yang ditetapkan serta memuat naik laporan OPR SKPM selepas pelaksanaan aktiviti.`,
+ 93:       tindakanType: 'TINDAKAN',
+ 94:       tindakanOwner: 'Semua Guru Penyelaras',
+ 95:       maklumBalasStatus: 'Dalam tindakan pelaksanaan mengikut takwim.',
+ 96:       mukaSurat: '2',
+ 97:     },
+ 98:     {
+ 99:       id: 'sec_5',
+100:       paraNo: '5.0',
+101:       agendaTitle: 'HAL-HAL LAIN',
+102:       rawNotes: 'Kerjasama semua guru diminta untuk memastikan eviden lengkap.',
+103:       formalText:
+104:         'Pengerusi mengingatkan ahli jawatankuasa agar memastikan dokumentasi evidens SKPM dan maklum balas tindakan dikemas kini sebelum tarikh tutup.',
+105:       tindakanType: 'TINDAKAN',
+106:       tindakanOwner: 'Semua Ahli Jawatankuasa',
+107:       maklumBalasStatus: 'Akan disemak dalam mesyuarat berikutnya.',
+108:       mukaSurat: '2',
+109:     },
+110:     {
+111:       id: 'sec_6',
+112:       paraNo: '6.0',
+113:       agendaTitle: 'PENUTUP',
+114:       rawNotes: 'Mesyuarat ditangguhkan dengan ucapan terima kasih.',
+115:       formalText:
+116:         'Mesyuarat ditangguhkan pada jam 3.00 petang dengan ucapan terima kasih daripada Pengerusi.',
+117:       tindakanType: 'MAKLUMAN',
+118:       tindakanOwner: 'Makluman',
+119:       maklumBalasStatus: '',
+120:       mukaSurat: '2',
+121:     },
+122:   ];
+123: }
+124: 
+125: function formatMalayDate(dateStr: string): string {
+126:   if (!dateStr) return '-';
+127:   const months = [
+128:     'Januari',
+129:     'Februari',
+130:     'Mac',
+131:     'April',
+132:     'Mei',
+133:     'Jun',
+134:     'Julai',
+135:     'Ogos',
+136:     'September',
+137:     'Oktober',
+138:     'November',
+139:     'Disember',
+140:   ];
+
+
+```
+
+```python
+import zipfile
+
+with zipfile.ZipFile('i-guide (2).zip', 'r') as z:
+    # 1. Check types.ts lines 140..191
+    types = z.read('src/components/AISetiausaha/types.ts').decode('utf-8', errors='ignore').splitlines()
+    print("=== types.ts lines 140..191 ===")
+    for i in range(139, len(types)):
+        print(f"{i+1:3d}: {types[i]}")
+
+    # 2. Check ISEPADUShell.tsx around ai-setiausaha and makluman
+    shell = z.read('src/components/Shell/ISEPADUShell.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("\n=== ISEPADUShell.tsx occurrences of setiausaha / makluman ===")
+    for i, l in enumerate(shell, 1):
+        if any(k in l.lower() for k in ['setiausaha', 'makluman']):
+            print(f"{i:4d}: {l.strip()[:120]}")
+
+    # 3. Check PaparanMaklumanView.tsx occurrences of Setiausaha / Memo / Minit
+    pm = z.read('src/components/Dashboard/PaparanMaklumanView.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("\n=== PaparanMaklumanView.tsx occurrences of Setiausaha / Memo / Minit ===")
+    for i, l in enumerate(pm, 1):
+        if any(k in l for k in ['Setiausaha', 'setiausaha', 'Memo', 'Minit', 'MEMO', 'MINIT']):
+            print(f"{i:4d}: {l.strip()[:120]}")
+
+
+```
+
+```text
+=== types.ts lines 140..191 ===
+140:   kodMySG?: string;
+141:   jawatanRasmi?: string;
+142:   principalName: string;
+143:   notes?: string;
+144:   createdBy: string;
+145:   createdAt: string;
+146:   updatedAt: string;
+147: }
+148: 
+149: export type AnySetiausahaDocument =
+150:   | OPRPosterDocument
+151:   | MemoMesyuaratDocument
+152:   | MinitMesyuaratDocument
+153:   | SuratLantikanDocument;
+154: 
+155: export interface SetiausahaMaklumanMeeting {
+156:   id: string;
+157:   title: string;
+158:   description?: string;
+159:   domain?: string;
+160:   category?: string;
+161:   dueDate?: string;
+162:   dueTime?: string;
+163:   location?: string;
+164:   tindakanLabel?: string;
+165:   targetType?: 'SEMUA_GURU' | 'GURU_TERPILIH';
+166:   targetTeacherIds?: string[];
+167:   arahanTindakan?: string;
+168:   source?: string;
+169:   schoolCode?: string;
+170: }
+171: 
+172: export interface SetiausahaPrefillPayload {
+173:   targetTab: 'MEMO' | 'MINIT' | 'OPR';
+174:   taskItem: SetiausahaMaklumanMeeting;
+175:   nonce?: number;
+176: }
+177: 
+178: export function resolveDocSessionYear(doc: any, fallbackYear = '2026'): string {
+179:   if (doc?.academicYear && String(doc.academicYear).trim()) {
+180:     const match = String(doc.academicYear).trim().match(/(\d{4})/);
+181:     if (match) return match[1];
+182:     return String(doc.academicYear).trim().slice(0, 4);
+183:   }
+184:   const dt = String(
+185:     doc?.tarikh || doc?.tarikhMesyuarat || doc?.tarikhSurat || doc?.dueDate || ''
+186:   ).trim();
+187:   const m = dt.match(/^(\d{4})/);
+188:   if (m) return m[1];
+189:   return String(fallbackYear || '2026').slice(0, 4);
+190: }
+191: 
+
+=== ISEPADUShell.tsx occurrences of setiausaha / makluman ===
+  44: import type { MaklumanOPRPrefill } from '../Kokurikulum/KokoSmartOPRManager';
+  49: import { PaparanMaklumanView } from '../Dashboard/PaparanMaklumanView';
+  52: import { AISetiausahaHub } from '../AISetiausaha/AISetiausahaHub';
+  53: import type { SetiausahaPrefillPayload } from '../AISetiausaha/types';
+  55: export type Workspace = 'dashboard' | 'makluman' | 'surat-masuk' | 'ai-setiausaha' | 'academic' | 'kokurikulum' | 'atten
+  73: const [kokoOprPrefill, setKokoOprPrefill] = useState<MaklumanOPRPrefill | null>(null);
+  74: const [setiausahaPrefill, setSetiausahaPrefill] = useState<SetiausahaPrefillPayload | null>(null);
+ 207: {/* Makluman & Tugasan WhatsApp (Semua Warga Sekolah) */}
+ 209: onClick={() => setActiveWorkspace('makluman')}
+ 211: activeWorkspace === 'makluman'
+ 217: <span>Makluman</span>
+ 233: {/* AI Setiausaha (OPR SKPM, Memo, Minit PKPA & Lantikan MySG) */}
+ 235: onClick={() => setActiveWorkspace('ai-setiausaha')}
+ 237: activeWorkspace === 'ai-setiausaha'
+ 243: <span>AI Setiausaha</span>
+ 353: onClick={() => setActiveWorkspace('makluman')}
+ 355: activeWorkspace === 'makluman' ? 'bg-indigo-600 text-white' : 'text-slate-400'
+ 359: <span>Makluman</span>
+ 362: onClick={() => setActiveWorkspace('ai-setiausaha')}
+ 364: activeWorkspace === 'ai-setiausaha' ? 'bg-teal-600 text-white' : 'text-slate-400'
+ 368: <span>AI Setiausaha</span>
+ 590: {/* Makluman & Tugasan WhatsApp Card (Semua Warga Sekolah) */}
+ 592: onClick={() => setActiveWorkspace('makluman')}
+ 600: Makluman & Tugasan Pintar
+ 607: <span>Buka Makluman</span>
+ 612: {/* AI Setiausaha Hub Card */}
+ 614: onClick={() => setActiveWorkspace('ai-setiausaha')}
+ 622: AI Setiausaha (Pusat Penjana Rasmi)
+ 629: <span>Buka AI Setiausaha</span>
+ 710: {/* ---------------- MAKLUMAN & TUGASAN WHATSAPP WORKSPACE ---------------- */}
+ 711: {activeWorkspace === 'makluman' && (
+ 713: <PaparanMaklumanView
+ 721: onOpenSetiausahaDoc={(payload) => {
+ 722: setSetiausahaPrefill({ ...payload, nonce: payload.nonce || Date.now() });
+ 723: setActiveWorkspace('ai-setiausaha');
+ 744: {/* ---------------- AI SETIAUSAHA HUB WORKSPACE ---------------- */}
+ 745: {activeWorkspace === 'ai-setiausaha' && (
+ 747: <AISetiausahaHub
+ 750: prefill={setiausahaPrefill}
+ 751: onClearPrefill={() => setSetiausahaPrefill(null)}
+
+=== PaparanMaklumanView.tsx occurrences of Setiausaha / Memo / Minit ===
+   1: import React, { useState, useEffect, useMemo, useRef } from 'react';
+  51: import type { SetiausahaPrefillPayload } from '../AISetiausaha/types';
+ 145: onOpenSetiausahaDoc?: (payload: SetiausahaPrefillPayload) => void;
+ 251: onOpenSetiausahaDoc,
+ 493: const resolvedCurrentTeacher: TeacherProfile = useMemo(() => {
+ 528: const activeTeachers = useMemo(
+ 806: const domainCounters = useMemo(() => {
+ 913: const myTasks = useMemo(() => {
+ 918: const myHorizonCounts = useMemo(() => {
+ 940: const filteredMyTasks = useMemo(() => {
+1184: const teacherComplianceStats = useMemo(() => {
+1234: const staffBirthdays = useMemo(() => {
+1884: {item.category === 'MESYUARAT' && onOpenSetiausahaDoc && (
+1889: onOpenSetiausahaDoc({
+1890: targetTab: 'MEMO',
+1896: title="Jana Memo Panggilan Mesyuarat di AI Setiausaha"
+1898: <span>📩 Memo</span>
+1903: onOpenSetiausahaDoc({
+1904: targetTab: 'MINIT',
+1910: title="Catat & Jana Minit Mesyuarat PKPA di AI Setiausaha"
+1912: <span>📝 Minit</span>
+
+
+```
+
+```python
+import zipfile
+
+with zipfile.ZipFile('i-guide (2).zip', 'r') as z:
+    memo = z.read('src/components/AISetiausaha/ModuleMemoMesyuarat.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("=== ModuleMemoMesyuarat.tsx lines 140..420 ===")
+    for i in range(139, min(420, len(memo))):
+        print(f"{i+1:4d}: {memo[i]}")
+
+
+```
+
+```text
+=== ModuleMemoMesyuarat.tsx lines 140..420 ===
+ 140:   );
+ 141:   const [pengerusiTitle, setPengerusiTitle] = useState('Guru Besar');
+ 142: 
+ 143:   const [recipientMode, setRecipientMode] = useState<'SEMUA_GURU' | 'AHLI_TERPILIH'>('SEMUA_GURU');
+ 144:   const [recipientIds, setRecipientIds] = useState<string[]>([]);
+ 145: 
+ 146:   const [agendaPerutusan, setAgendaPerutusan] = useState('Perutusan Pengerusi');
+ 147:   const [agendaPengesahanMinit, setAgendaPengesahanMinit] = useState('Pengesahan Minit Mesyuarat Yang Lalu');
+ 148:   const [agendaPerkaraBerbangkit, setAgendaPerkaraBerbangkit] = useState('Perkara-perkara Berbangkit');
+ 149:   const [agendaFokusUtama, setAgendaFokusUtama] = useState<string[]>([
+ 150:     `Pembentangan Perancangan & Takwim ${selectedItem.jawatankuasaInduk} Sesi ${academicYear || yearShort}`,
+ 151:     `Semakan Agihan Tugas MySG (${selectedItem.kodMySG}) dan Pematuhan Standard SKPM`,
+ 152:     'Analisis Isu Semasa serta Tindakan Intervensi Berfokus',
+ 153:   ]);
+ 154:   const [agendaHalLain, setAgendaHalLain] = useState('Hal-hal Lain');
+ 155:   const [agendaPenutup, setAgendaPenutup] = useState('Penutup');
+ 156:   const [contextNotes, setContextNotes] = useState('');
+ 157: 
+ 158:   const [principalName, setPrincipalName] = useState(
+ 159:     (principalProfile?.name || 'GURU BESAR').toUpperCase()
+ 160:   );
+ 161: 
+ 162:   const [importSelection, setImportSelection] = useState<string>('');
+ 163:   const [aiLoading, setAiLoading] = useState(false);
+ 164:   const [saving, setSaving] = useState(false);
+ 165:   const [syncingMakluman, setSyncingMakluman] = useState(false);
+ 166:   const [banner, setBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+ 167:   const [whatsappUrl, setWhatsappUrl] = useState<string>('');
+ 168:   const [copiedWa, setCopiedWa] = useState(false);
+ 169: 
+ 170:   const prevKodRef = useRef<string>(selectedItem.kodMySG);
+ 171:   const lockAutoTemplateRef = useRef<boolean>(false);
+ 172:   const lastPrefillNonceRef = useRef<number>(0);
+ 173:   const lastDocLoadNonceRef = useRef<number>(0);
+ 174: 
+ 175:   // Sync defaults ONLY when user explicitly switches Committee in Level 2 selector and no saved/prefilled memo is active
+ 176:   useEffect(() => {
+ 177:     if (prevKodRef.current === selectedItem.kodMySG) return;
+ 178:     prevKodRef.current = selectedItem.kodMySG;
+ 179:     if (editingId || lockAutoTemplateRef.current) return;
+ 180: 
+ 181:     setTajukMesyuarat(`MESYUARAT ${selectedItem.jawatankuasaInduk.toUpperCase()} ${bilangan.toUpperCase()}`);
+ 182:     const domainPrefix =
+ 183:       selectedItem.pillar === 'PENTADBIRAN'
+ 184:         ? '100'
+ 185:         : selectedItem.pillar === 'KURIKULUM'
+ 186:         ? '600'
+ 187:         : selectedItem.pillar === 'HEM'
+ 188:         ? '700'
+ 189:         : '800';
+ 190:     setRujukanKami(`${schoolCode}/${domainPrefix}-1/1/${String(savedDocs.length + 1).padStart(2, '0')}`);
+ 191:     setAgendaFokusUtama([
+ 192:       `Pembentangan Perancangan & Takwim ${selectedItem.jawatankuasaInduk} Sesi ${academicYear || yearShort}`,
+ 193:       `Semakan Tugas & Sasaran ${selectedItem.jawatanRasmi} (${selectedItem.kodMySG})`,
+ 194:       `Penyelarasan Sistem KPM (${selectedItem.sistemKPM}) & Pematuhan ${selectedItem.skpmStandardCode}`,
+ 195:     ]);
+ 196:   }, [selectedItem, editingId, schoolCode, academicYear, yearShort, bilangan, savedDocs.length]);
+ 197: 
+ 198:   useEffect(() => {
+ 199:     if (principalProfile?.name && !editingId && !lockAutoTemplateRef.current) {
+ 200:       setPrincipalName(principalProfile.name.toUpperCase());
+ 201:       setPengerusiName(principalProfile.name.toUpperCase());
+ 202:     }
+ 203:   }, [principalProfile, editingId]);
+ 204: 
+ 205:   const selectedRecipientNames = useMemo(() => {
+ 206:     if (recipientMode === 'SEMUA_GURU') return ['Semua Guru & Staf Berkaitan'];
+ 207:     return activeTeachers
+ 208:       .filter((t) => recipientIds.includes(t.id))
+ 209:       .map((t) => t.name.toUpperCase());
+ 210:   }, [recipientMode, recipientIds, activeTeachers]);
+ 211: 
+ 212:   const handleSuggestAgendaAI = async () => {
+ 213:     setAiLoading(true);
+ 214:     setBanner(null);
+ 215:     try {
+ 216:       const idToken = await auth.currentUser?.getIdToken();
+ 217:       const res = await fetch('/api/ai/setiausaha', {
+ 218:         method: 'POST',
+ 219:         headers: {
+ 220:           'Content-Type': 'application/json',
+ 221:           Authorization: `Bearer ${idToken || ''}`,
+ 222:         },
+ 223:         body: JSON.stringify({
+ 224:           action: 'MEMO_AGENDA',
+ 225:           payload: {
+ 226:             committeeName: selectedItem.jawatankuasaInduk,
+ 227:             jawatanRasmi: selectedItem.jawatanRasmi,
+ 228:             pillar: selectedItem.pillar,
+ 229:             tarikhMesyuarat,
+ 230:             bilangan,
+ 231:             contextNotes,
+ 232:           },
+ 233:         }),
+ 234:       });
+ 235:       const data = await res.json();
+ 236:       if (!res.ok) throw new Error(data.error || 'Gagal mencadangkan agenda.');
+ 237:       if (Array.isArray(data.agendas) && data.agendas.length > 0) {
+ 238:         setAgendaFokusUtama(data.agendas);
+ 239:         setBanner({
+ 240:           type: 'success',
+ 241:           text:
+ 242:             data.source === 'gemini'
+ 243:               ? 'Cadangan Agenda Fokus Utama (Bahagian 4) berjaya dijana oleh AI Setiausaha.'
+ 244:               : 'Cadangan agenda berstruktur telah diisi untuk semakan anda.',
+ 245:         });
+ 246:       }
+ 247:     } catch (err: any) {
+ 248:       setBanner({ type: 'error', text: err?.message || 'Gagal menjana agenda AI.' });
+ 249:     } finally {
+ 250:       setAiLoading(false);
+ 251:     }
+ 252:   };
+ 253: 
+ 254:   const buildCurrentPayload = (overrideId?: string): Partial<MemoMesyuaratDocument> & { docKind: 'MEMO' } => ({
+ 255:     id: overrideId || editingId || undefined,
+ 256:     docKind: 'MEMO',
+ 257:     academicYear,
+ 258:     pillar: selectedItem.pillar,
+ 259:     kodMySG: selectedItem.kodMySG,
+ 260:     jawatankuasaInduk: selectedItem.jawatankuasaInduk,
+ 261:     jawatanRasmi: selectedItem.jawatanRasmi,
+ 262:     tajukMesyuarat: tajukMesyuarat.trim().toUpperCase(),
+ 263:     bilangan: bilangan.trim(),
+ 264:     rujukanKami: rujukanKami.trim(),
+ 265:     tarikhSurat,
+ 266:     tarikhMesyuarat,
+ 267:     hariMesyuarat,
+ 268:     masaMesyuarat,
+ 269:     tempatMesyuarat,
+ 270:     pengerusiName: pengerusiName.trim().toUpperCase(),
+ 271:     pengerusiTitle: pengerusiTitle.trim(),
+ 272:     recipientMode,
+ 273:     recipientIds,
+ 274:     recipientNames: selectedRecipientNames,
+ 275:     agendaPerutusan,
+ 276:     agendaPengesahanMinit,
+ 277:     agendaPerkaraBerbangkit,
+ 278:     agendaFokusUtama: agendaFokusUtama.filter((s) => s.trim()),
+ 279:     agendaHalLain,
+ 280:     agendaPenutup,
+ 281:     principalName: principalName.trim().toUpperCase(),
+ 282:     principalTitle: 'Guru Besar',
+ 283:   });
+ 284: 
+ 285:   const handleSaveMemo = async () => {
+ 286:     if (!tajukMesyuarat.trim()) {
+ 287:       setBanner({ type: 'error', text: 'Sila isi Tajuk Mesyuarat sebelum menyimpan.' });
+ 288:       return null;
+ 289:     }
+ 290:     setSaving(true);
+ 291:     setBanner(null);
+ 292:     const saved = await onSaveDoc(buildCurrentPayload());
+ 293:     setSaving(false);
+ 294:     if (saved) {
+ 295:       setEditingId(saved.id);
+ 296:       setBanner({ type: 'success', text: `Memo "${saved.tajukMesyuarat}" telah disimpan ke pangkalan data.` });
+ 297:     }
+ 298:     return saved;
+ 299:   };
+ 300: 
+ 301:   const handleSendToMaklumanAndWhatsApp = async () => {
+ 302:     setSyncingMakluman(true);
+ 303:     setBanner(null);
+ 304:     try {
+ 305:       let currentDocId = editingId;
+ 306:       if (!currentDocId) {
+ 307:         const saved = await onSaveDoc(buildCurrentPayload());
+ 308:         if (saved) {
+ 309:           currentDocId = saved.id;
+ 310:           setEditingId(saved.id);
+ 311:         }
+ 312:       }
+ 313:       const maklumanId = scopedDocId(
+ 314:         schoolCode,
+ 315:         `memo_${currentDocId || Date.now()}`
+ 316:       );
+ 317:       const agendaSummary = agendaFokusUtama
+ 318:         .filter((s) => s.trim())
+ 319:         .map((a, idx) => `4.${idx + 1} ${a}`)
+ 320:         .join(' | ');
+ 321: 
+ 322:       const taskPayload = deepSanitizeFirestore({
+ 323:         id: maklumanId,
+ 324:         schoolCode,
+ 325:         title: `[Panggilan Mesyuarat] ${tajukMesyuarat}`,
+ 326:         description: `${selectedItem.jawatankuasaInduk} · Masa: ${masaMesyuarat} · Tempat: ${tempatMesyuarat}. Agenda Fokus: ${agendaSummary}`,
+ 327:         domain: selectedItem.pillar,
+ 328:         category: 'MESYUARAT',
+ 329:         source: 'AD_HOC',
+ 330:         dueDate: tarikhMesyuarat,
+ 331:         dueTime: masaMesyuarat,
+ 332:         location: tempatMesyuarat,
+ 333:         tindakanLabel: recipientMode === 'SEMUA_GURU' ? 'SEMUA GURU' : selectedRecipientNames.join(', '),
+ 334:         priority: 'TINGGI',
+ 335:         targetType: recipientMode === 'SEMUA_GURU' ? 'SEMUA_GURU' : 'GURU_TERPILIH',
+ 336:         targetTeacherIds: recipientMode === 'SEMUA_GURU' ? [] : recipientIds,
+ 337:         arahanTindakan: `Kehadiran adalah diwajibkan. Ruj: ${rujukanKami}`,
+ 338:         completions: {},
+ 339:         whatsappLogs: {},
+ 340:         createdByTeacherId: currentUserUid,
+ 341:         createdByName: currentUserName,
+ 342:         createdAt: new Date().toISOString(),
+ 343:       });
+ 344: 
+ 345:       await setDoc(doc(db, 'makluman_tasks', maklumanId), taskPayload, { merge: true });
+ 346: 
+ 347:       const waText = [
+ 348:         `*MEMO PANGGILAN MESYUARAT (${schoolName})*`,
+ 349:         `Ruj: ${rujukanKami}`,
+ 350:         ``,
+ 351:         `*${tajukMesyuarat}*`,
+ 352:         `Tarikh: ${formatMalayDate(tarikhMesyuarat)} (${hariMesyuarat})`,
+ 353:         `Masa: ${masaMesyuarat}`,
+ 354:         `Tempat: ${tempatMesyuarat}`,
+ 355:         `Pengerusi: ${pengerusiName} (${pengerusiTitle})`,
+ 356:         ``,
+ 357:         `*Fokus Agenda Utama:*`,
+ 358:         ...agendaFokusUtama.filter((s) => s.trim()).map((a, i) => `4.${i + 1} ${a}`),
+ 359:         ``,
+ 360:         `Kehadiran tuan/puan adalah diwajibkan. Terima kasih.`,
+ 361:       ].join('\n');
+ 362: 
+ 363:       setWhatsappUrl(`https://wa.me/?text=${encodeURIComponent(waText)}`);
+ 364:       setBanner({
+ 365:         type: 'success',
+ 366:         text: 'Berjaya dihantar ke Paparan Makluman semua guru & mesej WhatsApp sedia untuk dikongsi!',
+ 367:       });
+ 368:     } catch (err: any) {
+ 369:       setBanner({
+ 370:         type: 'error',
+ 371:         text: `Gagal menghantar ke Paparan Makluman: ${err?.message || String(err)}`,
+ 372:       });
+ 373:     } finally {
+ 374:       setSyncingMakluman(false);
+ 375:     }
+ 376:   };
+ 377: 
+ 378:   const handleLoadMemo = (m: MemoMesyuaratDocument) => {
+ 379:     lockAutoTemplateRef.current = true;
+ 380:     setEditingId(m.id);
+ 381:     setBilangan(m.bilangan || `Bil. 1/${yearShort}`);
+ 382:     setTajukMesyuarat(m.tajukMesyuarat || '');
+ 383:     setRujukanKami(m.rujukanKami || `${schoolCode}/600-1/1/01`);
+ 384:     setTarikhSurat(m.tarikhSurat || new Date().toISOString().slice(0, 10));
+ 385:     setTarikhMesyuarat(m.tarikhMesyuarat || defaultMeetingDate);
+ 386:     setHariMesyuarat(m.hariMesyuarat || resolveHariFromDate(m.tarikhMesyuarat || defaultMeetingDate));
+ 387:     setMasaMesyuarat(m.masaMesyuarat || '01:30 petang – 03:00 petang');
+ 388:     setTempatMesyuarat(m.tempatMesyuarat || `Bilik Mesyuarat ${schoolName}`);
+ 389:     setPengerusiName(m.pengerusiName || (principalProfile?.name || 'GURU BESAR').toUpperCase());
+ 390:     setPengerusiTitle(m.pengerusiTitle || 'Guru Besar');
+ 391:     setRecipientMode(m.recipientMode || 'SEMUA_GURU');
+ 392:     setRecipientIds(m.recipientIds || []);
+ 393:     setAgendaPerutusan(m.agendaPerutusan || 'Perutusan Pengerusi');
+ 394:     setAgendaPengesahanMinit(m.agendaPengesahanMinit || 'Pengesahan Minit Mesyuarat Yang Lalu');
+ 395:     setAgendaPerkaraBerbangkit(m.agendaPerkaraBerbangkit || 'Perkara-perkara Berbangkit');
+ 396:     setAgendaFokusUtama(m.agendaFokusUtama?.length ? m.agendaFokusUtama : ['Perbincangan Utama Mesyuarat']);
+ 397:     setAgendaHalLain(m.agendaHalLain || 'Hal-hal Lain');
+ 398:     setAgendaPenutup(m.agendaPenutup || 'Penutup');
+ 399:     setPrincipalName(m.principalName || (principalProfile?.name || 'GURU BESAR').toUpperCase());
+ 400:     setBanner({ type: 'success', text: `Memo "${m.tajukMesyuarat}" dimuatkan.` });
+ 401:   };
+ 402: 
+ 403:   const applyMaklumanTaskToMemo = (task: SetiausahaMaklumanMeeting) => {
+ 404:     lockAutoTemplateRef.current = true;
+ 405:     setEditingId(null);
+ 406:     const cleanTitle = String(task.title || '')
+ 407:       .replace(/^\[Panggilan Mesyuarat\]\s*/i, '')
+ 408:       .trim()
+ 409:       .toUpperCase();
+ 410:     setTajukMesyuarat(cleanTitle || `MESYUARAT ${selectedItem.jawatankuasaInduk.toUpperCase()}`);
+ 411: 
+ 412:     const bilMatch = cleanTitle.match(/BIL\.?\s*\d+(?:\s*\/\s*\d{4})?/i);
+ 413:     if (bilMatch) {
+ 414:       setBilangan(bilMatch[0].replace(/\s+/g, ' '));
+ 415:     }
+ 416:     if (task.dueDate) {
+ 417:       setTarikhMesyuarat(task.dueDate);
+ 418:       setHariMesyuarat(resolveHariFromDate(task.dueDate));
+ 419:     }
+ 420:     if (task.dueTime) {
+
+
+```
+
+```python
+import zipfile
+
+with zipfile.ZipFile('i-guide (2).zip', 'r') as z:
+    memo = z.read('src/components/AISetiausaha/ModuleMemoMesyuarat.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("=== ModuleMemoMesyuarat.tsx lines 421..620 ===")
+    for i in range(420, min(620, len(memo))):
+        print(f"{i+1:4d}: {memo[i]}")
+
+
+```
+
+```text
+=== ModuleMemoMesyuarat.tsx lines 421..620 ===
+ 421:       setMasaMesyuarat(task.dueTime);
+ 422:     }
+ 423:     if (task.location) {
+ 424:       setTempatMesyuarat(task.location);
+ 425:     }
+ 426: 
+ 427:     const domainUpper = String(task.domain || '').toUpperCase();
+ 428:     const domainPrefix =
+ 429:       domainUpper === 'PENTADBIRAN'
+ 430:         ? '100'
+ 431:         : domainUpper === 'KURIKULUM'
+ 432:         ? '600'
+ 433:         : domainUpper === 'HEM'
+ 434:         ? '700'
+ 435:         : domainUpper === 'KOKURIKULUM'
+ 436:         ? '800'
+ 437:         : '100';
+ 438:     setRujukanKami(`${schoolCode}/${domainPrefix}-1/1/${String(savedDocs.length + 1).padStart(2, '0')}`);
+ 439: 
+ 440:     // Resolve invited teachers
+ 441:     const labelUpper = String(task.tindakanLabel || '').toUpperCase();
+ 442:     if (task.targetType === 'GURU_TERPILIH' || (task.targetTeacherIds && task.targetTeacherIds.length > 0)) {
+ 443:       const targetIdSet = new Set(task.targetTeacherIds || []);
+ 444:       const matchedIds = activeTeachers
+ 445:         .filter((t) => {
+ 446:           if (targetIdSet.has(t.id) || ((t as any).uid && targetIdSet.has(String((t as any).uid)))) {
+ 447:             return true;
+ 448:           }
+ 449:           const tName = t.name.toUpperCase();
+ 450:           return tName.length >= 3 && labelUpper.includes(tName);
+ 451:         })
+ 452:         .map((t) => t.id);
+ 453:       if (matchedIds.length > 0) {
+ 454:         setRecipientMode('AHLI_TERPILIH');
+ 455:         setRecipientIds(matchedIds);
+ 456:       } else {
+ 457:         setRecipientMode('SEMUA_GURU');
+ 458:         setRecipientIds([]);
+ 459:       }
+ 460:     } else if (labelUpper && !labelUpper.includes('SEMUA GURU')) {
+ 461:       const matchedByLabel = activeTeachers
+ 462:         .filter((t) => {
+ 463:           const tName = t.name.toUpperCase();
+ 464:           return tName.length >= 3 && labelUpper.includes(tName);
+ 465:         })
+ 466:         .map((t) => t.id);
+ 467:       if (matchedByLabel.length > 0) {
+ 468:         setRecipientMode('AHLI_TERPILIH');
+ 469:         setRecipientIds(matchedByLabel);
+ 470:       } else {
+ 471:         setRecipientMode('SEMUA_GURU');
+ 472:         setRecipientIds([]);
+ 473:       }
+ 474:     } else {
+ 475:       setRecipientMode('SEMUA_GURU');
+ 476:       setRecipientIds([]);
+ 477:     }
+ 478: 
+ 479:     // Build agenda fokus from description/arahan
+ 480:     const rawDesc = String(task.description || '').trim();
+ 481:     const rawDirective = String(task.arahanTindakan || '').trim();
+ 482:     if (rawDesc) {
+ 483:       setContextNotes(rawDesc);
+ 484:       const splitAgenda = rawDesc
+ 485:         .split(/\r?\n|\||;/)
+ 486:         .map((s) => s.replace(/^\d+(\.\d+)?\s*/, '').trim())
+ 487:         .filter((s) => s.length >= 4);
+ 488:       setAgendaFokusUtama(
+ 489:         splitAgenda.length > 0
+ 490:           ? splitAgenda
+ 491:           : [
+ 492:               rawDesc,
+ 493:               ...(rawDirective ? [rawDirective] : []),
+ 494:               `Penyelarasan tindakan dan pematuhan ${selectedItem.skpmStandardCode}`,
+ 495:             ]
+ 496:       );
+ 497:     }
+ 498: 
+ 499:     setBanner({
+ 500:       type: 'success',
+ 501:       text: `Butiran mesyuarat "${cleanTitle}" dari Paparan Makluman berjaya diimport ke Memo.`,
+ 502:     });
+ 503:   };
+ 504: 
+ 505:   useEffect(() => {
+ 506:     if (!maklumanPrefill?.taskItem) return;
+ 507:     const nonce = maklumanPrefill.nonce || 1;
+ 508:     if (nonce === lastPrefillNonceRef.current) return;
+ 509:     lastPrefillNonceRef.current = nonce;
+ 510:     applyMaklumanTaskToMemo(maklumanPrefill.taskItem);
+ 511:   }, [maklumanPrefill]);
+ 512: 
+ 513:   useEffect(() => {
+ 514:     if (!docToLoad?.doc) return;
+ 515:     const nonce = docToLoad.nonce || 1;
+ 516:     if (nonce === lastDocLoadNonceRef.current) return;
+ 517:     lastDocLoadNonceRef.current = nonce;
+ 518:     handleLoadMemo(docToLoad.doc);
+ 519:   }, [docToLoad]);
+ 520: 
+ 521:   const handleResetNewMemo = () => {
+ 522:     lockAutoTemplateRef.current = false;
+ 523:     setEditingId(null);
+ 524:     setImportSelection('');
+ 525:     setTajukMesyuarat(`MESYUARAT ${selectedItem.jawatankuasaInduk.toUpperCase()} ${bilangan.toUpperCase()}`);
+ 526:     setAgendaFokusUtama([
+ 527:       `Pembentangan Perancangan & Takwim ${selectedItem.jawatankuasaInduk} Sesi ${academicYear || yearShort}`,
+ 528:       `Semakan Tugas & Sasaran ${selectedItem.jawatanRasmi} (${selectedItem.kodMySG})`,
+ 529:       `Penyelarasan Sistem KPM (${selectedItem.sistemKPM}) & Pematuhan ${selectedItem.skpmStandardCode}`,
+ 530:     ]);
+ 531:   };
+ 532: 
+ 533:   const handleImportSelect = (val: string) => {
+ 534:     setImportSelection(val);
+ 535:     if (!val) return;
+ 536:     if (val.startsWith('makluman:')) {
+ 537:       const mId = val.slice('makluman:'.length);
+ 538:       const found = maklumanMeetings.find((t) => t.id === mId);
+ 539:       if (found) applyMaklumanTaskToMemo(found);
+ 540:     } else if (val.startsWith('memo:')) {
+ 541:       const dId = val.slice('memo:'.length);
+ 542:       const found = savedDocs.find((m) => m.id === dId);
+ 543:       if (found) handleLoadMemo(found);
+ 544:     }
+ 545:   };
+ 546: 
+ 547:   const handleCopyWhatsApp = async () => {
+ 548:     if (!whatsappUrl) return;
+ 549:     const raw = decodeURIComponent(whatsappUrl.replace('https://wa.me/?text=', ''));
+ 550:     try {
+ 551:       await navigator.clipboard.writeText(raw);
+ 552:       setCopiedWa(true);
+ 553:       setTimeout(() => setCopiedWa(false), 3000);
+ 554:     } catch {
+ 555:       // Clipboard fallback ignored
+ 556:     }
+ 557:   };
+ 558: 
+ 559:   return (
+ 560:     <div className="space-y-6">
+ 561:       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+ 562:         {/* LEFT PANEL: MEMO EDITOR */}
+ 563:         <div className="xl:col-span-5 bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 space-y-5 print:hidden">
+ 564:           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+ 565:             <div>
+ 566:               <h4 className="text-sm font-black uppercase text-white">Pembina Memo Panggilan Mesyuarat</h4>
+ 567:               <p className="text-[11px] text-slate-400">
+ 568:                 Unit: <strong className="text-blue-300">{selectedItem.jawatankuasaInduk}</strong>
+ 569:               </p>
+ 570:             </div>
+ 571:             <div className="flex items-center gap-2">
+ 572:               {editingId && (
+ 573:                 <button
+ 574:                   type="button"
+ 575:                   onClick={handleResetNewMemo}
+ 576:                   className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+ 577:                   title="Memo Baharu"
+ 578:                 >
+ 579:                   <Plus className="w-4 h-4" />
+ 580:                 </button>
+ 581:               )}
+ 582:               <button
+ 583:                 type="button"
+ 584:                 onClick={handleSaveMemo}
+ 585:                 disabled={saving}
+ 586:                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase cursor-pointer disabled:opacity-50"
+ 587:               >
+ 588:                 {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+ 589:                 <span>Simpan Memo</span>
+ 590:               </button>
+ 591:             </div>
+ 592:           </div>
+ 593: 
+ 594:           {/* 1-CLICK IMPORT MEMO / MAKLUMAN */}
+ 595:           <div className="p-3 rounded-2xl bg-slate-950 border border-blue-800/40 space-y-1.5">
+ 596:             <label className="text-[10px] font-black uppercase text-blue-300 flex items-center gap-1.5">
+ 597:               <FileDown className="w-3.5 h-3.5" />
+ 598:               Import Memo / Mesyuarat Paparan Makluman (Semua Sesi):
+ 599:             </label>
+ 600:             <select
+ 601:               value={importSelection}
+ 602:               onChange={(e) => handleImportSelect(e.target.value)}
+ 603:               className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-blue-500"
+ 604:             >
+ 605:               <option value="">-- Pilih Memo Tersimpan / Makluman (1-Klik Import) --</option>
+ 606:               {maklumanMeetings.length > 0 && (
+ 607:                 <optgroup label={`Mesyuarat Paparan Makluman (${maklumanMeetings.length})`}>
+ 608:                   {maklumanMeetings.map((t) => (
+ 609:                     <option key={`makluman_${t.id}`} value={`makluman:${t.id}`}>
+ 610:                       [Makluman] [Sesi {resolveDocSessionYear(t, academicYear)}] {t.title} ({t.dueDate || '-'})
+ 611:                     </option>
+ 612:                   ))}
+ 613:                 </optgroup>
+ 614:               )}
+ 615:               {savedDocs.length > 0 && (
+ 616:                 <optgroup label={`Memo Tersimpan (${savedDocs.length})`}>
+ 617:                   {savedDocs.map((m) => (
+ 618:                     <option key={`memo_${m.id}`} value={`memo:${m.id}`}>
+ 619:                       [Sesi {resolveDocSessionYear(m, academicYear)}] {m.rujukanKami} · {m.tajukMesyuarat}
+ 620:                     </option>
+
+
+```
+
+```python
+import zipfile
+
+with zipfile.ZipFile('i-guide (2).zip', 'r') as z:
+    minit = z.read('src/components/AISetiausaha/ModuleMinitMesyuarat.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("=== ModuleMinitMesyuarat.tsx lines 145..520 ===")
+    for i in range(144, min(520, len(minit))):
+        print(f"{i+1:4d}: {minit[i]}")
+
+
+```
+
+```text
+=== ModuleMinitMesyuarat.tsx lines 145..520 ===
+ 145:   const day = parseInt(parts[2], 10);
+ 146:   return `${day} ${months[monthIdx] || parts[1]} ${year}`;
+ 147: }
+ 148: 
+ 149: function normalizeAgendaObject(raw: any, index: number): MinitAgendaEntry {
+ 150:   if (typeof raw === 'string') {
+ 151:     const trimmed = raw.trim();
+ 152:     const parts = trimmed.includes('|') ? trimmed.split('|').map((s) => s.trim()) : null;
+ 153:     if (parts && parts.length >= 2) {
+ 154:       const bil = parts[0] || `${index + 1}.0`;
+ 155:       const titleOrBody = parts[1] || 'PERKARA PERBINCANGAN';
+ 156:       const keputusan = parts[2] || titleOrBody;
+ 157:       const tindakan = parts[3] || 'Makluman';
+ 158:       const status = parts[4] || '';
+ 159:       const isAction = Boolean(
+ 160:         tindakan && !/^(MAKLUMAN|TIADA|-)$/i.test(tindakan)
+ 161:       );
+ 162:       return {
+ 163:         id: `restored_${index}_${Date.now()}`,
+ 164:         paraNo: bil,
+ 165:         agendaTitle: titleOrBody.toUpperCase(),
+ 166:         rawNotes: keputusan,
+ 167:         formalText: keputusan,
+ 168:         tindakanType: isAction ? 'TINDAKAN' : 'MAKLUMAN',
+ 169:         tindakanOwner: tindakan || 'Makluman',
+ 170:         maklumBalasStatus: status || (isAction ? 'Dalam tindakan.' : ''),
+ 171:         mukaSurat: index < 3 ? '1' : '2',
+ 172:       };
+ 173:     }
+ 174: 
+ 175:     const numMatch = trimmed.match(/^(\d+(?:\.\d+)*)\s+(.+)$/);
+ 176:     const paraNo = numMatch ? numMatch[1] : `${index + 1}.0`;
+ 177:     const body = numMatch ? numMatch[2] : trimmed;
+ 178:     const colonIdx = body.indexOf(':');
+ 179:     const agendaTitle =
+ 180:       colonIdx > 0 && colonIdx < 80 ? body.slice(0, colonIdx).trim().toUpperCase() : `AGENDA ${paraNo}`;
+ 181:     const formalText = colonIdx > 0 && colonIdx < 80 ? body.slice(colonIdx + 1).trim() : body;
+ 182: 
+ 183:     const actionMatch = formalText.match(/tindakan\s*[:\-]\s*([^.;\n]+)/i);
+ 184:     const owner = actionMatch ? actionMatch[1].trim() : 'Makluman';
+ 185:     const isAction = Boolean(actionMatch && !/makluman/i.test(owner));
+ 186: 
+ 187:     return {
+ 188:       id: `restored_${index}_${Date.now()}`,
+ 189:       paraNo,
+ 190:       agendaTitle,
+ 191:       rawNotes: formalText,
+ 192:       formalText,
+ 193:       tindakanType: isAction ? 'TINDAKAN' : 'MAKLUMAN',
+ 194:       tindakanOwner: owner,
+ 195:       maklumBalasStatus: isAction ? 'Dalam tindakan.' : '',
+ 196:       mukaSurat: index < 3 ? '1' : '2',
+ 197:     };
+ 198:   }
+ 199: 
+ 200:   const paraNo = String(raw?.paraNo || raw?.bil || raw?.no || `${index + 1}.0`).trim();
+ 201:   const agendaTitle = String(
+ 202:     raw?.agendaTitle || raw?.agenda || raw?.title || raw?.tajuk || `AGENDA ${paraNo}`
+ 203:   )
+ 204:     .trim()
+ 205:     .toUpperCase();
+ 206:   const formalText = String(
+ 207:     raw?.formalText || raw?.keputusan || raw?.perkara || raw?.huraian || raw?.content || raw?.rawNotes || ''
+ 208:   ).trim();
+ 209:   const rawNotes = String(raw?.rawNotes || formalText || '').trim();
+ 210:   const owner = String(raw?.tindakanOwner || raw?.tindakan || raw?.pelaksana || 'Makluman').trim();
+ 211:   const explicitType = String(raw?.tindakanType || '').toUpperCase();
+ 212:   const status = String(raw?.maklumBalasStatus || raw?.statusMaklumBalas || raw?.status || '').trim();
+ 213:   const isAction =
+ 214:     explicitType === 'TINDAKAN' ||
+ 215:     (explicitType !== 'MAKLUMAN' &&
+ 216:       ((Boolean(owner) && !/^(MAKLUMAN|TIADA|-)$/i.test(owner)) || Boolean(status)));
+ 217: 
+ 218:   return {
+ 219:     id: String(raw?.id || `restored_${index}_${Date.now()}`),
+ 220:     paraNo,
+ 221:     agendaTitle,
+ 222:     rawNotes,
+ 223:     formalText,
+ 224:     tindakanType: isAction ? 'TINDAKAN' : 'MAKLUMAN',
+ 225:     tindakanOwner: isAction ? (owner || 'Semua Guru') : 'Makluman',
+ 226:     maklumBalasStatus: status || (isAction ? 'Dalam tindakan.' : ''),
+ 227:     mukaSurat: String(raw?.mukaSurat || (index < 3 ? '1' : '2')),
+ 228:   };
+ 229: }
+ 230: 
+ 231: function parseSavedMinitAgenda(d: any, fallbackCommitteeName: string): MinitAgendaEntry[] {
+ 232:   if (Array.isArray(d?.agendaEntries) && d.agendaEntries.length > 0) {
+ 233:     return d.agendaEntries.map((item: any, idx: number) => normalizeAgendaObject(item, idx));
+ 234:   }
+ 235:   if (Array.isArray(d?.agendaList) && d.agendaList.length > 0) {
+ 236:     return d.agendaList.map((item: any, idx: number) => normalizeAgendaObject(item, idx));
+ 237:   }
+ 238:   if (Array.isArray(d?.rawNotes) && d.rawNotes.length > 0) {
+ 239:     return d.rawNotes.map((item: any, idx: number) => normalizeAgendaObject(item, idx));
+ 240:   }
+ 241:   if (typeof d?.rawNotes === 'string' && d.rawNotes.trim()) {
+ 242:     const rawStr = d.rawNotes.trim();
+ 243:     if (rawStr.startsWith('[') || rawStr.startsWith('{')) {
+ 244:       try {
+ 245:         const parsed = JSON.parse(rawStr);
+ 246:         const arr = Array.isArray(parsed)
+ 247:           ? parsed
+ 248:           : Array.isArray(parsed?.agendaEntries)
+ 249:           ? parsed.agendaEntries
+ 250:           : Array.isArray(parsed?.agendaList)
+ 251:           ? parsed.agendaList
+ 252:           : [parsed];
+ 253:         if (arr.length > 0) {
+ 254:           return arr.map((item: any, idx: number) => normalizeAgendaObject(item, idx));
+ 255:         }
+ 256:       } catch {
+ 257:         // Fallback to line-based parsing below
+ 258:       }
+ 259:     }
+ 260:     const lines = rawStr
+ 261:       .split(/\r?\n/)
+ 262:       .map((l: string) => l.trim())
+ 263:       .filter(Boolean);
+ 264:     if (lines.length > 0) {
+ 265:       return lines.map((line: string, idx: number) => normalizeAgendaObject(line, idx));
+ 266:     }
+ 267:   }
+ 268:   return buildDefaultEntries(d?.jawatankuasaInduk || fallbackCommitteeName);
+ 269: }
+ 270: 
+ 271: export const ModuleMinitMesyuarat: React.FC<ModuleMinitMesyuaratProps> = ({
+ 272:   schoolCode,
+ 273:   schoolName,
+ 274:   schoolLogo,
+ 275:   academicYear,
+ 276:   currentUserName,
+ 277:   personnel,
+ 278:   selectedItem,
+ 279:   savedMemos,
+ 280:   savedDocs,
+ 281:   maklumanMeetings,
+ 282:   maklumanPrefill,
+ 283:   docToLoad,
+ 284:   onSaveDoc,
+ 285:   onDeleteDoc,
+ 286: }) => {
+ 287:   const principalProfile = useMemo(
+ 288:     () =>
+ 289:       personnel.find(
+ 290:         (p) =>
+ 291:           p.category === 'PRINCIPAL' ||
+ 292:           String(p.position || '').toUpperCase() === 'GB' ||
+ 293:           String(p.position || '').toUpperCase().includes('GURU BESAR')
+ 294:       ),
+ 295:     [personnel]
+ 296:   );
+ 297: 
+ 298:   const activeTeachers = useMemo(
+ 299:     () =>
+ 300:       personnel
+ 301:         .filter((p) => p.name && (!p.teachingStatus || p.teachingStatus === 'Aktif'))
+ 302:         .sort((a, b) => String(a.name).localeCompare(String(b.name))),
+ 303:     [personnel]
+ 304:   );
+ 305: 
+ 306:   const yearShort = (academicYear || '2026').slice(0, 4);
+ 307:   const [editingId, setEditingId] = useState<string | null>(null);
+ 308:   const [linkedMemoId, setLinkedMemoId] = useState<string>('');
+ 309:   const [printMode, setPrintMode] = useState<'BOTH' | 'MINIT_ONLY' | 'MAKLUM_BALAS_ONLY'>('BOTH');
+ 310: 
+ 311:   const [tajukMesyuarat, setTajukMesyuarat] = useState(
+ 312:     `MINIT MESYUARAT ${selectedItem.jawatankuasaInduk.toUpperCase()} BIL. 1/${yearShort}`
+ 313:   );
+ 314:   const [bilangan, setBilangan] = useState(`Bil. 1/${yearShort}`);
+ 315:   const [tarikh, setTarikh] = useState(new Date().toISOString().slice(0, 10));
+ 316:   const [masa, setMasa] = useState('01:30 petang – 03:00 petang');
+ 317:   const [tempat, setTempat] = useState(`Bilik Mesyuarat ${schoolName}`);
+ 318:   const [pengerusi, setPengerusi] = useState(
+ 319:     (principalProfile?.name || 'GURU BESAR').toUpperCase()
+ 320:   );
+ 321:   const [pencatat, setPencatat] = useState(
+ 322:     (selectedItem.assignedTeacherName || currentUserName).toUpperCase()
+ 323:   );
+ 324: 
+ 325:   const [hadirNames, setHadirNames] = useState<string[]>(() =>
+ 326:     activeTeachers.map((t) => t.name.toUpperCase())
+ 327:   );
+ 328:   const [tidakHadirBersebab, setTidakHadirBersebab] = useState<string[]>([]);
+ 329:   const [turutHadirRaw, setTurutHadirRaw] = useState('');
+ 330: 
+ 331:   const [agendaEntries, setAgendaEntries] = useState<MinitAgendaEntry[]>(() =>
+ 332:     buildDefaultEntries(selectedItem.jawatankuasaInduk)
+ 333:   );
+ 334:   const [disahkanOlehName, setDisahkanOlehName] = useState(
+ 335:     (principalProfile?.name || 'GURU BESAR').toUpperCase()
+ 336:   );
+ 337:   const [disahkanOlehTitle, setDisahkanOlehTitle] = useState('Guru Besar');
+ 338: 
+ 339:   const [importSelection, setImportSelection] = useState<string>('');
+ 340:   const [aiLoading, setAiLoading] = useState(false);
+ 341:   const [saving, setSaving] = useState(false);
+ 342:   const [banner, setBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+ 343: 
+ 344:   const prevKodRef = useRef<string>(selectedItem.kodMySG);
+ 345:   const lockAutoTemplateRef = useRef<boolean>(false);
+ 346:   const lastPrefillNonceRef = useRef<number>(0);
+ 347:   const lastDocLoadNonceRef = useRef<number>(0);
+ 348: 
+ 349:   // Hydrate initial attendance & principal once personnel finishes loading (only for fresh unsaved minutes)
+ 350:   useEffect(() => {
+ 351:     if (editingId || lockAutoTemplateRef.current) return;
+ 352:     if (activeTeachers.length > 0 && hadirNames.length === 0 && tidakHadirBersebab.length === 0) {
+ 353:       setHadirNames(activeTeachers.map((t) => t.name.toUpperCase()));
+ 354:     }
+ 355:     if (principalProfile?.name) {
+ 356:       const upperP = principalProfile.name.toUpperCase();
+ 357:       setPengerusi((prev) => (prev === 'GURU BESAR' ? upperP : prev));
+ 358:       setDisahkanOlehName((prev) => (prev === 'GURU BESAR' ? upperP : prev));
+ 359:     }
+ 360:   }, [activeTeachers, principalProfile, editingId, hadirNames.length, tidakHadirBersebab.length]);
+ 361: 
+ 362:   // Sync defaults ONLY when user explicitly switches Committee in Level 2 selector and no saved/prefilled minit is active
+ 363:   useEffect(() => {
+ 364:     if (prevKodRef.current === selectedItem.kodMySG) return;
+ 365:     prevKodRef.current = selectedItem.kodMySG;
+ 366:     if (editingId || lockAutoTemplateRef.current) return;
+ 367:     setTajukMesyuarat(
+ 368:       `MINIT MESYUARAT ${selectedItem.jawatankuasaInduk.toUpperCase()} ${bilangan.toUpperCase()}`
+ 369:     );
+ 370:     setPencatat((selectedItem.assignedTeacherName || currentUserName).toUpperCase());
+ 371:     setAgendaEntries(buildDefaultEntries(selectedItem.jawatankuasaInduk));
+ 372:   }, [selectedItem, editingId, bilangan, currentUserName]);
+ 373: 
+ 374:   const applyMaklumanTaskToMinit = (task: SetiausahaMaklumanMeeting) => {
+ 375:     lockAutoTemplateRef.current = true;
+ 376:     setEditingId(null);
+ 377:     setLinkedMemoId('');
+ 378:     const cleanTitle = String(task.title || '')
+ 379:       .replace(/^\[Panggilan Mesyuarat\]\s*/i, '')
+ 380:       .trim()
+ 381:       .toUpperCase();
+ 382:     setTajukMesyuarat(
+ 383:       cleanTitle.startsWith('MINIT') ? cleanTitle : `MINIT ${cleanTitle}`
+ 384:     );
+ 385:     const bilMatch = cleanTitle.match(/BIL\.?\s*\d+(?:\s*\/\s*\d{4})?/i);
+ 386:     if (bilMatch) {
+ 387:       setBilangan(bilMatch[0].replace(/\s+/g, ' '));
+ 388:     }
+ 389:     if (task.dueDate) setTarikh(task.dueDate);
+ 390:     if (task.dueTime) setMasa(task.dueTime);
+ 391:     if (task.location) setTempat(task.location);
+ 392:     if (principalProfile?.name) {
+ 393:       setPengerusi(principalProfile.name.toUpperCase());
+ 394:       setDisahkanOlehName(principalProfile.name.toUpperCase());
+ 395:     }
+ 396: 
+ 397:     // Resolve attendance from targetTeacherIds / tindakanLabel
+ 398:     const labelUpper = String(task.tindakanLabel || '').toUpperCase();
+ 399:     if (
+ 400:       activeTeachers.length > 0 &&
+ 401:       (task.targetType === 'GURU_TERPILIH' ||
+ 402:         (task.targetTeacherIds && task.targetTeacherIds.length > 0) ||
+ 403:         (labelUpper && !labelUpper.includes('SEMUA GURU')))
+ 404:     ) {
+ 405:       const idSet = new Set(task.targetTeacherIds || []);
+ 406:       const matchedNames = activeTeachers
+ 407:         .filter((t) => {
+ 408:           if (idSet.has(t.id) || ((t as any).uid && idSet.has(String((t as any).uid)))) {
+ 409:             return true;
+ 410:           }
+ 411:           const tName = t.name.toUpperCase();
+ 412:           return tName.length >= 3 && labelUpper.includes(tName);
+ 413:         })
+ 414:         .map((t) => t.name.toUpperCase());
+ 415:       if (matchedNames.length > 0) {
+ 416:         setHadirNames(matchedNames);
+ 417:         setTidakHadirBersebab([]);
+ 418:       } else {
+ 419:         setHadirNames(activeTeachers.map((t) => t.name.toUpperCase()));
+ 420:       }
+ 421:     } else if (activeTeachers.length > 0) {
+ 422:       setHadirNames(activeTeachers.map((t) => t.name.toUpperCase()));
+ 423:       setTidakHadirBersebab([]);
+ 424:     }
+ 425: 
+ 426:     const defaults = buildDefaultEntries(cleanTitle || selectedItem.jawatankuasaInduk);
+ 427:     const rawDesc = String(task.description || '').trim();
+ 428:     if (rawDesc) {
+ 429:       const items = rawDesc
+ 430:         .split(/\r?\n|\||;/)
+ 431:         .map((s) => s.replace(/^\d+(\.\d+)?\s*/, '').trim())
+ 432:         .filter((s) => s.length >= 4);
+ 433:       const focusEntries: MinitAgendaEntry[] = (items.length > 0 ? items : [rawDesc]).map(
+ 434:         (ag, idx) => ({
+ 435:           id: `sec_4_makluman_${idx + 1}`,
+ 436:           paraNo: `4.${idx + 1}`,
+ 437:           agendaTitle: ag.slice(0, 90).toUpperCase(),
+ 438:           rawNotes: ag,
+ 439:           formalText: `Mesyuarat membincangkan perkara berhubung ${ag} dan bersetuju agar tindakan susulan dilaksanakan mengikut ketetapan.`,
+ 440:           tindakanType: 'TINDAKAN',
+ 441:           tindakanOwner: task.tindakanLabel || 'Penyelaras Berkaitan',
+ 442:           maklumBalasStatus: 'Dalam tindakan.',
+ 443:           mukaSurat: '2',
+ 444:         })
+ 445:       );
+ 446:       setAgendaEntries([
+ 447:         defaults[0],
+ 448:         defaults[1],
+ 449:         defaults[2],
+ 450:         ...focusEntries,
+ 451:         defaults[4],
+ 452:         defaults[5],
+ 453:       ]);
+ 454:     } else {
+ 455:       setAgendaEntries(defaults);
+ 456:     }
+ 457: 
+ 458:     setBanner({
+ 459:       type: 'success',
+ 460:       text: `Maklumat mesyuarat "${cleanTitle}" dari Paparan Makluman berjaya diimport ke Minit!`,
+ 461:     });
+ 462:   };
+ 463: 
+ 464:   const handleImportFromMemo = (value: string) => {
+ 465:     setImportSelection(value);
+ 466:     if (!value) return;
+ 467: 
+ 468:     if (value.startsWith('makluman:')) {
+ 469:       const mId = value.slice('makluman:'.length);
+ 470:       const task = maklumanMeetings.find((t) => t.id === mId);
+ 471:       if (task) applyMaklumanTaskToMinit(task);
+ 472:       return;
+ 473:     }
+ 474: 
+ 475:     const memoId = value.startsWith('memo:') ? value.slice('memo:'.length) : value;
+ 476:     const memo = savedMemos.find((m) => m.id === memoId);
+ 477:     if (!memo) return;
+ 478:     lockAutoTemplateRef.current = true;
+ 479:     setEditingId(null);
+ 480:     setLinkedMemoId(memo.id);
+ 481:     setBilangan(memo.bilangan);
+ 482:     setTajukMesyuarat(
+ 483:       memo.tajukMesyuarat.startsWith('MINIT')
+ 484:         ? memo.tajukMesyuarat
+ 485:         : `MINIT ${memo.tajukMesyuarat}`
+ 486:     );
+ 487:     setTarikh(memo.tarikhMesyuarat);
+ 488:     setMasa(memo.masaMesyuarat);
+ 489:     setTempat(memo.tempatMesyuarat);
+ 490:     setPengerusi(memo.pengerusiName);
+ 491:     setDisahkanOlehName(memo.principalName);
+ 492: 
+ 493:     const importedFokus: MinitAgendaEntry[] = (memo.agendaFokusUtama || []).map(
+ 494:       (ag, idx) => ({
+ 495:         id: `sec_4_${idx + 1}`,
+ 496:         paraNo: `4.${idx + 1}`,
+ 497:         agendaTitle: ag.toUpperCase(),
+ 498:         rawNotes: ag,
+ 499:         formalText: `Mesyuarat membincangkan perkara berhubung ${ag} dan bersetuju agar tindakan susulan dilaksanakan oleh ahli jawatankuasa terlibat.`,
+ 500:         tindakanType: 'TINDAKAN',
+ 501:         tindakanOwner: 'Penyelaras Berkaitan',
+ 502:         maklumBalasStatus: 'Dalam tindakan.',
+ 503:         mukaSurat: '2',
+ 504:       })
+ 505:     );
+ 506: 
+ 507:     const defaults = buildDefaultEntries(memo.jawatankuasaInduk);
+ 508:     const merged: MinitAgendaEntry[] = [
+ 509:       defaults[0],
+ 510:       defaults[1],
+ 511:       defaults[2],
+ 512:       ...importedFokus,
+ 513:       defaults[4],
+ 514:       defaults[5],
+ 515:     ];
+ 516:     setAgendaEntries(merged);
+ 517:     setBanner({
+ 518:       type: 'success',
+ 519:       text: `Maklumat & agenda dari Memo "${memo.tajukMesyuarat}" berjaya diimport!`,
+ 520:     });
+
+
+```
+
+```python
+import zipfile
+
+with zipfile.ZipFile('i-guide (2).zip', 'r') as z:
+    minit = z.read('src/components/AISetiausaha/ModuleMinitMesyuarat.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("=== ModuleMinitMesyuarat.tsx lines 521..820 ===")
+    for i in range(520, min(820, len(minit))):
+        print(f"{i+1:4d}: {minit[i]}")
+
+
+```
+
+```text
+=== ModuleMinitMesyuarat.tsx lines 521..820 ===
+ 521:   };
+ 522: 
+ 523:   const handleToggleAttendance = (teacherNameUpper: string, target: 'HADIR' | 'TIDAK_HADIR') => {
+ 524:     if (target === 'HADIR') {
+ 525:       setTidakHadirBersebab((prev) =>
+ 526:         prev.filter((n) => !n.startsWith(teacherNameUpper))
+ 527:       );
+ 528:       setHadirNames((prev) =>
+ 529:         prev.includes(teacherNameUpper) ? prev : [...prev, teacherNameUpper]
+ 530:       );
+ 531:     } else {
+ 532:       setHadirNames((prev) => prev.filter((n) => n !== teacherNameUpper));
+ 533:       const entry = `${teacherNameUpper} (Bersebab / Urusan Rasmi)`;
+ 534:       setTidakHadirBersebab((prev) =>
+ 535:         prev.some((n) => n.startsWith(teacherNameUpper)) ? prev : [...prev, entry]
+ 536:       );
+ 537:     }
+ 538:   };
+ 539: 
+ 540:   const handleAddAgendaItem = () => {
+ 541:     const idx = agendaEntries.length + 1;
+ 542:     setAgendaEntries((prev) => [
+ 543:       ...prev,
+ 544:       {
+ 545:         id: `sec_custom_${Date.now()}`,
+ 546:         paraNo: `4.${idx}`,
+ 547:         agendaTitle: 'PERKARA PERBINCANGAN TAMBAHAN',
+ 548:         rawNotes: '',
+ 549:         formalText: '',
+ 550:         tindakanType: 'TINDAKAN',
+ 551:         tindakanOwner: 'Semua Guru',
+ 552:         maklumBalasStatus: '',
+ 553:         mukaSurat: '2',
+ 554:       },
+ 555:     ]);
+ 556:   };
+ 557: 
+ 558:   const handleUpdateEntry = (id: string, patch: Partial<MinitAgendaEntry>) => {
+ 559:     setAgendaEntries((prev) =>
+ 560:       prev.map((item) => (item.id === id ? { ...item, ...patch } : item))
+ 561:     );
+ 562:   };
+ 563: 
+ 564:   const handleRemoveEntry = (id: string) => {
+ 565:     setAgendaEntries((prev) => prev.filter((item) => item.id !== id));
+ 566:   };
+ 567: 
+ 568:   const handleFormalizeWithAI = async () => {
+ 569:     setAiLoading(true);
+ 570:     setBanner(null);
+ 571:     try {
+ 572:       const idToken = await auth.currentUser?.getIdToken();
+ 573:       const res = await fetch('/api/ai/setiausaha', {
+ 574:         method: 'POST',
+ 575:         headers: {
+ 576:           'Content-Type': 'application/json',
+ 577:           Authorization: `Bearer ${idToken || ''}`,
+ 578:         },
+ 579:         body: JSON.stringify({
+ 580:           action: 'MINIT_FORMALIZE',
+ 581:           payload: {
+ 582:             meetingTitle: tajukMesyuarat,
+ 583:             committeeName: selectedItem.jawatankuasaInduk,
+ 584:             sections: agendaEntries,
+ 585:           },
+ 586:         }),
+ 587:       });
+ 588:       const data = await res.json();
+ 589:       if (!res.ok) throw new Error(data.error || 'Gagal menjana minit formal AI.');
+ 590:       const entries = Array.isArray(data.entries) ? data.entries : [];
+ 591:       if (entries.length > 0) {
+ 592:         const map = new Map<string, string>();
+ 593:         entries.forEach((e: any) => {
+ 594:           if (e?.id && e?.formalText) map.set(String(e.id), String(e.formalText));
+ 595:         });
+ 596:         setAgendaEntries((prev) =>
+ 597:           prev.map((item) => ({
+ 598:             ...item,
+ 599:             formalText: map.get(item.id) || item.formalText,
+ 600:           }))
+ 601:         );
+ 602:         setBanner({
+ 603:           type: 'success',
+ 604:           text:
+ 605:             data.source === 'gemini'
+ 606:               ? 'Semua catatan minit telah dikembangkan kepada Bahasa Melayu rasmi PKPA Bil. 2/1991 oleh Gemini AI.'
+ 607:               : 'Minit mesyuarat berstruktur PKPA Bil. 2/1991 telah dikemaskini.',
+ 608:         });
+ 609:       }
+ 610:     } catch (err: any) {
+ 611:       setBanner({ type: 'error', text: err?.message || 'Ralat AI Setiausaha.' });
+ 612:     } finally {
+ 613:       setAiLoading(false);
+ 614:     }
+ 615:   };
+ 616: 
+ 617:   const handleSaveMinit = async () => {
+ 618:     if (!tajukMesyuarat.trim()) {
+ 619:       setBanner({ type: 'error', text: 'Sila isi Tajuk Minit Mesyuarat.' });
+ 620:       return;
+ 621:     }
+ 622:     setSaving(true);
+ 623:     setBanner(null);
+ 624:     const saved = await onSaveDoc({
+ 625:       id: editingId || undefined,
+ 626:       docKind: 'MINIT',
+ 627:       academicYear,
+ 628:       linkedMemoId: linkedMemoId || undefined,
+ 629:       pillar: selectedItem.pillar,
+ 630:       kodMySG: selectedItem.kodMySG,
+ 631:       jawatankuasaInduk: selectedItem.jawatankuasaInduk,
+ 632:       tajukMesyuarat: tajukMesyuarat.trim().toUpperCase(),
+ 633:       bilangan,
+ 634:       tarikh,
+ 635:       masa,
+ 636:       tempat,
+ 637:       pengerusi: pengerusi.trim().toUpperCase(),
+ 638:       pencatat: pencatat.trim().toUpperCase(),
+ 639:       hadirNames,
+ 640:       tidakHadirBersebab,
+ 641:       turutHadir: turutHadirRaw
+ 642:         .split(',')
+ 643:         .map((s) => s.trim())
+ 644:         .filter(Boolean),
+ 645:       agendaEntries,
+ 646:       disahkanOlehName: disahkanOlehName.trim().toUpperCase(),
+ 647:       disahkanOlehTitle: disahkanOlehTitle.trim(),
+ 648:     });
+ 649:     setSaving(false);
+ 650:     if (saved) {
+ 651:       setEditingId(saved.id);
+ 652:       setBanner({
+ 653:         type: 'success',
+ 654:         text: `Minit & Borang Maklum Balas "${saved.tajukMesyuarat}" telah disimpan.`,
+ 655:       });
+ 656:     }
+ 657:   };
+ 658: 
+ 659:   const handleLoadMinit = (m: MinitMesyuaratDocument) => {
+ 660:     lockAutoTemplateRef.current = true;
+ 661:     const restoredTitle =
+ 662:       m.tajukMesyuarat || m.minitTitle || `MINIT MESYUARAT ${m.jawatankuasaInduk || ''}`;
+ 663:     const restoredPengerusi =
+ 664:       m.pengerusi || m.pengerusiName || (principalProfile?.name || 'GURU BESAR').toUpperCase();
+ 665:     const restoredPencatat =
+ 666:       m.pencatat || m.preparedByName || currentUserName.toUpperCase();
+ 667:     const rawAttendance =
+ 668:       Array.isArray(m.hadirNames) && m.hadirNames.length > 0
+ 669:         ? m.hadirNames
+ 670:         : Array.isArray(m.attendanceList)
+ 671:         ? m.attendanceList
+ 672:         : [];
+ 673:     const normalizedHadir = rawAttendance
+ 674:       .map((entry: any) =>
+ 675:         typeof entry === 'string'
+ 676:           ? entry.toUpperCase()
+ 677:           : String(entry?.name || entry?.fullName || '').toUpperCase()
+ 678:       )
+ 679:       .filter(Boolean);
+ 680:     const restoredEntries = parseSavedMinitAgenda(m, selectedItem.jawatankuasaInduk);
+ 681: 
+ 682:     setEditingId(m.id);
+ 683:     setLinkedMemoId(m.linkedMemoId || m.sourceMemoId || '');
+ 684:     setImportSelection('');
+ 685:     setTajukMesyuarat(restoredTitle);
+ 686:     setBilangan(m.bilangan || `Bil. 1/${yearShort}`);
+ 687:     setTarikh(m.tarikh || m.tarikhMesyuarat || new Date().toISOString().slice(0, 10));
+ 688:     setMasa(m.masa || m.masaMesyuarat || '01:30 petang – 03:00 petang');
+ 689:     setTempat(m.tempat || m.tempatMesyuarat || `Bilik Mesyuarat ${schoolName}`);
+ 690:     setPengerusi(restoredPengerusi);
+ 691:     setPencatat(restoredPencatat);
+ 692:     setHadirNames(normalizedHadir);
+ 693:     setTidakHadirBersebab(Array.isArray(m.tidakHadirBersebab) ? m.tidakHadirBersebab : []);
+ 694:     setTurutHadirRaw(
+ 695:       Array.isArray(m.turutHadir)
+ 696:         ? m.turutHadir.join(', ')
+ 697:         : typeof m.turutHadir === 'string'
+ 698:         ? m.turutHadir
+ 699:         : ''
+ 700:     );
+ 701:     setAgendaEntries(restoredEntries);
+ 702:     setDisahkanOlehName(m.disahkanOlehName || restoredPengerusi);
+ 703:     setDisahkanOlehTitle(m.disahkanOlehTitle || 'Guru Besar');
+ 704:     setBanner({
+ 705:       type: 'success',
+ 706:       text: `Minit "${restoredTitle}" (${restoredEntries.length} item agenda) berjaya dimuatkan sepenuhnya.`,
+ 707:     });
+ 708:   };
+ 709: 
+ 710:   useEffect(() => {
+ 711:     if (!maklumanPrefill?.taskItem) return;
+ 712:     const nonce = maklumanPrefill.nonce || 1;
+ 713:     if (nonce === lastPrefillNonceRef.current) return;
+ 714:     lastPrefillNonceRef.current = nonce;
+ 715:     applyMaklumanTaskToMinit(maklumanPrefill.taskItem);
+ 716:   }, [maklumanPrefill]);
+ 717: 
+ 718:   useEffect(() => {
+ 719:     if (!docToLoad?.doc) return;
+ 720:     const nonce = docToLoad.nonce || 1;
+ 721:     if (nonce === lastDocLoadNonceRef.current) return;
+ 722:     lastDocLoadNonceRef.current = nonce;
+ 723:     handleLoadMinit(docToLoad.doc);
+ 724:   }, [docToLoad]);
+ 725: 
+ 726:   const handleResetNewMinit = () => {
+ 727:     lockAutoTemplateRef.current = false;
+ 728:     setEditingId(null);
+ 729:     setLinkedMemoId('');
+ 730:     setImportSelection('');
+ 731:     setTajukMesyuarat(
+ 732:       `MINIT MESYUARAT ${selectedItem.jawatankuasaInduk.toUpperCase()} ${bilangan.toUpperCase()}`
+ 733:     );
+ 734:     setHadirNames(activeTeachers.map((t) => t.name.toUpperCase()));
+ 735:     setTidakHadirBersebab([]);
+ 736:     setAgendaEntries(buildDefaultEntries(selectedItem.jawatankuasaInduk));
+ 737:   };
+ 738: 
+ 739:   const maklumBalasItems = useMemo(
+ 740:     () => agendaEntries.filter((e) => e.tindakanType === 'TINDAKAN'),
+ 741:     [agendaEntries]
+ 742:   );
+ 743: 
+ 744:   return (
+ 745:     <div className="space-y-6">
+ 746:       {/* TOP BAR: IMPORT FROM MEMO / MAKLUMAN, OPEN SAVED MINIT & PRINT MODE SWITCHER */}
+ 747:       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3 print:hidden">
+ 748:         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+ 749:           <div className="flex flex-wrap items-center gap-3">
+ 750:             <div className="flex items-center gap-2 text-xs font-black uppercase text-indigo-300">
+ 751:               <FileDown className="w-4 h-4" />
+ 752:               <span>Import Memo:</span>
+ 753:             </div>
+ 754:             <select
+ 755:               value={importSelection || (linkedMemoId ? `memo:${linkedMemoId}` : '')}
+ 756:               onChange={(e) => handleImportFromMemo(e.target.value)}
+ 757:               className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none max-w-sm"
+ 758:             >
+ 759:               <option value="">-- Pilih Memo Tersimpan (1-Klik Import) --</option>
+ 760:               {savedMemos.length > 0 && (
+ 761:                 <optgroup label={`Memo Tersimpan (${savedMemos.length})`}>
+ 762:                   {savedMemos.map((m) => (
+ 763:                     <option key={m.id} value={`memo:${m.id}`}>
+ 764:                       [Sesi {resolveDocSessionYear(m, academicYear)}] {m.rujukanKami} · {m.tajukMesyuarat}
+ 765:                     </option>
+ 766:                   ))}
+ 767:                 </optgroup>
+ 768:               )}
+ 769:               {maklumanMeetings.length > 0 && (
+ 770:                 <optgroup label={`Mesyuarat Paparan Makluman (${maklumanMeetings.length})`}>
+ 771:                   {maklumanMeetings.map((t) => (
+ 772:                     <option key={`makluman_${t.id}`} value={`makluman:${t.id}`}>
+ 773:                       [Makluman] [Sesi {resolveDocSessionYear(t, academicYear)}] {t.title} ({t.dueDate || '-'})
+ 774:                     </option>
+ 775:                   ))}
+ 776:                 </optgroup>
+ 777:               )}
+ 778:             </select>
+ 779: 
+ 780:             <div className="flex items-center gap-2 text-xs font-black uppercase text-emerald-300">
+ 781:               <FolderOpen className="w-4 h-4" />
+ 782:               <span>Buka Minit Tersimpan:</span>
+ 783:             </div>
+ 784:             <select
+ 785:               value={editingId || ''}
+ 786:               onChange={(e) => {
+ 787:                 const found = savedDocs.find((d) => d.id === e.target.value);
+ 788:                 if (found) handleLoadMinit(found);
+ 789:               }}
+ 790:               className="bg-slate-950 border border-emerald-800/60 rounded-xl px-3 py-2 text-xs text-slate-100 outline-none max-w-sm"
+ 791:             >
+ 792:               <option value="">-- Arkib Minit Mesyuarat ({savedDocs.length} Rekod) --</option>
+ 793:               {savedDocs.map((d) => (
+ 794:                 <option key={d.id} value={d.id}>
+ 795:                   [Sesi {resolveDocSessionYear(d, academicYear)}] {d.tajukMesyuarat || d.minitTitle || 'MINIT MESYUARAT'} ({d.tarikh || d.tarikhMesyuarat || '-'})
+ 796:                 </option>
+ 797:               ))}
+ 798:             </select>
+ 799:           </div>
+ 800: 
+ 801:           <div className="flex flex-wrap items-center gap-2">
+ 802:             <button
+ 803:               type="button"
+ 804:               onClick={() => setPrintMode('BOTH')}
+ 805:               className={`px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
+ 806:                 printMode === 'BOTH'
+ 807:                   ? 'bg-indigo-600 border-indigo-500 text-white'
+ 808:                   : 'bg-slate-950 border-slate-800 text-slate-400'
+ 809:               }`}
+ 810:             >
+ 811:               Minit + Maklum Balas
+ 812:             </button>
+ 813:             <button
+ 814:               type="button"
+ 815:               onClick={() => setPrintMode('MINIT_ONLY')}
+ 816:               className={`px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
+ 817:                 printMode === 'MINIT_ONLY'
+ 818:                   ? 'bg-indigo-600 border-indigo-500 text-white'
+ 819:                   : 'bg-slate-950 border-slate-800 text-slate-400'
+ 820:               }`}
+
+
+```
+
+```python
+import zipfile
+
+with zipfile.ZipFile('i-guide (2).zip', 'r') as z:
+    minit = z.read('src/components/AISetiausaha/ModuleMinitMesyuarat.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("=== ModuleMinitMesyuarat.tsx lines 821..960 ===")
+    for i in range(820, min(960, len(minit))):
+        print(f"{i+1:4d}: {minit[i]}")
+
+    memo = z.read('src/components/AISetiausaha/ModuleMemoMesyuarat.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("\n=== ModuleMemoMesyuarat.tsx lines 710..850 ===")
+    for i in range(709, min(850, len(memo))):
+        print(f"{i+1:4d}: {memo[i]}")
+
+
+```
+
+```text
+=== ModuleMinitMesyuarat.tsx lines 821..960 ===
+ 821:             >
+ 822:               Minit Sahaja
+ 823:             </button>
+ 824:             <button
+ 825:               type="button"
+ 826:               onClick={() => setPrintMode('MAKLUM_BALAS_ONLY')}
+ 827:               className={`px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
+ 828:                 printMode === 'MAKLUM_BALAS_ONLY'
+ 829:                   ? 'bg-indigo-600 border-indigo-500 text-white'
+ 830:                   : 'bg-slate-950 border-slate-800 text-slate-400'
+ 831:               }`}
+ 832:             >
+ 833:               Borang Maklum Balas Sahaja
+ 834:             </button>
+ 835:           </div>
+ 836:         </div>
+ 837:       </div>
+ 838: 
+ 839:       {/* SPLIT WORKSPACE: EDITOR + PRINTABLE PKPA DOCUMENTS */}
+ 840:       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+ 841:         {/* LEFT EDITOR */}
+ 842:         <div className="xl:col-span-5 bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 space-y-5 print:hidden">
+ 843:           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+ 844:             <div>
+ 845:               <h4 className="text-sm font-black uppercase text-white">
+ 846:                 Editor Minit Mesyuarat (PKPA Bil. 2/1991)
+ 847:               </h4>
+ 848:               <p className="text-[11px] text-slate-400">
+ 849:                 Catat poin ringkas (中文 / BM) dan tukar ke format rasmi KPM.
+ 850:               </p>
+ 851:             </div>
+ 852:             <div className="flex items-center gap-2">
+ 853:               {editingId && (
+ 854:                 <button
+ 855:                   type="button"
+ 856:                   onClick={handleResetNewMinit}
+ 857:                   className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+ 858:                   title="Minit Baharu"
+ 859:                 >
+ 860:                   <Plus className="w-4 h-4" />
+ 861:                 </button>
+ 862:               )}
+ 863:               <button
+ 864:                 type="button"
+ 865:                 onClick={handleSaveMinit}
+ 866:                 disabled={saving}
+ 867:                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase cursor-pointer disabled:opacity-50"
+ 868:               >
+ 869:                 {saving ? (
+ 870:                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+ 871:                 ) : (
+ 872:                   <Save className="w-3.5 h-3.5" />
+ 873:                 )}
+ 874:                 <span>Simpan Minit</span>
+ 875:               </button>
+ 876:             </div>
+ 877:           </div>
+ 878: 
+ 879:           {banner && (
+ 880:             <div
+ 881:               className={`p-3 rounded-xl text-xs font-bold border ${
+ 882:                 banner.type === 'success'
+ 883:                   ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
+ 884:                   : 'bg-rose-950/60 border-rose-700 text-rose-300'
+ 885:               }`}
+ 886:             >
+ 887:               {banner.text}
+ 888:             </div>
+ 889:           )}
+ 890: 
+ 891:           {/* Header fields */}
+ 892:           <div className="space-y-3">
+ 893:             <div>
+ 894:               <label className="text-[11px] font-black uppercase text-slate-300 block mb-1">
+ 895:                 Tajuk Minit Mesyuarat:
+ 896:               </label>
+ 897:               <input
+ 898:                 type="text"
+ 899:                 value={tajukMesyuarat}
+ 900:                 onChange={(e) => setTajukMesyuarat(e.target.value)}
+ 901:                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white outline-none"
+ 902:               />
+ 903:             </div>
+ 904: 
+ 905:             <div className="grid grid-cols-2 gap-3">
+ 906:               <div>
+ 907:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Tarikh:</label>
+ 908:                 <input
+ 909:                   type="date"
+ 910:                   value={tarikh}
+ 911:                   onChange={(e) => setTarikh(e.target.value)}
+ 912:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white outline-none"
+ 913:                 />
+ 914:               </div>
+ 915:               <div>
+ 916:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Masa:</label>
+ 917:                 <input
+ 918:                   type="text"
+ 919:                   value={masa}
+ 920:                   onChange={(e) => setMasa(e.target.value)}
+ 921:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white outline-none"
+ 922:                 />
+ 923:               </div>
+ 924:               <div>
+ 925:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Tempat:</label>
+ 926:                 <input
+ 927:                   type="text"
+ 928:                   value={tempat}
+ 929:                   onChange={(e) => setTempat(e.target.value)}
+ 930:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white outline-none"
+ 931:                 />
+ 932:               </div>
+ 933:               <div>
+ 934:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Pengerusi:</label>
+ 935:                 <input
+ 936:                   type="text"
+ 937:                   value={pengerusi}
+ 938:                   onChange={(e) => setPengerusi(e.target.value)}
+ 939:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white outline-none"
+ 940:                 />
+ 941:               </div>
+ 942:               <div>
+ 943:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Pencatat (Setiausaha):</label>
+ 944:                 <input
+ 945:                   type="text"
+ 946:                   value={pencatat}
+ 947:                   onChange={(e) => setPencatat(e.target.value)}
+ 948:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white outline-none"
+ 949:                 />
+ 950:               </div>
+ 951:               <div>
+ 952:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Turut Hadir (jika ada):</label>
+ 953:                 <input
+ 954:                   type="text"
+ 955:                   value={turutHadirRaw}
+ 956:                   onChange={(e) => setTurutHadirRaw(e.target.value)}
+ 957:                   placeholder="Pegawai PPD / YDP PIBG..."
+ 958:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white outline-none"
+ 959:                 />
+ 960:               </div>
+
+=== ModuleMemoMesyuarat.tsx lines 710..850 ===
+ 710:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white outline-none"
+ 711:                 />
+ 712:               </div>
+ 713:               <div>
+ 714:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Masa:</label>
+ 715:                 <input
+ 716:                   type="text"
+ 717:                   value={masaMesyuarat}
+ 718:                   onChange={(e) => setMasaMesyuarat(e.target.value)}
+ 719:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white outline-none"
+ 720:                 />
+ 721:               </div>
+ 722:               <div>
+ 723:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Tempat:</label>
+ 724:                 <input
+ 725:                   type="text"
+ 726:                   value={tempatMesyuarat}
+ 727:                   onChange={(e) => setTempatMesyuarat(e.target.value)}
+ 728:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white outline-none"
+ 729:                 />
+ 730:               </div>
+ 731:               <div>
+ 732:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Pengerusi:</label>
+ 733:                 <input
+ 734:                   type="text"
+ 735:                   value={pengerusiName}
+ 736:                   onChange={(e) => setPengerusiName(e.target.value)}
+ 737:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white outline-none"
+ 738:                 />
+ 739:               </div>
+ 740:               <div>
+ 741:                 <label className="text-[11px] font-bold text-slate-400 block mb-1">Jawatan Pengerusi:</label>
+ 742:                 <input
+ 743:                   type="text"
+ 744:                   value={pengerusiTitle}
+ 745:                   onChange={(e) => setPengerusiTitle(e.target.value)}
+ 746:                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white outline-none"
+ 747:                 />
+ 748:               </div>
+ 749:             </div>
+ 750:           </div>
+ 751: 
+ 752:           {/* Recipients */}
+ 753:           <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
+ 754:             <label className="text-[11px] font-black uppercase text-slate-300 block">
+ 755:               Senarai Penerima (Daripada Profil Guru):
+ 756:             </label>
+ 757:             <div className="grid grid-cols-2 gap-2">
+ 758:               <button
+ 759:                 type="button"
+ 760:                 onClick={() => setRecipientMode('SEMUA_GURU')}
+ 761:                 className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
+ 762:                   recipientMode === 'SEMUA_GURU'
+ 763:                     ? 'bg-indigo-600 border-indigo-500 text-white'
+ 764:                     : 'bg-slate-900 border-slate-800 text-slate-400'
+ 765:                 }`}
+ 766:               >
+ 767:                 Semua Guru ({activeTeachers.length})
+ 768:               </button>
+ 769:               <button
+ 770:                 type="button"
+ 771:                 onClick={() => setRecipientMode('AHLI_TERPILIH')}
+ 772:                 className={`py-2 rounded-xl text-xs font-bold border cursor-pointer ${
+ 773:                   recipientMode === 'AHLI_TERPILIH'
+ 774:                     ? 'bg-indigo-600 border-indigo-500 text-white'
+ 775:                     : 'bg-slate-900 border-slate-800 text-slate-400'
+ 776:                 }`}
+ 777:               >
+ 778:                 Ahli Jawatankuasa ({recipientIds.length})
+ 779:               </button>
+ 780:             </div>
+ 781:             {recipientMode === 'AHLI_TERPILIH' && (
+ 782:               <div className="max-h-32 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-1 border border-slate-800 rounded-xl p-2 bg-slate-900">
+ 783:                 {activeTeachers.map((t) => {
+ 784:                   const checked = recipientIds.includes(t.id);
+ 785:                   return (
+ 786:                     <label
+ 787:                       key={t.id}
+ 788:                       className="flex items-center gap-2 text-[11px] text-slate-200 px-2 py-1 rounded hover:bg-slate-800 cursor-pointer"
+ 789:                     >
+ 790:                       <input
+ 791:                         type="checkbox"
+ 792:                         checked={checked}
+ 793:                         onChange={(e) => {
+ 794:                           if (e.target.checked) setRecipientIds((prev) => [...prev, t.id]);
+ 795:                           else setRecipientIds((prev) => prev.filter((id) => id !== t.id));
+ 796:                         }}
+ 797:                         className="rounded border-slate-700 text-indigo-500 focus:ring-0"
+ 798:                       />
+ 799:                       <span className="truncate">{t.name}</span>
+ 800:                     </label>
+ 801:                   );
+ 802:                 })}
+ 803:               </div>
+ 804:             )}
+ 805:           </div>
+ 806: 
+ 807:           {/* AI Agenda Builder for Section 4 */}
+ 808:           <div className="p-4 rounded-2xl bg-slate-950 border border-indigo-700/50 space-y-3">
+ 809:             <div className="flex items-center justify-between gap-2">
+ 810:               <span className="text-xs font-black uppercase text-indigo-300 flex items-center gap-1.5">
+ 811:                 <Sparkles className="w-4 h-4 text-amber-400" />
+ 812:                 4. Fokus / Perbincangan Utama
+ 813:               </span>
+ 814:               <button
+ 815:                 type="button"
+ 816:                 onClick={handleSuggestAgendaAI}
+ 817:                 disabled={aiLoading}
+ 818:                 className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black uppercase flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+ 819:               >
+ 820:                 {aiLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-amber-300" />}
+ 821:                 <span>Cadang Agenda Pintar</span>
+ 822:               </button>
+ 823:             </div>
+ 824:             <input
+ 825:               type="text"
+ 826:               value={contextNotes}
+ 827:               onChange={(e) => setContextNotes(e.target.value)}
+ 828:               placeholder="Nota tambahan untuk AI (cth: fokus PBD TP1-TP2, persediaan hari sukan)..."
+ 829:               className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 outline-none"
+ 830:             />
+ 831:             <textarea
+ 832:               rows={4}
+ 833:               value={agendaFokusUtama.join('\n')}
+ 834:               onChange={(e) => setAgendaFokusUtama(e.target.value.split('\n'))}
+ 835:               className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 outline-none"
+ 836:             />
+ 837:           </div>
+ 838: 
+ 839:           <button
+ 840:             type="button"
+ 841:             onClick={handleSendToMaklumanAndWhatsApp}
+ 842:             disabled={syncingMakluman}
+ 843:             className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg cursor-pointer disabled:opacity-50"
+ 844:           >
+ 845:             {syncingMakluman ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
+ 846:             <span>
+ 847:               {syncingMakluman ? 'Menghantar...' : 'Hantar ke Paparan Makluman & WhatsApp'}
+ 848:             </span>
+ 849:           </button>
+ 850:         </div>
+
+
+```
+
+```python
+import zipfile
+
+with zipfile.ZipFile('i-guide (2).zip', 'r') as z:
+    minit = z.read('src/components/AISetiausaha/ModuleMinitMesyuarat.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("=== ModuleMinitMesyuarat.tsx lines 960..1070 ===")
+    for i in range(959, min(1070, len(minit))):
+        print(f"{i+1:4d}: {minit[i]}")
+
+    memo = z.read('src/components/AISetiausaha/ModuleMemoMesyuarat.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("\n=== ModuleMemoMesyuarat.tsx lines 851..935 ===")
+    for i in range(850, min(935, len(memo))):
+        print(f"{i+1:4d}: {memo[i]}")
+
+    hub = z.read('src/components/AISetiausaha/AISetiausahaHub.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("\n=== AISetiausahaHub.tsx lines 350..500 ===")
+    for i in range(349, min(500, len(hub))):
+        print(f"{i+1:4d}: {hub[i]}")
+
+
+```
+
+```text
+=== ModuleMinitMesyuarat.tsx lines 960..1070 ===
+ 960:               </div>
+ 961:             </div>
+ 962:           </div>
+ 963: 
+ 964:           {/* Attendance Toggles from Profil Guru */}
+ 965:           <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+ 966:             <div className="flex items-center justify-between">
+ 967:               <span className="text-[11px] font-black uppercase text-slate-300 flex items-center gap-1.5">
+ 968:                 <CheckSquare className="w-3.5 h-3.5 text-emerald-400" />
+ 969:                 Kehadiran Ahli ({hadirNames.length} Hadir / {tidakHadirBersebab.length} Bersebab)
+ 970:               </span>
+ 971:               <button
+ 972:                 type="button"
+ 973:                 onClick={() => {
+ 974:                   setHadirNames(activeTeachers.map((t) => t.name.toUpperCase()));
+ 975:                   setTidakHadirBersebab([]);
+ 976:                 }}
+ 977:                 className="text-[10px] font-bold text-teal-400 hover:underline cursor-pointer"
+ 978:               >
+ 979:                 Tanda Semua Hadir
+ 980:               </button>
+ 981:             </div>
+ 982:             <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+ 983:               {activeTeachers.map((t) => {
+ 984:                 const upperName = t.name.toUpperCase();
+ 985:                 const isHadir = hadirNames.includes(upperName);
+ 986:                 return (
+ 987:                   <div
+ 988:                     key={t.id}
+ 989:                     className="flex items-center justify-between gap-2 text-[11px] px-2 py-1 rounded bg-slate-900/70"
+ 990:                   >
+ 991:                     <span className="text-slate-200 truncate">{upperName}</span>
+ 992:                     <div className="flex items-center gap-1 shrink-0">
+ 993:                       <button
+ 994:                         type="button"
+ 995:                         onClick={() => handleToggleAttendance(upperName, 'HADIR')}
+ 996:                         className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+ 997:                           isHadir
+ 998:                             ? 'bg-emerald-600 text-white'
+ 999:                             : 'bg-slate-800 text-slate-400'
+1000:                         }`}
+1001:                       >
+1002:                         Hadir
+1003:                       </button>
+1004:                       <button
+1005:                         type="button"
+1006:                         onClick={() => handleToggleAttendance(upperName, 'TIDAK_HADIR')}
+1007:                         className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+1008:                           !isHadir
+1009:                             ? 'bg-amber-600 text-white'
+1010:                             : 'bg-slate-800 text-slate-400'
+1011:                         }`}
+1012:                       >
+1013:                         Bersebab
+1014:                       </button>
+1015:                     </div>
+1016:                   </div>
+1017:                 );
+1018:               })}
+1019:             </div>
+1020:           </div>
+1021: 
+1022:           {/* Bilingual AI Minutes Formalizer */}
+1023:           <div className="space-y-3">
+1024:             <div className="flex items-center justify-between">
+1025:               <span className="text-xs font-black uppercase text-indigo-300">
+1026:                 Butiran Agenda &amp; Tindakan ({agendaEntries.length} Item)
+1027:               </span>
+1028:               <div className="flex items-center gap-2">
+1029:                 <button
+1030:                   type="button"
+1031:                   onClick={handleFormalizeWithAI}
+1032:                   disabled={aiLoading}
+1033:                   className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black uppercase flex items-center gap-1 cursor-pointer disabled:opacity-50"
+1034:                 >
+1035:                   {aiLoading ? (
+1036:                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+1037:                   ) : (
+1038:                     <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+1039:                   )}
+1040:                   <span>AI Rasmi PKPA</span>
+1041:                 </button>
+1042:                 <button
+1043:                   type="button"
+1044:                   onClick={handleAddAgendaItem}
+1045:                   className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+1046:                 >
+1047:                   <Plus className="w-3.5 h-3.5" /> Tambah
+1048:                 </button>
+1049:               </div>
+1050:             </div>
+1051: 
+1052:             <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
+1053:               {agendaEntries.map((entry) => (
+1054:                 <div
+1055:                   key={entry.id}
+1056:                   className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5"
+1057:                 >
+1058:                   <div className="flex items-center gap-2">
+1059:                     <input
+1060:                       type="text"
+1061:                       value={entry.paraNo}
+1062:                       onChange={(e) => handleUpdateEntry(entry.id, { paraNo: e.target.value })}
+1063:                       className="w-16 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs font-mono font-bold text-indigo-300 outline-none"
+1064:                     />
+1065:                     <input
+1066:                       type="text"
+1067:                       value={entry.agendaTitle}
+1068:                       onChange={(e) =>
+1069:                         handleUpdateEntry(entry.id, { agendaTitle: e.target.value })
+1070:                       }
+
+=== ModuleMemoMesyuarat.tsx lines 851..935 ===
+ 851: 
+ 852:         {/* RIGHT PANEL: OFFICIAL KPM LETTERHEAD A4 PREVIEW */}
+ 853:         <div className="xl:col-span-7 space-y-3">
+ 854:           <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5 print:hidden">
+ 855:             <span className="text-xs font-bold text-slate-300">
+ 856:               Pratonton Surat / Memo Panggilan Mesyuarat Rasmi KPM (A4)
+ 857:             </span>
+ 858:             <button
+ 859:               type="button"
+ 860:               onClick={() => window.print()}
+ 861:               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase cursor-pointer"
+ 862:             >
+ 863:               <Printer className="w-4 h-4" />
+ 864:               <span>Cetak / Eksport PDF (A4)</span>
+ 865:             </button>
+ 866:           </div>
+ 867: 
+ 868:           <div
+ 869:             id="memo-a4-print-sheet"
+ 870:             className="print-portrait-sheet bg-white text-slate-900 rounded-2xl shadow-2xl border border-slate-200 max-w-[794px] mx-auto p-10 space-y-5 text-[12px] leading-relaxed font-serif"
+ 871:           >
+ 872:             {/* KEPALA SURAT RASMI SEKOLAH */}
+ 873:             <div className="flex items-center justify-between border-b-2 border-slate-900 pb-4">
+ 874:               <div className="flex items-center gap-4">
+ 875:                 <SchoolLogo
+ 876:                   src={schoolLogo}
+ 877:                   schoolCode={schoolCode}
+ 878:                   className="w-16 h-16 bg-white border-slate-300"
+ 879:                 />
+ 880:                 <div>
+ 881:                   <h2 className="text-base font-black uppercase tracking-wide text-slate-950 font-sans">
+ 882:                     {schoolName}
+ 883:                   </h2>
+ 884:                   <p className="text-[11px] font-bold text-slate-700 font-sans">
+ 885:                     KOD SEKOLAH: {schoolCode} · KEMENTERIAN PENDIDIKAN MALAYSIA
+ 886:                   </p>
+ 887:                   {schoolSlogan && (
+ 888:                     <p className="text-[10px] italic text-slate-500 font-sans">“{schoolSlogan}”</p>
+ 889:                   )}
+ 890:                 </div>
+ 891:               </div>
+ 892:               <div className="text-right text-[10px] font-sans text-slate-600">
+ 893:                 <div className="font-black uppercase text-slate-900">MEMO DALAMAN / PANGGILAN</div>
+ 894:                 <div>MySG: {selectedItem.kodMySG}</div>
+ 895:               </div>
+ 896:             </div>
+ 897: 
+ 898:             {/* RUJUKAN & TARIKH */}
+ 899:             <div className="flex justify-end">
+ 900:               <table className="text-[11px] font-sans">
+ 901:                 <tbody>
+ 902:                   <tr>
+ 903:                     <td className="pr-2 font-bold">Ruj. Kami</td>
+ 904:                     <td className="pr-2">:</td>
+ 905:                     <td className="font-mono font-bold">{rujukanKami}</td>
+ 906:                   </tr>
+ 907:                   <tr>
+ 908:                     <td className="pr-2 font-bold">Tarikh</td>
+ 909:                     <td className="pr-2">:</td>
+ 910:                     <td>{formatMalayDate(tarikhSurat)}</td>
+ 911:                   </tr>
+ 912:                 </tbody>
+ 913:               </table>
+ 914:             </div>
+ 915: 
+ 916:             {/* PENERIMA */}
+ 917:             <div className="space-y-1">
+ 918:               <p className="font-bold">Kepada:</p>
+ 919:               <p className="font-bold uppercase">
+ 920:                 {recipientMode === 'SEMUA_GURU'
+ 921:                   ? 'Semua Guru dan Ahli Jawatankuasa Berkaitan'
+ 922:                   : selectedRecipientNames.join(', ') || 'Ahli Jawatankuasa Terlibat'}
+ 923:               </p>
+ 924:               <p>{schoolName}</p>
+ 925:             </div>
+ 926: 
+ 927:             <p>Tuan / Puan,</p>
+ 928: 
+ 929:             {/* TAJUK */}
+ 930:             <div className="font-black uppercase underline tracking-wide text-[13px] text-slate-950">
+ 931:               {tajukMesyuarat}
+ 932:             </div>
+ 933: 
+ 934:             <p className="text-justify">
+ 935:               Dengan segala hormatnya perkara di atas adalah dirujuk. Sukacita dimaklumkan bahawa{' '}
+
+=== AISetiausahaHub.tsx lines 350..500 ===
+ 350:           if (docItem.sourceActivityId) mirroredSourceIds.add(docItem.sourceActivityId);
+ 351:           mirroredSourceIds.add(docItem.id);
+ 352:         }
+ 353:       });
+ 354: 
+ 355:       // Merge any koko_activities not yet mirrored into ai_setiausaha_documents
+ 356:       try {
+ 357:         const actSnap = await getDocs(collection(db, 'koko_activities'));
+ 358:         actSnap.docs
+ 359:           .filter((d) => belongsToSchool(d.data() as Record<string, unknown>, activeSchoolCode))
+ 360:           .forEach((d) => {
+ 361:             const act = { id: d.id, ...d.data() } as KokoActivity;
+ 362:             const mirrorDocId = scopedDocId(activeSchoolCode, `koko_opr_${d.id}`);
+ 363:             if (mirroredSourceIds.has(d.id) || mirroredSourceIds.has(mirrorDocId)) {
+ 364:               return;
+ 365:             }
+ 366:             const skpmSpec = autoResolveKokoSKPM({
+ 367:               category: act.category,
+ 368:               jenis: act.jenis,
+ 369:               level: act.level,
+ 370:               programName: act.programName,
+ 371:               unit: act.unit,
+ 372:               manualCode: act.skpmStandardCode,
+ 373:             });
+ 374:             const hasStd5 = Boolean(skpmSpec.standard5Code || act.jenis === 'pertandingan');
+ 375:             const hasSumbangan271 = Boolean(
+ 376:               act.skpmAspek271Linked ||
+ 377:                 (act.kategoriSumbangan &&
+ 378:                   !/TIADA KOS/i.test(act.kategoriSumbangan) &&
+ 379:                   /LPS|PIBG|YB|IBU BAPA|SWASTA|NGO|KOMUNITI/i.test(act.kategoriSumbangan)) ||
+ 380:                 (act.jumlahSumbanganRM && act.jumlahSumbanganRM > 0)
+ 381:             );
+ 382:             const badgeParts: string[] = [skpmSpec.code];
+ 383:             if (skpmSpec.standard5Code) badgeParts.push(`Std ${skpmSpec.standard5Code}`);
+ 384:             if (hasSumbangan271) badgeParts.push('2.7.1 / A9');
+ 385: 
+ 386:             const synthesizedOpr: OPRPosterDocument = {
+ 387:               id: `koko_legacy_${d.id}`,
+ 388:               docKind: 'OPR',
+ 389:               sourceModule: 'KOKURIKULUM_OPR',
+ 390:               sourceActivityId: d.id,
+ 391:               schoolCode: activeSchoolCode,
+ 392:               academicYear: act.academicYear || resolvedYear,
+ 393:               pillar: 'KOKURIKULUM',
+ 394:               kodMySG: act.skpmStandardCode || skpmSpec.code,
+ 395:               jawatankuasaInduk: act.unit || 'Pengurusan Kokurikulum & Koakademik',
+ 396:               jawatanRasmi:
+ 397:                 act.category === 'KOAKADEMIK'
+ 398:                   ? `Penyelaras ${act.unit || 'Koakademik'}`
+ 399:                   : 'Jurulatih / Guru Penasihat Kokurikulum',
+ 400:               skpmBucket: 'Std 3.2',
+ 401:               secondarySkpmBucket: hasStd5 ? 'Std 5' : undefined,
+ 402:               additionalSkpmBuckets: hasSumbangan271 ? ['Std 2'] : undefined,
+ 403:               skpmAspek271Linked: hasSumbangan271,
+ 404:               skpmCodeBadge: badgeParts.join(' + '),
+ 405:               skpmStandard: act.skpmStandardTitle || skpmSpec.standardTitle,
+ 406:               skpmAspek: act.skpmAspekTitle || skpmSpec.aspekTitle,
+ 407:               skpmStandardKualiti: act.skpmKualitiStatement || skpmSpec.kualitiStatement,
+ 408:               programTitle: (act.programName || 'AKTIVITI KOKURIKULUM').toUpperCase(),
+ 409:               tarikh: act.date || '',
+ 410:               masa: act.masa || '-',
+ 411:               tempat: act.venue || '-',
+ 412:               sasaran:
+ 413:                 act.participantCount === 0
+ 414:                   ? 'Guru & Pengurusan Sekolah'
+ 415:                   : `${act.participantCount || 0} Orang Murid (${act.level || 'Sekolah'})`,
+ 416:               peringkat: act.level,
+ 417:               pencapaian: act.jenis === 'pertandingan' ? String(act.pencapaian || '') : undefined,
+ 418:               rawNotes: '',
+ 419:               objektif: [act.objective1, act.objective2, act.objective3].filter(Boolean) as string[],
+ 420:               pengisianAktiviti: [
+ 421:                 `Penganjur: ${act.organizer || '-'}${act.unit ? ` · Unit: ${act.unit}` : ''} (Peringkat: ${act.level || 'Sekolah'})`,
+ 422:                 ...(act.jenis === 'pertandingan' && act.pencapaian
+ 423:                   ? [`Pencapaian Rasmi: ${act.pencapaian}`]
+ 424:                   : []),
+ 425:                 ...(act.jurulatih?.length ? [`Jurulatih: ${act.jurulatih.join(', ')}`] : []),
+ 426:                 ...(act.guruPengiring?.length ? [`Guru Pengiring: ${act.guruPengiring.join(', ')}`] : []),
+ 427:               ],
+ 428:               impak: [act.impact || '', act.skpmStandard5Label || skpmSpec.standard5Label || ''].filter(Boolean),
+ 429:               refleksiDanTindakanSusulan: [
+ 430:                 act.reflection ? `Refleksi: ${act.reflection}` : '',
+ 431:                 act.kekuatan ? `Kekuatan: ${act.kekuatan}` : '',
+ 432:                 act.kelemahanCadangan ? `Penambahbaikan: ${act.kelemahanCadangan}` : '',
+ 433:                 act.tindakanSusulan ? `Tindakan Susulan: ${act.tindakanSusulan}` : '',
+ 434:               ].filter(Boolean),
+ 435:               photos: (act.images || []).slice(0, 3),
+ 436:               preparedByName: (act.jurulatih?.[0] || act.createdBy || '').toUpperCase(),
+ 437:               preparedByTitle:
+ 438:                 act.category === 'KOAKADEMIK'
+ 439:                   ? `Penyelaras ${act.unit || 'Koakademik'}`
+ 440:                   : 'Jurulatih / Guru Penasihat',
+ 441:               createdBy: act.createdBy || '',
+ 442:               createdAt: act.createdAt || '',
+ 443:               updatedAt: act.updatedAt || act.createdAt || '',
+ 444:             };
+ 445:             loadedDocs.push(synthesizedOpr);
+ 446:           });
+ 447:       } catch (err) {
+ 448:         handleFirestoreError(err, OperationType.LIST, 'koko_activities');
+ 449:       }
+ 450: 
+ 451:       // Merge any koko_meeting_reports not yet mirrored into ai_setiausaha_documents
+ 452:       try {
+ 453:         const repSnap = await getDocs(collection(db, 'koko_meeting_reports'));
+ 454:         repSnap.docs
+ 455:           .filter((d) => belongsToSchool(d.data() as Record<string, unknown>, activeSchoolCode))
+ 456:           .forEach((d) => {
+ 457:             const rep = { id: d.id, ...d.data() } as KokoMeetingReport;
+ 458:             const mirrorDocId = scopedDocId(activeSchoolCode, `koko_meeting_${d.id}`);
+ 459:             if (mirroredSourceIds.has(d.id) || mirroredSourceIds.has(mirrorDocId)) {
+ 460:               return;
+ 461:             }
+ 462:             let code: SKPMKokoStandardCode = '3.2.2.1';
+ 463:             if (Number(rep.meetingNumber) === 1) code = '3.2.1.1';
+ 464:             else if (Number(rep.meetingNumber) === 11) code = '3.2.7.1';
+ 465:             else if (rep.category === 'uniform') code = '3.2.3.1';
+ 466:             else if (rep.category === 'sport') code = '3.2.4.1';
+ 467:             const skpmSpec = getKokoSKPMOption(rep.skpmStandardCode || code);
+ 468: 
+ 469:             const synthesizedMeeting: OPRPosterDocument = {
+ 470:               id: `koko_meeting_legacy_${d.id}`,
+ 471:               docKind: 'OPR',
+ 472:               sourceModule: 'KOKURIKULUM_MEETING',
+ 473:               sourceActivityId: d.id,
+ 474:               schoolCode: activeSchoolCode,
+ 475:               academicYear: rep.academicYear || resolvedYear,
+ 476:               pillar: 'KOKURIKULUM',
+ 477:               kodMySG: skpmSpec.code,
+ 478:               jawatankuasaInduk: rep.groupName || 'Unit Kokurikulum',
+ 479:               jawatanRasmi: rep.jawatanPenyedia || 'Guru Penasihat',
+ 480:               skpmBucket: 'Std 3.2',
+ 481:               secondarySkpmBucket: 'Std 5',
+ 482:               skpmCodeBadge: `${skpmSpec.code} (P${rep.meetingNumber})`,
+ 483:               skpmStandard: rep.skpmStandardTitle || skpmSpec.standardTitle,
+ 484:               skpmAspek: rep.skpmAspekTitle || skpmSpec.aspekTitle,
+ 485:               skpmStandardKualiti: rep.skpmKualitiStatement || skpmSpec.kualitiStatement,
+ 486:               programTitle: `${(rep.groupName || 'UNIT KOKURIKULUM').toUpperCase()} — ${(rep.tajukAktiviti || rep.meetingTitle || `PERJUMPAAN ${rep.meetingNumber}`).toUpperCase()}`,
+ 487:               tarikh: rep.date || '',
+ 488:               masa: `${rep.timeStart || '13:30'} – ${rep.timeEnd || '15:00'}`,
+ 489:               tempat: rep.venue || 'Sekolah',
+ 490:               sasaran: `Ahli Unit (${rep.attendanceStats?.present || 0}/${rep.attendanceStats?.total || 0} Hadir · ${rep.attendanceStats?.percentage || 0}%)`,
+ 491:               rawNotes: '',
+ 492:               objektif: Array.isArray(rep.objektif) ? rep.objektif.filter(Boolean) : [],
+ 493:               pengisianAktiviti: [
+ 494:                 `Modul KPM: ${rep.kpmModule || 'Modul Kokurikulum KPM'}`,
+ 495:                 rep.ringkasanAktiviti || '',
+ 496:                 ...(rep.guruPenasihatHadir?.length
+ 497:                   ? [`Guru Penasihat Hadir: ${rep.guruPenasihatHadir.join(', ')}`]
+ 498:                   : []),
+ 499:               ].filter(Boolean),
+ 500:               impak: [
+
+
+```
+
+```python
+import zipfile
+
+with zipfile.ZipFile('i-guide (2).zip', 'r') as z:
+    hub = z.read('src/components/AISetiausaha/AISetiausahaHub.tsx').decode('utf-8', errors='ignore').splitlines()
+    print("=== AISetiausahaHub.tsx lines 501..630 ===")
+    for i in range(500, min(630, len(hub))):
+        print(f"{i+1:4d}: {hub[i]}")
+    print("\n=== AISetiausahaHub.tsx lines 1130..1271 ===")
+    for i in range(1129, len(hub)):
+        print(f"{i+1:4d}: {hub[i]}")
+
+
+```
+
+```text
+=== AISetiausahaHub.tsx lines 501..630 ===
+ 501:                 rep.refleksiImpak || '',
+ 502:                 skpmSpec.standard5Label || '',
+ 503:               ].filter(Boolean),
+ 504:               refleksiDanTindakanSusulan: [
+ 505:                 rep.refleksiImpak ? `Refleksi: ${rep.refleksiImpak}` : '',
+ 506:                 rep.halLain ? `Hal Lain: ${rep.halLain}` : '',
+ 507:               ].filter(Boolean),
+ 508:               photos: (rep.images || []).slice(0, 3),
+ 509:               preparedByName: (rep.disediakanOleh || '').toUpperCase(),
+ 510:               preparedByTitle: rep.jawatanPenyedia || 'Guru Penasihat',
+ 511:               createdBy: rep.disediakanOleh || '',
+ 512:               createdAt: rep.createdAt || '',
+ 513:               updatedAt: rep.updatedAt || rep.createdAt || '',
+ 514:             };
+ 515:             loadedDocs.push(synthesizedMeeting);
+ 516:           });
+ 517:       } catch (err) {
+ 518:         handleFirestoreError(err, OperationType.LIST, 'koko_meeting_reports');
+ 519:       }
+ 520: 
+ 521:       loadedDocs.sort((a, b) =>
+ 522:         String(b.updatedAt || b.createdAt || '').localeCompare(
+ 523:           String(a.updatedAt || a.createdAt || '')
+ 524:         )
+ 525:       );
+ 526:       setDocuments(loadedDocs);
+ 527: 
+ 528:       // 5. Load MESYUARAT tasks from `makluman_tasks` (across ALL sessions 2026/2027) for 1-click Import Memo / Minit
+ 529:       try {
+ 530:         const makSnap = await getDocs(collection(db, 'makluman_tasks'));
+ 531:         const meetingTasks: SetiausahaMaklumanMeeting[] = makSnap.docs
+ 532:           .filter((d) => belongsToSchool(d.data() as Record<string, unknown>, activeSchoolCode))
+ 533:           .map((d) => ({ id: d.id, ...(d.data() as Record<string, any>) } as SetiausahaMaklumanMeeting))
+ 534:           .filter(
+ 535:             (t) =>
+ 536:               t.category === 'MESYUARAT' ||
+ 537:               String(t.title || '').toUpperCase().includes('MESYUARAT')
+ 538:           )
+ 539:           .sort((a, b) => String(b.dueDate || '').localeCompare(String(a.dueDate || '')));
+ 540:         setMaklumanMeetings(meetingTasks);
+ 541:       } catch (err) {
+ 542:         handleFirestoreError(err, OperationType.LIST, 'makluman_tasks');
+ 543:       }
+ 544:     } finally {
+ 545:       setLoading(false);
+ 546:     }
+ 547:   }, [activeSchoolCode, currentUser.academic_year]);
+ 548: 
+ 549:   useEffect(() => {
+ 550:     if (authReadyUid) {
+ 551:       loadWorkspaceData();
+ 552:     }
+ 553:   }, [authReadyUid, loadWorkspaceData]);
+ 554: 
+ 555:   // Apply incoming prefill from Paparan Makluman (📩 Memo / 📝 Minit)
+ 556:   useEffect(() => {
+ 557:     if (!prefill?.taskItem) return;
+ 558:     const nonce = prefill.nonce || 1;
+ 559:     if (nonce === consumedPrefillNonceRef.current) return;
+ 560:     consumedPrefillNonceRef.current = nonce;
+ 561: 
+ 562:     const t = prefill.taskItem;
+ 563:     setActiveTab(prefill.targetTab);
+ 564: 
+ 565:     const titleUpper = String(t.title || '').toUpperCase();
+ 566:     const domUpper = String(t.domain || '').toUpperCase();
+ 567:     let targetPillar: MySGPillar = 'KURIKULUM';
+ 568:     if (domUpper === 'PENTADBIRAN' || titleUpper.includes('PENGURUSAN') || titleUpper.includes('PENTADBIRAN') || titleUpper.includes('STAF')) {
+ 569:       targetPillar = 'PENTADBIRAN';
+ 570:     } else if (domUpper === 'HEM') {
+ 571:       targetPillar = 'HEM';
+ 572:     } else if (domUpper === 'KOKURIKULUM' || domUpper === 'KOAKADEMIK') {
+ 573:       targetPillar = 'KOKURIKULUM';
+ 574:     }
+ 575:     setSelectedPillar(targetPillar);
+ 576: 
+ 577:     const pillarItems = mysgItems.filter((i) => i.pillar === targetPillar);
+ 578:     if (pillarItems.length > 0) {
+ 579:       const words = titleUpper
+ 580:         .replace(/MESYUARAT|BIL\.?\s*\d+\/\d+|TAKWIM|BIL\s*\d+/gi, '')
+ 581:         .split(/\s+/)
+ 582:         .filter((w) => w.length >= 4);
+ 583:       const bestMatch =
+ 584:         pillarItems.find((item) => {
+ 585:           const hay = `${item.jawatankuasaInduk} ${item.jawatanRasmi}`.toUpperCase();
+ 586:           return words.some((w) => hay.includes(w));
+ 587:         }) || pillarItems[0];
+ 588:       if (bestMatch) {
+ 589:         setSelectedKodMySG(bestMatch.kodMySG);
+ 590:       }
+ 591:     }
+ 592: 
+ 593:     setActiveMaklumanPrefill({
+ 594:       targetTab: prefill.targetTab,
+ 595:       taskItem: t,
+ 596:       nonce,
+ 597:     });
+ 598:     onClearPrefill?.();
+ 599:   }, [prefill, mysgItems, onClearPrefill]);
+ 600: 
+ 601:   const itemsInSelectedPillar = useMemo(
+ 602:     () => mysgItems.filter((item) => item.pillar === selectedPillar),
+ 603:     [mysgItems, selectedPillar]
+ 604:   );
+ 605: 
+ 606:   // Keep selectedKodMySG valid within selectedPillar
+ 607:   useEffect(() => {
+ 608:     if (itemsInSelectedPillar.length === 0) return;
+ 609:     if (!itemsInSelectedPillar.some((i) => i.kodMySG === selectedKodMySG)) {
+ 610:       setSelectedKodMySG(itemsInSelectedPillar[0].kodMySG);
+ 611:     }
+ 612:   }, [itemsInSelectedPillar, selectedKodMySG]);
+ 613: 
+ 614:   const selectedItem = useMemo<MySGJawatankuasaItem>(
+ 615:     () =>
+ 616:       itemsInSelectedPillar.find((i) => i.kodMySG === selectedKodMySG) ||
+ 617:       itemsInSelectedPillar[0] ||
+ 618:       mysgItems[0] ||
+ 619:       MYSG_DEFAULT_CATALOG[0],
+ 620:     [itemsInSelectedPillar, selectedKodMySG, mysgItems]
+ 621:   );
+ 622: 
+ 623:   const selectedSkpmMeta = useMemo(
+ 624:     () => resolveSKPMForMySGItem(selectedItem),
+ 625:     [selectedItem]
+ 626:   );
+ 627: 
+ 628:   const handleSaveDoc = useCallback(
+ 629:     async <T extends AnySetiausahaDocument>(
+ 630:       docInput: Partial<T> & { docKind: T['docKind'] }
+
+=== AISetiausahaHub.tsx lines 1130..1271 ===
+1130:               </button>
+1131:             </div>
+1132: 
+1133:             <div className="p-4 border-b border-slate-800 space-y-3 bg-slate-950/60">
+1134:               <div className="flex flex-wrap gap-1.5">
+1135:                 {(
+1136:                   [
+1137:                     { id: 'ALL', label: `Semua (${documents.length})` },
+1138:                     { id: 'OPR', label: `OPR (${oprDocs.length})` },
+1139:                     { id: 'MEMO', label: `Memo (${memoDocs.length})` },
+1140:                     { id: 'MINIT', label: `Minit (${minitDocs.length})` },
+1141:                     { id: 'LANTIKAN', label: `Lantikan (${lantikanDocs.length})` },
+1142:                   ] as const
+1143:                 ).map((tab) => (
+1144:                   <button
+1145:                     key={tab.id}
+1146:                     type="button"
+1147:                     onClick={() => setArchiveKindFilter(tab.id)}
+1148:                     className={`px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
+1149:                       archiveKindFilter === tab.id
+1150:                         ? 'bg-teal-600 border-teal-500 text-white'
+1151:                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+1152:                     }`}
+1153:                   >
+1154:                     {tab.label}
+1155:                   </button>
+1156:                 ))}
+1157:               </div>
+1158: 
+1159:               <div className="relative">
+1160:                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+1161:                 <input
+1162:                   type="text"
+1163:                   value={archiveSearch}
+1164:                   onChange={(e) => setArchiveSearch(e.target.value)}
+1165:                   placeholder="Cari tajuk dokumen, jawatankuasa, atau guru..."
+1166:                   className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white outline-none focus:border-teal-500"
+1167:                 />
+1168:               </div>
+1169:             </div>
+1170: 
+1171:             <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+1172:               {documents
+1173:                 .filter((d) => archiveKindFilter === 'ALL' || d.docKind === archiveKindFilter)
+1174:                 .filter((d) => {
+1175:                   if (!archiveSearch.trim()) return true;
+1176:                   const q = archiveSearch.toLowerCase();
+1177:                   const title =
+1178:                     d.docKind === 'OPR'
+1179:                       ? d.programTitle
+1180:                       : d.docKind === 'MEMO'
+1181:                       ? d.tajukMesyuarat
+1182:                       : d.docKind === 'MINIT'
+1183:                       ? d.tajukMesyuarat || d.minitTitle || ''
+1184:                       : d.teacherName || d.jawatanRasmi || '';
+1185:                   const hay = `${title} ${(d as any).jawatankuasaInduk || ''} ${(d as any).rujukanKami || ''} ${d.academicYear || ''}`.toLowerCase();
+1186:                   return hay.includes(q);
+1187:                 })
+1188:                 .map((d) => {
+1189:                   const sessionYr = resolveDocSessionYear(d, academicYear);
+1190:                   const docTitle =
+1191:                     d.docKind === 'OPR'
+1192:                       ? d.programTitle
+1193:                       : d.docKind === 'MEMO'
+1194:                       ? d.tajukMesyuarat
+1195:                       : d.docKind === 'MINIT'
+1196:                       ? d.tajukMesyuarat || d.minitTitle || 'MINIT MESYUARAT'
+1197:                       : d.teacherName || d.jawatanRasmi || 'SURAT LANTIKAN';
+1198:                   const docDate =
+1199:                     d.docKind === 'OPR'
+1200:                       ? d.tarikh
+1201:                       : d.docKind === 'MEMO'
+1202:                       ? d.tarikhMesyuarat
+1203:                       : d.docKind === 'MINIT'
+1204:                       ? d.tarikh || d.tarikhMesyuarat || ''
+1205:                       : d.tarikhSurat;
+1206:                   const subLabel =
+1207:                     d.docKind === 'LANTIKAN'
+1208:                       ? d.rujukanKami
+1209:                       : (d as any).jawatankuasaInduk || d.kodMySG || '';
+1210: 
+1211:                   return (
+1212:                     <button
+1213:                       key={d.id}
+1214:                       type="button"
+1215:                       onClick={() => {
+1216:                         if ((d as any).pillar) {
+1217:                           setSelectedPillar((d as any).pillar);
+1218:                         }
+1219:                         if (d.kodMySG && mysgItems.some((m) => m.kodMySG === d.kodMySG)) {
+1220:                           setSelectedKodMySG(d.kodMySG);
+1221:                         }
+1222:                         setActiveTab(d.docKind);
+1223:                         setDocToLoad({ doc: d, nonce: Date.now() });
+1224:                         setIsArchiveDrawerOpen(false);
+1225:                       }}
+1226:                       className="w-full text-left p-3.5 rounded-2xl bg-slate-950 border border-slate-800 hover:border-teal-500/60 transition space-y-1.5 cursor-pointer"
+1227:                     >
+1228:                       <div className="flex items-center justify-between gap-2 text-[10px] font-bold">
+1229:                         <div className="flex items-center gap-1.5">
+1230:                           <span className="px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800/60">
+1231:                             {d.docKind}
+1232:                           </span>
+1233:                           <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800/60">
+1234:                             Sesi {sessionYr}
+1235:                           </span>
+1236:                         </div>
+1237:                         <span className="font-mono text-slate-400">{docDate || '-'}</span>
+1238:                       </div>
+1239:                       <div className="text-xs font-black text-white uppercase line-clamp-2">
+1240:                         {docTitle}
+1241:                       </div>
+1242:                       {subLabel && (
+1243:                         <div className="text-[11px] text-slate-400 truncate">{subLabel}</div>
+1244:                       )}
+1245:                     </button>
+1246:                   );
+1247:                 })}
+1248:               {documents.length === 0 && (
+1249:                 <div className="py-12 text-center text-xs text-slate-500 italic">
+1250:                   Tiada rekod dokumen tersimpan buat masa ini.
+1251:                 </div>
+1252:               )}
+1253:             </div>
+1254:           </div>
+1255:         </div>
+1256:       )}
+1257: 
+1258:       <SPPKCompetitionFormsModal
+1259:         isOpen={showSppkModal}
+1260:         onClose={() => setShowSppkModal(false)}
+1261:         schoolCode={activeSchoolCode}
+1262:         schoolName={schoolName}
+1263:         schoolLogo={schoolLogo}
+1264:         schoolSettings={schoolSettings}
+1265:         currentUser={currentUser}
+1266:       />
+1267:     </div>
+1268:   );
+1269: };
+1270: 
+1271: export default AISetiausahaHub;
+
+
+```
+
+这套模块化架构（`PaparanMaklumanView` + `ModuleMemoMesyuarat` + `ModuleMinitMesyuarat` + `AISetiausahaHub`）确实是目前整个系统里**闭环最顺畅、最贴近学校真实行政流**的设计：
+
+### 一、 这套 `Makluman ↔ Memo ↔ Minit` 闭环的 4 大亮点
+
+1. **双向无缝打通（零重复输入）**：
+* 在 **`Paparan Makluman`** 新建会议后，卡片上直接带 **`📩 Memo`** 和 **`📝 Minit`** 快捷按钮，点一下就把会议标题、日期、时间、地点和受邀老师带入公文编辑器；
+* 在 **`Memo Mesyuarat`** 写好通知后，点 **`Hantar ke Paparan Makluman & WhatsApp`**，同时完成**存档 + 推送老师待办通知 + 生成 WhatsApp 群发文本**。
+
+
+2. **公文格式严格合规**：
+* **Memo 通知函**：自动套用学校信头、档号（`Ruj. Kami`）、马来文日期与星期自动换算，以及标准的 **5 项 Wajib 固定议程 + `2.4 Fokus` 讨论要点**；
+* **Minit 会议记录（PKPA Bil. 2/1991）**：支持中英简记一键转正式马来文公文（`AI Rasmi PKPA`），并自动把所有标为 `TINDAKAN` 的议程同步生成 **`Borang Maklum Balas Minit Mesyuarat`（行动反馈表）**，支持切换`合并打印`、`仅会议记录`或`仅反馈表`。
+
+
+3. **跨年存档不丢失**：`Arkib Dokumen Sekolah` 支持按公文类型与关键词搜索，并在每份文档上标注 `[Sesi 2026]` / `[Sesi 2027]` 徽章，点开已保存的 `Minit` 能完整还原所有议程段落与行动责任人。
+
+---
+
+### 二、 代码深度体检：发现 5 个可进一步完善的小细节
+
+逐行核查这份代码后，发现以下几个细节一旦修补，整条 `Makluman → Memo → Minit` 链路会更加丝滑：
+
+1. **导入 Memo 到 Minit 时，出席名单尚未 1:1 过滤**：
+* 目前在 `ModuleMemoMesyuarat.tsx` 选了某几位老师（`Ahli Jawatankuasa`）保存 Memo 后，到 `ModuleMinitMesyuarat.tsx` 点 `Import Memo` 时，出席列表（`Kehadiran Ahli`）仍会把全校所有老师列出来，还没有自动收窄为 **Memo 里选中的那几位老师**。
+
+
+2. **Memo 切换 `Ahli Jawatankuasa` 时，未自动预选该委员会的 `Penyelaras + Ahli**`：
+* 点选 `Ahli Jawatankuasa` 按钮时，应自动读取当前选定委员会在 `MySG` 里委任的 **`Penyelaras` + `Ahli (AJK)**` 勾选上（同时允许手动微调）。
+
+
+3. **从 `Paparan Makluman` 导入时，`4. Fokus` 会带入元数据前缀**：
+* 推送到 `Makluman` 时把 `Jawatankuasa ... · Masa: ... Agenda Fokus: 4.1 ...` 拼在了一起，反向导入 `Memo / Minit` 时需要自动剥离前缀和 Wajib 议程，只保留纯粹的讨论事项。
+
+
+4. **跨年会议（如 `3/2026` 兼 `Perancangan Tahun 2027`）双年份标签**：
+* 标题或议程同时涉及 `2026` 与 `2027` 时，自动标记双学年归属（`Sesi 2026 & 2027`），确保在两个学年下都能检索到。
+
+
+5. **打印按钮统一接入单页纯净打印引擎**：
+* `ModuleMemoMesyuarat` 和 `ModuleMinitMesyuarat` 目前调用原生 `window.print()`，接入统一的 `triggerSmartPrint` 后，可避免打印出深色背景框，并在沙盒预览中也能正常导出 A4 文件。
+
+
+
+---
+
+### 三、 直接复制给 Google AI Studio 的精准微调指令
+
+如果您想保留这套完全相同的界面与排版，只把上面这 5 个细节打磨到位，可直接复制以下指令发给 **Google AI Studio**：
+
+```text
+iSEPADU AI — POLISH OUR MODULAR `PaparanMaklumanView` <-> `ModuleMemoMesyuarat` <-> `ModuleMinitMesyuarat` WORKFLOW (KEEPING THE EXACT CURRENT UI & LAYOUT)
+
+(IMPORTANT: To save quota, update `src/components/AISetiausaha/types.ts`, `src/components/AISetiausaha/ModuleMemoMesyuarat.tsx`, `src/components/AISetiausaha/ModuleMinitMesyuarat.tsx`, and `src/components/AISetiausaha/AISetiausahaHub.tsx` directly, and do NOT create or run any test files in the `tests/` folder.)
+
+Keep the exact visual design and modular structure of `ModuleMemoMesyuarat.tsx` and `ModuleMinitMesyuarat.tsx`, and apply these 5 targeted refinements:
+
+1. STRICT 1-TO-1 ATTENDEE INHERITANCE FROM MEMO TO MINIT (`ModuleMinitMesyuarat.tsx`):
+- When importing a saved Memo (`handleImportFromMemo`) where `memo.recipientMode === 'AHLI_TERPILIH'` (or `memo.recipientNames` / `memo.recipientIds` is a specific subset of teachers):
+  * Scope the `Kehadiran Ahli` checklist and `hadirNames` **exclusively to the invited teachers from that Memo** (do NOT list all school teachers when only specific teachers were invited in the Memo), defaulting all of them to `Hadir` with 1-click `Bersebab` toggles.
+  * When `memo.recipientMode === 'SEMUA_GURU'` (or no Memo is linked), show the full `activeTeachers` roster as before.
+
+2. AUTO-PRESELECT COMMITTEE `PENYELARAS + AHLI` IN `ModuleMemoMesyuarat.tsx`:
+- When switching to `Ahli Jawatankuasa` (`recipientMode === 'AHLI_TERPILIH'`) or selecting a committee (`selectedItem`), automatically pre-check the teacher IDs matching `selectedItem.assignedTeacherId` / `assignedTeacherName` (`Penyelaras`) and `(selectedItem.ahliList || [])` (`Ahli Jawatankuasa`), while still allowing manual checkbox toggling.
+
+3. CLEAN `4. FOKUS / PERBINCANGAN UTAMA` SANITIZER (`ModuleMemoMesyuarat.tsx` & `ModuleMinitMesyuarat.tsx`):
+- Add a helper `cleanAgendaFokusLines(raw: string): string[]` that strips leading metadata (`Jawatankuasa ... · Masa: ... · Tempat: ... Agenda Fokus:`), splits by newline or `|`, removes numbering (`4.1`, `2.4`), and excludes mandatory wajib items (`Perutusan Pengerusi`, `Pengesahan Minit`, `Perkara-perkara Berbangkit`, `Hal-hal Lain`, `Penutup`) so `4. Fokus` ONLY contains clean discussion topics.
+
+4. DUAL-SESSION TAGGING (`2026 & 2027`) BASED ON `TAJUK` + `TARIKH` (`types.ts` & `AISetiausahaHub.tsx`):
+- In `resolveDocSessionYear` / `resolveDocSessionYears`, inspect `tajukMesyuarat` / `programTitle` first (e.g., `3/2026` -> `'2026'`) and check if next-year planning (`Perancangan Tahun 2027` / `2027`) is also mentioned in the title or agenda; if both years appear, tag the document with `academicYears: ['2026', '2027']` (`Sesi 2026 & 2027`) so it appears under both sessions.
+
+5. RELIABLE A4 PRINT / PDF EXPORT (`ModuleMemoMesyuarat.tsx` & `ModuleMinitMesyuarat.tsx`):
+- Replace raw `window.print()` on the **`Cetak / Eksport PDF (A4)`** buttons with `triggerSmartPrint({ elementId: 'memo-a4-print-sheet' / 'minit-a4-print-sheet', title, orientation: 'portrait' })` from `../../utils/oprPrintHelper` so printing always outputs clean white A4 pages with automatic fallback download.
+
+```
