@@ -1,14 +1,16 @@
 /**
  * Smart Print & Standalone HTML Export Helper for iSEPADU AI
- * Safe inside sandboxed iframes (avoids window.open / window.alert).
- * Prints the target element cleanly on A4 pages via a temporary print style + hidden iframe or native print,
- * and allows downloading a self-contained printable .html file.
+ * Uses a main-document @media print portal (#isepadu-print-portal) with 1-Page A4 Auto-Fit
+ * and automatic 600ms sandbox detection fallback so printing works 100% reliably
+ * in both live browsers and sandboxed iframe previews.
  */
 
 export interface SmartPrintOptions {
   elementId: string;
   title?: string;
   orientation?: 'portrait' | 'landscape';
+  singlePage?: boolean;
+  onNotice?: (message: string) => void;
 }
 
 export interface SmartPrintResult {
@@ -19,7 +21,8 @@ export interface SmartPrintResult {
 export function buildPrintableHtmlDocument(
   innerHtml: string,
   title: string,
-  orientation: 'portrait' | 'landscape' = 'portrait'
+  orientation: 'portrait' | 'landscape' = 'portrait',
+  singlePage: boolean = false
 ): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const resolvedHtml = origin
@@ -29,7 +32,9 @@ export function buildPrintableHtmlDocument(
   // Collect existing stylesheet links and inline styles from the current document
   let headStyles = '';
   if (typeof document !== 'undefined') {
-    const styleNodes = document.querySelectorAll('style, link[rel="stylesheet"]');
+    const styleNodes = document.querySelectorAll(
+      'style:not(#isepadu-print-style), link[rel="stylesheet"]'
+    );
     styleNodes.forEach((node) => {
       if (node.tagName.toLowerCase() === 'link') {
         const href = (node as HTMLLinkElement).href;
@@ -42,6 +47,66 @@ export function buildPrintableHtmlDocument(
     });
   }
 
+  const pageMargin = singlePage ? '6mm' : '10mm';
+
+  const singlePageStyles = singlePage
+    ? `
+    html, body {
+      width: 210mm;
+      height: 297mm;
+      max-height: 297mm;
+      overflow: hidden !important;
+    }
+    .opr-single-page-viewport {
+      width: 198mm;
+      height: 285mm;
+      max-height: 285mm;
+      margin: 0 auto;
+      overflow: hidden !important;
+      box-sizing: border-box;
+      page-break-after: avoid !important;
+      page-break-inside: avoid !important;
+      break-after: avoid !important;
+      break-inside: avoid !important;
+      position: relative;
+      background: #ffffff;
+    }
+    .opr-single-page-content {
+      width: 100%;
+      box-sizing: border-box;
+      transform-origin: top left;
+    }
+    .opr-single-page-content > * {
+      max-width: 100% !important;
+      margin: 0 auto !important;
+      box-shadow: none !important;
+    }
+    `
+    : '';
+
+  const bodyMarkup = singlePage
+    ? `<div id="opr-single-page-viewport" class="opr-single-page-viewport"><div id="opr-single-page-content" class="opr-single-page-content">${resolvedHtml}</div></div>`
+    : resolvedHtml;
+
+  const autoFitScript = singlePage
+    ? `
+      try {
+        var viewport = document.getElementById('opr-single-page-viewport');
+        var content = document.getElementById('opr-single-page-content');
+        if (viewport && content) {
+          var maxH = viewport.clientHeight || 1075;
+          var actualH = content.scrollHeight;
+          if (actualH > maxH) {
+            var scale = Math.max(0.72, (maxH - 5) / actualH);
+            content.style.zoom = scale.toFixed(4);
+            content.style.transform = 'scale(' + scale.toFixed(4) + ')';
+            content.style.width = (100 / scale).toFixed(2) + '%';
+          }
+        }
+      } catch (err) {}
+    `
+    : '';
+
   return `<!DOCTYPE html>
 <html lang="ms">
 <head>
@@ -52,7 +117,7 @@ export function buildPrintableHtmlDocument(
   <style>
     @page {
       size: A4 ${orientation};
-      margin: 10mm;
+      margin: ${pageMargin};
     }
     html, body {
       margin: 0;
@@ -75,74 +140,252 @@ export function buildPrintableHtmlDocument(
         display: none !important;
       }
     }
+    ${singlePageStyles}
   </style>
 </head>
 <body>
-  ${resolvedHtml}
+  ${bodyMarkup}
   <script>
     window.addEventListener('load', function() {
       setTimeout(function() {
-        try { window.focus(); window.print(); } catch (e) {}
-      }, 350);
+        ${autoFitScript}
+        setTimeout(function() {
+          try { window.focus(); window.print(); } catch (e) {}
+        }, 120);
+      }, 250);
     });
   </script>
 </body>
 </html>`;
 }
 
+function cleanupPrintPortal(): void {
+  if (typeof document === 'undefined') return;
+  const existingPortal = document.getElementById('isepadu-print-portal');
+  if (existingPortal && existingPortal.parentNode) {
+    existingPortal.parentNode.removeChild(existingPortal);
+  }
+  const existingStyle = document.getElementById('isepadu-print-style');
+  if (existingStyle && existingStyle.parentNode) {
+    existingStyle.parentNode.removeChild(existingStyle);
+  }
+}
+
 export function triggerSmartPrint(options: SmartPrintOptions): SmartPrintResult {
-  const { elementId, title = 'Dokumen_Rasmi_Sekolah', orientation = 'portrait' } = options;
-  if (typeof document === 'undefined') {
-    return { mode: 'error', message: 'Persekitaran pelayar tidak tersedia.' };
+  const {
+    elementId,
+    title = 'Dokumen_Rasmi_Sekolah',
+    orientation = 'portrait',
+    singlePage = false,
+    onNotice,
+  } = options;
+
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    const errMsg = 'Persekitaran pelayar tidak tersedia.';
+    onNotice?.(errMsg);
+    return { mode: 'error', message: errMsg };
   }
 
   const target = document.getElementById(elementId);
   if (!target) {
-    return {
-      mode: 'error',
-      message: `Elemen cetakan (#${elementId}) tidak ditemui pada halaman.`,
-    };
+    const errMsg = `Elemen cetakan (#${elementId}) tidak ditemui pada halaman.`;
+    onNotice?.(errMsg);
+    return { mode: 'error', message: errMsg };
   }
 
   try {
-    // Print via hidden iframe so only the target A4 document is printed with exact styles
-    const existingIframe = document.getElementById('isepadu-smart-print-iframe');
-    if (existingIframe && existingIframe.parentNode) {
-      existingIframe.parentNode.removeChild(existingIframe);
+    cleanupPrintPortal();
+
+    const pageMargin = singlePage ? '6mm' : '10mm';
+    const portalWidth = orientation === 'portrait' ? '198mm' : '277mm';
+
+    // 1. Inject main-document @media print style sheet
+    const styleEl = document.createElement('style');
+    styleEl.id = 'isepadu-print-style';
+    styleEl.innerHTML = `
+      @page {
+        size: A4 ${orientation};
+        margin: ${pageMargin};
+      }
+      @media screen {
+        #isepadu-print-portal {
+          position: fixed;
+          left: -9999px;
+          top: 0;
+          width: ${portalWidth};
+          background: #ffffff;
+          color: #000000;
+          z-index: -1;
+          pointer-events: none;
+        }
+      }
+      @media print {
+        html, body {
+          background: #ffffff !important;
+          color: #000000 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          ${
+            singlePage
+              ? 'width: 210mm !important; height: 297mm !important; max-height: 297mm !important; overflow: hidden !important;'
+              : ''
+          }
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        body > *:not(#isepadu-print-portal) {
+          display: none !important;
+        }
+        #isepadu-print-portal {
+          display: block !important;
+          position: static !important;
+          left: auto !important;
+          top: auto !important;
+          width: ${singlePage ? '198mm' : '100%'} !important;
+          ${
+            singlePage
+              ? 'height: 285mm !important; max-height: 285mm !important; overflow: hidden !important; page-break-after: avoid !important; page-break-inside: avoid !important; break-after: avoid !important; break-inside: avoid !important;'
+              : ''
+          }
+          margin: 0 auto !important;
+          background: #ffffff !important;
+          color: #000000 !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        #isepadu-print-portal .print\\:hidden {
+          display: none !important;
+        }
+      }
+    `;
+    document.head.appendChild(styleEl);
+
+    // 2. Clone target into #isepadu-print-portal
+    const portalEl = document.createElement('div');
+    portalEl.id = 'isepadu-print-portal';
+    const clone = target.cloneNode(true) as HTMLElement;
+    clone.removeAttribute('id');
+    clone.style.maxWidth = '100%';
+    clone.style.margin = '0 auto';
+    clone.style.boxShadow = 'none';
+    portalEl.appendChild(clone);
+    document.body.appendChild(portalEl);
+
+    // 3. 1-Page A4 Auto-Fit Measurement (singlePage === true)
+    if (singlePage) {
+      const scrollH = portalEl.scrollHeight || clone.scrollHeight;
+      if (scrollH > 1075) {
+        const scale = Math.max(0.72, 1070 / scrollH);
+        (clone.style as any).zoom = scale.toFixed(4);
+        clone.style.transformOrigin = 'top left';
+      }
     }
 
-    const iframe = document.createElement('iframe');
-    iframe.id = 'isepadu-smart-print-iframe';
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    iframe.style.visibility = 'hidden';
-    document.body.appendChild(iframe);
+    // 4. Detect Sandboxed window.print() Suppression & Trigger Immediate Fallback
+    let printDialogConfirmed = false;
+    let cleaned = false;
 
-    const htmlDoc = buildPrintableHtmlDocument(target.outerHTML, title, orientation);
-    const doc = iframe.contentWindow?.document || iframe.contentDocument;
-    if (doc) {
-      doc.open();
-      doc.write(htmlDoc);
-      doc.close();
-      return {
-        mode: 'native',
-        message: 'Dialog cetakan dibuka.',
-      };
+    const mql =
+      typeof window.matchMedia === 'function' ? window.matchMedia('print') : null;
+
+    const markPrintActive = () => {
+      printDialogConfirmed = true;
+    };
+
+    const handleMqlChange = (e: MediaQueryListEvent) => {
+      if (e.matches) {
+        printDialogConfirmed = true;
+      } else if (printDialogConfirmed) {
+        finalizeCleanup();
+      }
+    };
+
+    const finalizeCleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      window.removeEventListener('beforeprint', markPrintActive);
+      window.removeEventListener('afterprint', finalizeCleanup);
+      if (mql && typeof mql.removeEventListener === 'function') {
+        mql.removeEventListener('change', handleMqlChange);
+      }
+      cleanupPrintPortal();
+    };
+
+    window.addEventListener('beforeprint', markPrintActive);
+    window.addEventListener('afterprint', finalizeCleanup);
+    if (mql) {
+      if (mql.matches) printDialogConfirmed = true;
+      if (typeof mql.addEventListener === 'function') {
+        mql.addEventListener('change', handleMqlChange);
+      }
     }
 
+    const prevTitle = document.title;
+    if (title) {
+      document.title = title;
+    }
+
+    const startTime = Date.now();
+    window.focus();
     window.print();
-    return { mode: 'native', message: 'Dialog cetakan dibuka.' };
+    const elapsedSyncMs = Date.now() - startTime;
+
+    if (title) {
+      setTimeout(() => {
+        document.title = prevTitle;
+      }, 1200);
+    }
+
+    // If window.print() blocked synchronously for >250ms, the native print dialog opened
+    if (elapsedSyncMs > 250) {
+      printDialogConfirmed = true;
+    }
+
+    const isSandboxedFrame = (() => {
+      try {
+        return window.self !== window.top;
+      } catch {
+        return true;
+      }
+    })();
+
+    setTimeout(() => {
+      if (mql?.matches) {
+        printDialogConfirmed = true;
+      }
+      if (isSandboxedFrame && !printDialogConfirmed) {
+        finalizeCleanup();
+        const dlRes = downloadStandalonePrintHtml(options);
+        onNotice?.(dlRes.message);
+      }
+    }, 600);
+
+    // Safety cleanup after 20s in case afterprint isn't emitted on mobile browsers
+    setTimeout(() => {
+      finalizeCleanup();
+    }, 20000);
+
+    return {
+      mode: 'native',
+      message: singlePage
+        ? 'Dialog cetakan 1 Muka Surat (A4) dibuka.'
+        : 'Dialog cetakan A4 dibuka.',
+    };
   } catch (err) {
-    return downloadStandalonePrintHtml(options);
+    cleanupPrintPortal();
+    const dlRes = downloadStandalonePrintHtml(options);
+    onNotice?.(dlRes.message);
+    return dlRes;
   }
 }
 
 export function downloadStandalonePrintHtml(options: SmartPrintOptions): SmartPrintResult {
-  const { elementId, title = 'Dokumen_Rasmi_Sekolah', orientation = 'portrait' } = options;
+  const {
+    elementId,
+    title = 'Dokumen_Rasmi_Sekolah',
+    orientation = 'portrait',
+    singlePage = false,
+  } = options;
   if (typeof document === 'undefined') {
     return { mode: 'error', message: 'Persekitaran pelayar tidak tersedia.' };
   }
@@ -156,7 +399,7 @@ export function downloadStandalonePrintHtml(options: SmartPrintOptions): SmartPr
   }
 
   try {
-    const htmlDoc = buildPrintableHtmlDocument(target.outerHTML, title, orientation);
+    const htmlDoc = buildPrintableHtmlDocument(target.outerHTML, title, orientation, singlePage);
     const blob = new Blob([htmlDoc], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const safeName = title
@@ -174,7 +417,7 @@ export function downloadStandalonePrintHtml(options: SmartPrintOptions): SmartPr
 
     return {
       mode: 'download',
-      message: `Fail cetakan "${safeName || 'Dokumen_Cetakan'}.html" berjaya dimuat turun. Buka fail tersebut untuk cetak terus ke PDF/kertas A4.`,
+      message: `Fail cetakan A4 "${safeName || 'Dokumen_Cetakan'}.html" telah dimuat turun secara automatik. Buka fail tersebut untuk Cetak / Simpan sebagai PDF (1 Muka Surat A4).`,
     };
   } catch (err: any) {
     return {

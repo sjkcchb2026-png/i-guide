@@ -289,8 +289,10 @@ export default function KokoSmartOPRManager({
         schoolCode: activeSchoolCode,
         academicYear: act.academicYear || '2026',
         docKind: 'OPR',
-        skpmBucket: 'STD_3_2_KOKURIKULUM',
-        skpmCodeBadge: act.skpmStandardCode || skpm.code,
+        skpmBucket: 'Std 3.2',
+        skpmCodeBadge: skpm.code,
+        skpmStandard: skpm.standardTitle,
+        pillar: 'KOKURIKULUM',
         programTitle: act.programName,
         tarikh: act.date,
         summaryLines,
@@ -298,12 +300,57 @@ export default function KokoSmartOPRManager({
 
       const res = await syncDocumentToSchoolDrive({
         schoolCode: activeSchoolCode,
+        schoolName: effectiveSchoolName,
+        schoolLogoUrl: effectiveSchoolLogo,
         academicYear: act.academicYear || '2026',
         docKind: 'OPR',
-        skpmBucket: 'STD_3_2_KOKURIKULUM',
-        skpmCodeBadge: act.skpmStandardCode || skpm.code,
+        skpmBucket: 'Std 3.2',
+        skpmCodeBadge: skpm.code,
+        skpmStandard: skpm.standardTitle,
+        skpmAspek: skpm.aspekTitle,
+        skpmStandardKualiti: skpm.kualitiStatement,
+        pillar: 'KOKURIKULUM',
+        kodMySG: skpm.code,
+        jawatankuasaInduk: act.unit || 'Pengurusan Kokurikulum & Koakademik',
         programTitle: act.programName,
         tarikh: act.date,
+        masa: act.masa || '08:00 pagi – 12:30 tengah hari',
+        tempat: act.venue || effectiveSchoolName,
+        sasaran:
+          act.participantCount === 0
+            ? 'Guru & Pengurusan Sekolah'
+            : `${act.participantCount || 0} Orang Murid (${act.level})`,
+        peringkat: act.level,
+        pencapaian: act.jenis === 'pertandingan' ? act.pencapaian : undefined,
+        objektif: [
+          act.objective1 ||
+            'Memperkasakan bakat, disiplin dan penglibatan aktif murid mengikut piawaian kokurikulum KPM.',
+        ],
+        pengisianAktiviti: summaryLines,
+        impak: [
+          act.impact ||
+            'Meningkatkan kemenjadian murid serta menyumbang kepada skor kecemerlangan kokurikulum sekolah.',
+          skpm.standard5Label || '',
+        ].filter(Boolean),
+        refleksiDanTindakanSusulan: [
+          act.reflection || '',
+          act.kekuatan ? `Kekuatan: ${act.kekuatan}` : '',
+          act.tindakanSusulan || act.kelemahanCadangan
+            ? `Tindakan Susulan: ${act.tindakanSusulan || act.kelemahanCadangan}`
+            : '',
+        ].filter(Boolean),
+        preparedByName: (
+          (act.jurulatih && act.jurulatih[0]) ||
+          act.createdBy ||
+          profile.name ||
+          'GURU PENASIHAT'
+        ).toUpperCase(),
+        preparedByTitle:
+          act.category === 'KOAKADEMIK'
+            ? `Penyelaras ${act.unit || 'Koakademik'}`
+            : act.unit
+            ? `Jurulatih / Penyelaras ${act.unit}`
+            : 'Jurulatih / Guru Penasihat',
         elementId,
         htmlContent: elementId ? undefined : fallbackHtml,
         photos: act.images || [],
@@ -3165,6 +3212,7 @@ export default function KokoSmartOPRManager({
                     elementId: 'koko-skas-opr-poster',
                     title: selectedPrintActivity.programName || 'OPR_Kokurikulum',
                     orientation: 'portrait',
+                    singlePage: true,
                   });
                   setBanner({
                     type: res.mode === 'error' ? 'error' : 'info',
@@ -3184,6 +3232,8 @@ export default function KokoSmartOPRManager({
                     elementId: 'koko-skas-opr-poster',
                     title: selectedPrintActivity.programName || 'OPR_Kokurikulum',
                     orientation: 'portrait',
+                    singlePage: true,
+                    onNotice: (msg) => setBanner({ type: 'info', text: msg }),
                   });
                   if (res.mode !== 'native') {
                     setBanner({
@@ -3195,20 +3245,20 @@ export default function KokoSmartOPRManager({
                 className="flex items-center gap-2 px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-black uppercase shadow cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
-                <span>Cetak Poster OPR (A4)</span>
+                <span>Cetak Poster OPR (1 Muka Surat A4)</span>
               </button>
             </div>
           </div>
 
-          {/* EXACT SKPM KUALITI@SEKOLAH OPR POSTER LAYOUT */}
+          {/* EXACT SKPM KUALITI@SEKOLAH 1-PAGE OPR POSTER LAYOUT */}
           <div
             id="koko-skas-opr-poster"
-            className="print-portrait-sheet bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden border border-slate-200 max-w-[794px] mx-auto flex flex-col print:m-0 print:border-none print:shadow-none print:overflow-visible"
+            className="print-portrait-sheet bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden border border-slate-200 max-w-[794px] print:w-[198mm] print:h-[285mm] print:max-h-[285mm] print:overflow-hidden mx-auto flex flex-col justify-between print:m-0 print:border-none print:shadow-none"
           >
             {/* 1. TOP DARK-TEAL BANNER (#0D3B42) WITH GOLD BOTTOM BORDER */}
-            <div className="bg-[#0D3B42] text-white px-6 py-4 border-b-4 border-[#D4AF37] print-color-exact">
-              <div className="flex items-center justify-between gap-4 border-b border-teal-700/70 pb-2 mb-2">
-                <span className="text-xs font-black uppercase tracking-widest text-[#FDE047]">
+            <div className="bg-[#0D3B42] text-white px-5 py-3 border-b-4 border-[#D4AF37] print-color-exact">
+              <div className="flex items-center justify-between gap-4 border-b border-teal-700/70 pb-1.5 mb-1.5">
+                <span className="text-[11px] font-black uppercase tracking-widest text-[#FDE047]">
                   SKPM Kualiti@Sekolah {(selectedPrintActivity.date || '2026').slice(0, 4)}
                 </span>
                 <div className="flex items-center gap-2 flex-wrap text-[10px] font-bold uppercase tracking-wider text-teal-100">
@@ -3234,57 +3284,57 @@ export default function KokoSmartOPRManager({
                 </div>
               </div>
               <div className="space-y-0.5">
-                <div className="text-xs font-black uppercase tracking-wide text-white">
+                <div className="text-[11px] font-black uppercase tracking-wide text-white leading-tight">
                   {printSkpm.standardTitle}
                 </div>
-                <div className="text-[11px] font-extrabold uppercase tracking-wide text-teal-100">
+                <div className="text-[10px] font-extrabold uppercase tracking-wide text-teal-100 leading-tight">
                   {printSkpm.aspekTitle}
                 </div>
-                <p className="text-[11px] italic text-[#FDE047] leading-snug pt-0.5">
+                <p className="text-[10px] italic text-[#FDE047] leading-snug pt-0.5">
                   {printSkpm.kualitiStatement}
                 </p>
               </div>
             </div>
 
             {/* 2. CENTERED SCHOOL CREST + SCHOOL NAME + GIANT TEAL "ONE PAGE REPORT" + PROGRAM TITLE */}
-            <div className="px-6 pt-5 pb-4 border-b-2 border-slate-200 bg-slate-50/70 text-center space-y-2">
-              <div className="flex flex-col items-center justify-center gap-1.5">
+            <div className="px-5 pt-3 pb-2.5 border-b-2 border-slate-200 bg-slate-50/70 text-center space-y-1.5">
+              <div className="flex flex-col items-center justify-center gap-1">
                 <SchoolLogo
                   src={effectiveSchoolLogo}
                   schoolCode={activeSchoolCode}
-                  className="w-16 h-16 bg-white border-slate-300 shadow-sm"
+                  className="w-14 h-14 bg-white border-slate-300 shadow-sm"
                 />
-                <div className="text-sm font-black uppercase tracking-wide text-[#0D3B42]">
+                <div className="text-xs font-black uppercase tracking-wide text-[#0D3B42]">
                   {effectiveSchoolName}
                 </div>
-                <div className="text-3xl font-black tracking-tight text-[#0D3B42] leading-none pt-0.5">
+                <div className="text-2xl font-black tracking-tight text-[#0D3B42] leading-none">
                   ONE PAGE REPORT
                 </div>
-                <div className="text-[10px] font-extrabold uppercase tracking-widest text-[#B48A18]">
+                <div className="text-[9.5px] font-extrabold uppercase tracking-widest text-[#B48A18]">
                   {selectedPrintActivity.jenis === 'pertandingan'
                     ? 'LAPORAN PERTANDINGAN & PENCAPAIAN KOKURIKULUM'
                     : 'LAPORAN AKTIVITI & PROGRAM KOKURIKULUM'}
                 </div>
               </div>
 
-              <div className="mt-2 py-2 px-4 rounded-xl bg-[#0D3B42]/5 border border-[#0D3B42]/20">
-                <h2 className="text-sm font-black uppercase tracking-wide text-[#0D3B42]">
+              <div className="mt-1.5 py-1.5 px-4 rounded-xl bg-[#0D3B42]/5 border border-[#0D3B42]/20">
+                <h2 className="text-xs font-black uppercase tracking-wide text-[#0D3B42]">
                   {selectedPrintActivity.programName}
                 </h2>
               </div>
             </div>
 
             {/* 3. TWO-COLUMN BODY: LEFT 3 CIRCULAR OVERLAPPING PHOTOS + RIGHT STRUCTURED CONTENT */}
-            <div className="p-6 grid grid-cols-12 gap-5 flex-1 items-start">
+            <div className="p-4 grid grid-cols-12 gap-4 flex-1 items-start">
               {/* LEFT COLUMN (4 cols): 3 CIRCULAR OVERLAPPING / STACKED PHOTO FRAMES */}
-              <div className="col-span-4 flex flex-col items-center justify-start pt-1">
+              <div className="col-span-4 flex flex-col items-center justify-start pt-0.5">
                 {[0, 1, 2].map((idx) => {
                   const src = selectedPrintActivity.images?.[idx];
                   return (
                     <div
                       key={idx}
-                      className={`w-40 h-40 rounded-full border-4 border-[#0D3B42] ring-2 ring-[#D4AF37] overflow-hidden bg-slate-100 flex items-center justify-center shadow-lg print-color-exact ${
-                        idx > 0 ? '-mt-4' : ''
+                      className={`w-36 h-36 rounded-full border-4 border-[#0D3B42] ring-2 ring-[#D4AF37] overflow-hidden bg-slate-100 flex items-center justify-center shadow-lg print-color-exact ${
+                        idx > 0 ? '-mt-3' : ''
                       }`}
                     >
                       {src ? (
@@ -3295,7 +3345,7 @@ export default function KokoSmartOPRManager({
                         />
                       ) : (
                         <div className="text-center px-3 text-slate-400">
-                          <ImageIcon className="w-6 h-6 mx-auto mb-1 opacity-40" />
+                          <ImageIcon className="w-5 h-5 mx-auto mb-1 opacity-40" />
                           <span className="text-[10px] font-bold block">Gambar {idx + 1}</span>
                         </div>
                       )}
@@ -3305,7 +3355,7 @@ export default function KokoSmartOPRManager({
               </div>
 
               {/* RIGHT COLUMN (8 cols): OBJEKTIF, PENGISIAN, REFLEKSI, IMPAK, METADATA & PREPARED BY PILL */}
-              <div className="col-span-8 space-y-3 text-[11px] leading-relaxed">
+              <div className="col-span-8 space-y-2 text-[10.5px] leading-snug">
                 {/* 1. Objektif */}
                 <div>
                   <h4 className="text-xs font-black uppercase text-[#0D3B42] border-b border-[#D4AF37] pb-0.5 mb-1">

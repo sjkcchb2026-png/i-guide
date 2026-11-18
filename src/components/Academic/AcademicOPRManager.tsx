@@ -826,6 +826,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
                     elementId: 'academic-opr-print-sheet',
                     title: selectedRecord.programName || 'OPR_Akademik',
                     orientation: 'portrait',
+                    singlePage: true,
                   });
                   setPrintNotice(res.message);
                 }}
@@ -841,6 +842,8 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
                     elementId: 'academic-opr-print-sheet',
                     title: selectedRecord.programName || 'OPR_Akademik',
                     orientation: 'portrait',
+                    singlePage: true,
+                    onNotice: (msg) => setPrintNotice(msg),
                   });
                   if (res.mode !== 'native') {
                     setPrintNotice(res.message);
@@ -849,7 +852,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
                 className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
-                <span>Cetak Sekarang (Print / PDF)</span>
+                <span>Cetak Sekarang (1 Muka Surat A4)</span>
               </button>
             </div>
           </div>
@@ -867,10 +870,10 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
             </div>
           )}
 
-          {/* Printable Sheet (CSS A4 Styled) */}
+          {/* Printable Sheet (CSS 1-Page A4 Styled) */}
           <div
             id="academic-opr-print-sheet"
-            className="print-portrait-sheet print-color-exact bg-white text-slate-900 p-8 rounded-2xl border border-slate-300 max-w-4xl mx-auto shadow-2xl print:shadow-none print:border-none print:p-0 font-sans text-xs"
+            className="print-portrait-sheet print-color-exact bg-white text-slate-900 p-6 rounded-2xl border border-slate-300 max-w-[794px] print:w-[198mm] print:h-[285mm] print:max-h-[285mm] print:overflow-hidden mx-auto shadow-2xl print:shadow-none print:border-none print:p-2 font-sans text-xs flex flex-col justify-between"
           >
             
             {/* Header Table */}
@@ -1021,17 +1024,17 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
             </table>
 
             {/* Footer Signature */}
-            <div className="mt-8 flex justify-between items-end text-[11px] px-2">
+            <div className="mt-4 flex justify-between items-end text-[11px] px-2">
               <div>
                 <p>Disediakan Oleh:</p>
-                <div className="h-12"></div>
+                <div className="h-8"></div>
                 <p className="font-bold uppercase underline">{selectedRecord.creatorName}</p>
                 <p className="text-slate-500">Penyelaras / Guru Pelapor</p>
               </div>
 
               <div className="text-right">
                 <p>Disahkan Oleh:</p>
-                <div className="h-12"></div>
+                <div className="h-8"></div>
                 <p className="font-bold uppercase underline">
                   {schoolSettings?.principalEmail ? 'GURU BESAR' : 'GURU BESAR / PK PENTADBIRAN'}
                 </p>

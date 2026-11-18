@@ -764,6 +764,7 @@ export const SPPKCompetitionFormsModal: React.FC<Props> = ({
                 elementId: 'sppk-printable-bundle',
                 title: `Borang_SPPK_${programName || 'Program'}`,
                 orientation: 'portrait',
+                onNotice: (msg) => setStatusMsg(msg),
               });
               if (res.mode !== 'native') {
                 setStatusMsg(res.message);

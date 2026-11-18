@@ -2517,12 +2517,19 @@ export const AISetiausahaHub: React.FC<Props> = ({
         ...(d.impak || []).map((x) => `Impak: ${x}`),
         ...(d.agendaList || []).map((x) => `Agenda: ${x}`),
       ];
+      const resolvedBucket = d.skpmBucket || selectedPortfolio?.skpmBucket || 'Std 3.1';
+      const resolvedCodeBadge = d.skpmCodeBadge || selectedPortfolio?.skpmCodeDisplay || d.docKind;
+      const resolvedStandard = d.skpmStandard || selectedPortfolio?.skpmStandardTitle || '';
+      const resolvedPillar = d.pillar || selectedPortfolio?.pillar || '';
+
       const fallbackHtml = buildFallbackDriveHtml({
         schoolCode: d.schoolCode || effectiveSchoolCode,
         academicYear: d.academicYear || selectedAcademicYear,
         docKind: d.docKind,
-        skpmBucket: d.skpmBucket,
-        skpmCodeBadge: d.skpmCodeBadge,
+        skpmBucket: resolvedBucket,
+        skpmCodeBadge: resolvedCodeBadge,
+        skpmStandard: resolvedStandard,
+        pillar: resolvedPillar,
         programTitle: d.programTitle,
         tarikh: d.tarikh,
         summaryLines,
@@ -2530,12 +2537,31 @@ export const AISetiausahaHub: React.FC<Props> = ({
 
       const res = await syncDocumentToSchoolDrive({
         schoolCode: d.schoolCode || effectiveSchoolCode,
+        schoolName: effectiveSchoolName,
+        schoolLogoUrl: effectiveSchoolLogo,
         academicYear: d.academicYear || selectedAcademicYear,
         docKind: d.docKind,
-        skpmBucket: d.skpmBucket || selectedPortfolio?.skpmBucket || 'STD_3_1_KURIKULUM',
-        skpmCodeBadge: d.skpmCodeBadge || selectedPortfolio?.skpmCodeDisplay || d.docKind,
+        skpmBucket: resolvedBucket,
+        skpmCodeBadge: resolvedCodeBadge,
+        skpmStandard: resolvedStandard,
+        skpmAspek: d.skpmAspek || selectedPortfolio?.skpmAspekTitle || '',
+        skpmStandardKualiti: d.skpmStandardKualiti || selectedPortfolio?.skpmKualitiStatement || '',
+        pillar: resolvedPillar,
+        kodMySG: d.kodMySG || selectedPortfolio?.kodMySG || '',
+        jawatankuasaInduk: d.jawatankuasaInduk || selectedPortfolio?.jawatankuasaInduk || '',
         programTitle: d.programTitle,
         tarikh: d.tarikh,
+        masa: d.masa,
+        tempat: d.tempat,
+        sasaran: d.sasaran,
+        peringkat: d.peringkat,
+        pencapaian: d.pencapaian,
+        objektif: d.objektif,
+        pengisianAktiviti: d.pengisianAktiviti,
+        impak: d.impak,
+        refleksiDanTindakanSusulan: d.refleksiDanTindakanSusulan,
+        preparedByName: d.preparedByName,
+        preparedByTitle: d.preparedByTitle,
         elementId,
         htmlContent: elementId ? undefined : fallbackHtml,
         photos: d.photos || [],
@@ -3963,6 +3989,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                         elementId: 'ai-setiausaha-opr-poster',
                         title: oprTitle || 'Poster_OPR_SKPM',
                         orientation: 'portrait',
+                        singlePage: true,
                       });
                       setBannerMsg({ type: 'info', text: res.message });
                     }}
@@ -3978,6 +4005,8 @@ export const AISetiausahaHub: React.FC<Props> = ({
                         elementId: 'ai-setiausaha-opr-poster',
                         title: oprTitle || 'Poster_OPR_SKPM',
                         orientation: 'portrait',
+                        singlePage: true,
+                        onNotice: (msg) => setBannerMsg({ type: 'info', text: msg }),
                       });
                       if (res.mode !== 'native') {
                         setBannerMsg({ type: 'info', text: res.message });
@@ -3986,20 +4015,20 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase flex items-center gap-1.5 shadow cursor-pointer"
                   >
                     <Printer className="w-4 h-4" />
-                    <span>CETAK / EKSPORT PDF (A4)</span>
+                    <span>CETAK / EKSPORT PDF (1 MUKA SURAT A4)</span>
                   </button>
                 </div>
               </div>
 
-              {/* EXACT SKPM KUALITI@SEKOLAH A4 POSTER */}
+              {/* EXACT SKPM KUALITI@SEKOLAH 1-PAGE A4 POSTER */}
               <div
                 id="ai-setiausaha-opr-poster"
-                className="bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden border border-slate-200 max-w-[794px] mx-auto flex flex-col"
+                className="bg-white text-slate-900 rounded-2xl shadow-2xl overflow-hidden border border-slate-200 max-w-[794px] print:w-[198mm] print:h-[285mm] print:max-h-[285mm] print:overflow-hidden mx-auto flex flex-col justify-between"
               >
                 {/* 1. Dark-Teal Top Banner */}
-                <div className="bg-[#0D3B42] text-white px-6 py-4 border-b-4 border-[#D4AF37]">
-                  <div className="flex items-center justify-between gap-4 border-b border-teal-700/70 pb-2 mb-2">
-                    <span className="text-xs font-black uppercase tracking-widest text-[#FDE047]">
+                <div className="bg-[#0D3B42] text-white px-5 py-3 border-b-4 border-[#D4AF37]">
+                  <div className="flex items-center justify-between gap-4 border-b border-teal-700/70 pb-1.5 mb-1.5">
+                    <span className="text-[11px] font-black uppercase tracking-widest text-[#FDE047]">
                       SKPM KUALITI@SEKOLAH {selectedAcademicYear}
                     </span>
                     <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-teal-100">
@@ -4010,54 +4039,54 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     </div>
                   </div>
                   <div className="space-y-0.5">
-                    <div className="text-xs font-black uppercase tracking-wide text-white">
+                    <div className="text-[11px] font-black uppercase tracking-wide text-white leading-tight">
                       {selectedPortfolio.skpmStandardTitle}
                     </div>
-                    <div className="text-[11px] font-extrabold uppercase tracking-wide text-teal-100">
+                    <div className="text-[10px] font-extrabold uppercase tracking-wide text-teal-100 leading-tight">
                       {selectedPortfolio.skpmAspekTitle}
                     </div>
-                    <p className="text-[11px] italic text-[#FDE047] leading-snug pt-0.5">
+                    <p className="text-[10px] italic text-[#FDE047] leading-snug pt-0.5">
                       Standard Kualiti: &ldquo;{selectedPortfolio.skpmKualitiStatement}&rdquo;
                     </p>
                   </div>
                 </div>
 
                 {/* 2. Centered School Crest + ONE PAGE REPORT + Activity Title Box */}
-                <div className="px-6 pt-5 pb-4 border-b-2 border-slate-200 bg-slate-50/70 text-center space-y-2">
-                  <div className="flex flex-col items-center justify-center gap-1.5">
+                <div className="px-5 pt-3 pb-2.5 border-b-2 border-slate-200 bg-slate-50/70 text-center space-y-1.5">
+                  <div className="flex flex-col items-center justify-center gap-1">
                     <SchoolLogo
                       src={effectiveSchoolLogo}
                       schoolCode={effectiveSchoolCode}
-                      className="w-16 h-16 bg-white border-slate-300 shadow-sm"
+                      className="w-14 h-14 bg-white border-slate-300 shadow-sm"
                     />
-                    <div className="text-sm font-black uppercase tracking-wide text-[#0D3B42]">
+                    <div className="text-xs font-black uppercase tracking-wide text-[#0D3B42]">
                       {effectiveSchoolName} ({effectiveSchoolCode})
                     </div>
-                    <div className="text-3xl font-black tracking-tight text-[#0D3B42] leading-none pt-0.5">
+                    <div className="text-2xl font-black tracking-tight text-[#0D3B42] leading-none">
                       ONE PAGE REPORT
                     </div>
-                    <div className="text-[10px] font-extrabold uppercase tracking-widest text-[#B48A18]">
+                    <div className="text-[9.5px] font-extrabold uppercase tracking-widest text-[#B48A18]">
                       EVIDENS PENGURUSAN BERKUALITI &bull; {selectedPortfolio.jawatankuasaInduk.toUpperCase()}
                     </div>
                   </div>
 
-                  <div className="mt-2 py-2 px-4 rounded-xl bg-[#0D3B42]/5 border border-[#0D3B42]/20">
-                    <h2 className="text-sm font-black uppercase tracking-wide text-[#0D3B42]">
+                  <div className="mt-1.5 py-1.5 px-4 rounded-xl bg-[#0D3B42]/5 border border-[#0D3B42]/20">
+                    <h2 className="text-xs font-black uppercase tracking-wide text-[#0D3B42]">
                       {oprTitle || selectedPortfolio.jawatankuasaInduk}
                     </h2>
                   </div>
                 </div>
 
                 {/* 3. Two-Column Body: 3 Circular Stacked Photos on Left + 4 Rubric Sections on Right */}
-                <div className="p-6 grid grid-cols-12 gap-5 flex-1 items-start">
-                  <div className="col-span-4 flex flex-col items-center justify-start pt-1">
+                <div className="p-4 grid grid-cols-12 gap-4 flex-1 items-start">
+                  <div className="col-span-4 flex flex-col items-center justify-start pt-0.5">
                     {[0, 1, 2].map((idx) => {
                       const src = oprPhotos[idx];
                       return (
                         <div
                           key={idx}
-                          className={`w-40 h-40 rounded-full border-4 border-[#0D3B42] ring-2 ring-[#D4AF37] overflow-hidden bg-slate-100 flex items-center justify-center shadow-lg ${
-                            idx > 0 ? '-mt-4' : ''
+                          className={`w-36 h-36 rounded-full border-4 border-[#0D3B42] ring-2 ring-[#D4AF37] overflow-hidden bg-slate-100 flex items-center justify-center shadow-lg ${
+                            idx > 0 ? '-mt-3' : ''
                           }`}
                         >
                           {src ? (
@@ -4068,7 +4097,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                             />
                           ) : (
                             <div className="text-center px-3 text-slate-400">
-                              <ImageIcon className="w-6 h-6 mx-auto mb-1 opacity-40" />
+                              <ImageIcon className="w-5 h-5 mx-auto mb-1 opacity-40" />
                               <span className="text-[10px] font-bold block">
                                 Foto Bulat {idx + 1}
                               </span>
@@ -4079,9 +4108,9 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     })}
                   </div>
 
-                  <div className="col-span-8 space-y-3 text-[11px] leading-relaxed">
+                  <div className="col-span-8 space-y-2 text-[10.5px] leading-snug">
                     <div>
-                      <h4 className="text-xs font-black uppercase text-[#0D3B42] border-b border-[#D4AF37] pb-0.5 mb-1">
+                      <h4 className="text-[11px] font-black uppercase text-[#0D3B42] border-b border-[#D4AF37] pb-0.5 mb-0.5">
                         1. Objektif:
                       </h4>
                       <ul className="list-disc pl-4 space-y-0.5 text-slate-800 font-medium">
@@ -4096,7 +4125,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     </div>
 
                     <div>
-                      <h4 className="text-xs font-black uppercase text-[#0D3B42] border-b border-[#D4AF37] pb-0.5 mb-1">
+                      <h4 className="text-[11px] font-black uppercase text-[#0D3B42] border-b border-[#D4AF37] pb-0.5 mb-0.5">
                         2. Pengisian Aktiviti:
                       </h4>
                       <ul className="list-disc pl-4 space-y-0.5 text-slate-800 font-medium">
@@ -4111,7 +4140,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     </div>
 
                     <div>
-                      <h4 className="text-xs font-black uppercase text-[#0D3B42] border-b border-[#D4AF37] pb-0.5 mb-1">
+                      <h4 className="text-[11px] font-black uppercase text-[#0D3B42] border-b border-[#D4AF37] pb-0.5 mb-0.5">
                         3. Impak &amp; Kemenjadian:
                       </h4>
                       <ul className="list-disc pl-4 space-y-0.5 text-slate-800 font-medium">
@@ -4126,7 +4155,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     </div>
 
                     <div>
-                      <h4 className="text-xs font-black uppercase text-[#0D3B42] border-b border-[#D4AF37] pb-0.5 mb-1">
+                      <h4 className="text-[11px] font-black uppercase text-[#0D3B42] border-b border-[#D4AF37] pb-0.5 mb-0.5">
                         4. Refleksi &amp; Tindakan Susulan:
                       </h4>
                       <ul className="list-disc pl-4 space-y-0.5 text-slate-800 font-medium">
@@ -4140,7 +4169,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                       </ul>
                     </div>
 
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-[10px] grid grid-cols-2 gap-2">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 text-[9.5px] grid grid-cols-2 gap-1.5">
                       <div>
                         <strong>Tarikh:</strong> {oprTarikh}
                       </div>
@@ -4155,8 +4184,8 @@ export const AISetiausahaHub: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    <div className="pt-1 flex justify-end">
-                      <div className="inline-block px-4 py-1.5 rounded-full bg-[#0D3B42] text-white text-[10px] font-bold border border-[#D4AF37]">
+                    <div className="pt-0.5 flex justify-end">
+                      <div className="inline-block px-3.5 py-1 rounded-full bg-[#0D3B42] text-white text-[9.5px] font-bold border border-[#D4AF37]">
                         Disediakan oleh:{' '}
                         <span className="font-black text-[#FDE047]">
                           {(oprPreparedBy || currentUser?.name || 'SETIAUSAHA').toUpperCase()}
@@ -4529,6 +4558,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                       elementId: 'ai-setiausaha-memo-sheet',
                       title: memoTitle || 'Memo_Mesyuarat_KPM',
                       orientation: 'portrait',
+                      onNotice: (msg) => setBannerMsg({ type: 'info', text: msg }),
                     });
                     if (res.mode !== 'native') {
                       setBannerMsg({ type: 'info', text: res.message });
@@ -5188,6 +5218,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                         elementId: 'ai-setiausaha-minit-sheet',
                         title: minitTitle || 'Minit_Mesyuarat_PKPA',
                         orientation: 'portrait',
+                        onNotice: (msg) => setBannerMsg({ type: 'info', text: msg }),
                       });
                       if (res.mode !== 'native') {
                         setBannerMsg({ type: 'info', text: res.message });
@@ -5531,6 +5562,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     elementId: 'ai-setiausaha-lantikan-sheet',
                     title: `Surat_Lantikan_MySG_Sesi_${selectedAcademicYear}`,
                     orientation: 'portrait',
+                    onNotice: (msg) => setBannerMsg({ type: 'info', text: msg }),
                   });
                   if (res.mode !== 'native') {
                     setBannerMsg({ type: 'info', text: res.message });
