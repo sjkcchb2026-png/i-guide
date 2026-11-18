@@ -15,6 +15,9 @@ export interface SchoolProfile {
   hasPreschool?: boolean;
   hasPPKI?: boolean;
   academicSession?: string;
+  schoolDriveWebhookUrl?: string;
+  schoolDriveSecretToken?: string;
+  schoolDriveAccountEmail?: string;
   createdByUid?: string;
   createdAt?: any;
   updatedAt?: any;
@@ -27,6 +30,9 @@ export interface SchoolSettings {
   logoUrl?: string;
   slogan?: string;
   adminEmails?: string[];
+  schoolDriveWebhookUrl?: string;
+  schoolDriveSecretToken?: string;
+  schoolDriveAccountEmail?: string;
   principalEmail: string;
   principalUid: string;
   createdAt?: any;

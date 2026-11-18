@@ -408,6 +408,7 @@ interface ClassTimetableViewProps {
   matrixData: SubjectAllocationRow[];
   displayMode: 'NUMBER' | 'CODE';
   teacherMapping: { list: TeacherDirectoryEntry[] };
+  allowedGrades?: number[];
   onUpdateSchedule?: (newSchedule: ScheduleGrid) => void;
   onExportAllExcel?: () => void;
   onBulkPrintPdf?: () => void;
@@ -422,6 +423,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   matrixData,
   displayMode,
   teacherMapping,
+  allowedGrades,
   onUpdateSchedule,
   onExportAllExcel,
   onBulkPrintPdf,
@@ -429,8 +431,18 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   const tenant = useSchoolTenant();
   const schoolName = propSchoolName || tenant.schoolName;
   const schoolCode = propSchoolCode || tenant.schoolCode;
-  const [selectedGrade, setSelectedGrade] = useState<number>(1);
+  const visibleGrades = useMemo(
+    () => (allowedGrades && allowedGrades.length > 0 ? allowedGrades : [1, 2, 3, 4, 5, 6]),
+    [allowedGrades]
+  );
+  const [selectedGrade, setSelectedGrade] = useState<number>(visibleGrades[0] || 1);
   const [isExporting, setIsExporting] = useState(false);
+
+  React.useEffect(() => {
+    if (!visibleGrades.includes(selectedGrade) && visibleGrades.length > 0) {
+      setSelectedGrade(visibleGrades[0]);
+    }
+  }, [visibleGrades, selectedGrade]);
 
   const isKP = selectedGrade === 1 && isKP2027Year1Active(academicYear);
   const currentClassTeacher = classTeachers[selectedGrade] || 'Belum Ditetapkan';
@@ -463,7 +475,9 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
               Lampiran A · Jadual Kelas
             </span>
             <span className="text-xs text-slate-400">
-              JT1 – JT6 Lembaran Jadual Waktu Kelas Rasmi KPM
+              {allowedGrades && allowedGrades.length > 0
+                ? 'Jadual Kelas Saya (Akses Guru Kelas · Baca Sahaja)'
+                : 'JT1 – JT6 Lembaran Jadual Waktu Kelas Rasmi KPM'}
             </span>
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-white mt-1">
@@ -478,22 +492,28 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex bg-slate-950 p-1 rounded-2xl border border-slate-800">
-            {[1, 2, 3, 4, 5, 6].map((g) => (
-              <button
-                key={g}
-                type="button"
-                onClick={() => setSelectedGrade(g)}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                  selectedGrade === g
-                    ? 'bg-blue-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                JT{g}
-              </button>
-            ))}
-          </div>
+          {visibleGrades.length === 1 ? (
+            <div className="px-3.5 py-2 bg-slate-950 border border-emerald-500/40 rounded-2xl text-xs font-black text-emerald-300">
+              Kelas Saya: Tahun {visibleGrades[0]} (JT{visibleGrades[0]})
+            </div>
+          ) : (
+            <div className="flex bg-slate-950 p-1 rounded-2xl border border-slate-800">
+              {visibleGrades.map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => setSelectedGrade(g)}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
+                    selectedGrade === g
+                      ? 'bg-blue-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  JT{g}
+                </button>
+              ))}
+            </div>
+          )}
 
           <button
             type="button"

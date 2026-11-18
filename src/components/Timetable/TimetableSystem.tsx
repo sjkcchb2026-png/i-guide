@@ -47,6 +47,7 @@ import {
   getDesignatedPemulihanTeacherCode,
   hydrateSchedulePemulihanLinks,
 } from '../../utils/lampiranData';
+import { useAcademicAccessControl } from '../../utils/academicAccessControl';
 import { 
   Table, 
   Layers, 
@@ -84,6 +85,7 @@ interface TimetableSystemProps {
   initialTab?: TimetableTab;
   schoolCode?: string;
   schoolName?: string;
+  currentUser?: any;
 }
 
 export const TimetableSystem: React.FC<TimetableSystemProps> = ({
@@ -92,6 +94,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
   initialTab = 'AGIHAN',
   schoolCode: propSchoolCode,
   schoolName: propSchoolName,
+  currentUser,
 }) => {
   const tenant = useSchoolTenant();
   const activeSchoolCode = normalizeActiveSchoolCode(propSchoolCode || tenant.schoolCode);
@@ -100,6 +103,25 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
 
   const [activeTab, setActiveTab] = useState<TimetableTab>(initialTab);
   const [selectedYear, setSelectedYear] = useState<string>(activeAcademicYear || '2027');
+  const accessProfile = useAcademicAccessControl(currentUser, selectedYear, activeSchoolCode);
+  const isAcademicAdmin = accessProfile.isAcademicAdmin;
+  const allowedClassGrades = useMemo(
+    () => accessProfile.classTeacherOf.map((c) => c.yearLevel),
+    [accessProfile.classTeacherOf]
+  );
+
+  // Enforce allowed read-only tabs when isAcademicAdmin === false
+  useEffect(() => {
+    if (!isAcademicAdmin) {
+      const allowedNonAdminTabs: TimetableTab[] = ['JG1_50', 'JUTAMAP', 'JUTAMAL'];
+      if (allowedClassGrades.length > 0) {
+        allowedNonAdminTabs.push('JT1_6');
+      }
+      if (!allowedNonAdminTabs.includes(activeTab)) {
+        setActiveTab('JG1_50');
+      }
+    }
+  }, [isAcademicAdmin, allowedClassGrades, activeTab]);
   const [displayMode, setDisplayMode] = useState<'NUMBER' | 'CODE'>('CODE');
   const [personnelList, setPersonnelList] = useState<PersonnelProfile[]>([]);
   const [matrixData, setMatrixData] = useState<SubjectAllocationRow[]>(() =>
@@ -650,32 +672,50 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         {/* Module Sub-tabs */}
         <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0">
-          <button
-            onClick={() => setActiveTab('AGIHAN')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
-              activeTab === 'AGIHAN'
-                ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Table className="w-3.5 h-3.5" />
-            <span>Agihan Mengajar</span>
-          </button>
+          {isAcademicAdmin && (
+            <>
+              <button
+                onClick={() => setActiveTab('AGIHAN')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                  activeTab === 'AGIHAN'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Table className="w-3.5 h-3.5" />
+                <span>Agihan Mengajar</span>
+              </button>
 
-          <button
-            onClick={() => setActiveTab('JKEYIN')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer relative ${
-              activeTab === 'JKEYIN'
-                ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>JKEYIN (Auto-Jadual)</span>
-            {clashes.length > 0 && (
-              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
-            )}
-          </button>
+              <button
+                onClick={() => setActiveTab('JKEYIN')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer relative ${
+                  activeTab === 'JKEYIN'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>JKEYIN (Auto-Jadual)</span>
+                {clashes.length > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
+                )}
+              </button>
+            </>
+          )}
+
+          {!isAcademicAdmin && (
+            <button
+              onClick={() => setActiveTab('JG1_50')}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                activeTab === 'JG1_50'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Jadual Persendirian Saya (Lampiran B)</span>
+            </button>
+          )}
 
           <button
             onClick={() => setActiveTab('JUTAMAP')}
@@ -686,7 +726,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             }`}
           >
             <Printer className="w-3.5 h-3.5" />
-            <span>JUtamaP (Potret)</span>
+            <span>{isAcademicAdmin ? 'JUtamaP (Potret)' : 'Jadual Induk Sekolah (Potret)'}</span>
           </button>
 
           <button
@@ -698,68 +738,78 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             }`}
           >
             <Printer className="w-3.5 h-3.5" />
-            <span>JUtamaL (Landskap)</span>
+            <span>{isAcademicAdmin ? 'JUtamaL (Landskap)' : 'Jadual Induk Sekolah (Landskap)'}</span>
           </button>
 
-          <button
-            onClick={() => setActiveTab('JT1_6')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
-              activeTab === 'JT1_6'
-                ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <GraduationCap className="w-3.5 h-3.5" />
-            <span>JT1–6 (Kelas)</span>
-          </button>
+          {(isAcademicAdmin || allowedClassGrades.length > 0) && (
+            <button
+              onClick={() => setActiveTab('JT1_6')}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                activeTab === 'JT1_6'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <GraduationCap className="w-3.5 h-3.5" />
+              <span>
+                {isAcademicAdmin
+                  ? 'JT1–6 (Kelas)'
+                  : `Jadual Kelas Saya (Lampiran A · Tahun ${allowedClassGrades.join(', ')})`}
+              </span>
+            </button>
+          )}
 
-          <button
-            onClick={() => setActiveTab('PRASEKOLAH')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
-              activeTab === 'PRASEKOLAH'
-                ? 'bg-teal-600 text-white shadow-md shadow-teal-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Baby className="w-3.5 h-3.5 text-teal-300" />
-            <span>Jadual Prasekolah (Terpisah)</span>
-          </button>
+          {isAcademicAdmin && (
+            <>
+              <button
+                onClick={() => setActiveTab('PRASEKOLAH')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                  activeTab === 'PRASEKOLAH'
+                    ? 'bg-teal-600 text-white shadow-md shadow-teal-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Baby className="w-3.5 h-3.5 text-teal-300" />
+                <span>Jadual Prasekolah (Terpisah)</span>
+              </button>
 
-          <button
-            onClick={() => setActiveTab('BGURU')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
-              activeTab === 'BGURU'
-                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <UserCheck className="w-3.5 h-3.5" />
-            <span>BGuru (Waktu Lapang)</span>
-          </button>
+              <button
+                onClick={() => setActiveTab('BGURU')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                  activeTab === 'BGURU'
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>BGuru (Waktu Lapang)</span>
+              </button>
 
-          <button
-            onClick={() => setActiveTab('RELIEF')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
-              activeTab === 'RELIEF'
-                ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Bell className="w-3.5 h-3.5 text-amber-300" />
-            <span>Jadual Ganti (Relief Surat PO)</span>
-          </button>
+              <button
+                onClick={() => setActiveTab('RELIEF')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                  activeTab === 'RELIEF'
+                    ? 'bg-amber-600 text-white shadow-md shadow-amber-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Bell className="w-3.5 h-3.5 text-amber-300" />
+                <span>Jadual Ganti (Relief Surat PO)</span>
+              </button>
 
-          <button
-            onClick={() => setActiveTab('JG1_50')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
-              activeTab === 'JG1_50'
-                ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Users className="w-3.5 h-3.5" />
-            <span>JG1–50 (Guru)</span>
-          </button>
+              <button
+                onClick={() => setActiveTab('JG1_50')}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer ${
+                  activeTab === 'JG1_50'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>JG1–50 (Guru)</span>
+              </button>
+            </>
+          )}
         </div>
 
         {/* Global Controls: Year Selector, Mode Toggle & Save Schedule */}
@@ -792,7 +842,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             <span>{displayMode === 'CODE' ? 'Mod Kod Singkatan' : 'Mod Nombor (1, 2, 3...)'}</span>
           </button>
 
-          {activeTab !== 'AGIHAN' && (
+          {isAcademicAdmin && activeTab !== 'AGIHAN' && (
             <button
               onClick={handleSaveSchedule}
               className="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-md shadow-blue-600/30 cursor-pointer"
@@ -804,32 +854,34 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
         </div>
         </div>
 
-        {/* Dedicated Bulk Export Action Strip */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-slate-800/80">
-          <span className="text-[11px] font-bold text-slate-400">
-            Eksport Pukal Rasmi (Jadual Induk · 6 Lampiran A Kelas · {teacherMapping.list.length} Lampiran B Guru Option A)
-          </span>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={isExportingAll}
-              onClick={handleExportAllExcel}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-black uppercase tracking-wider transition shadow-md shadow-emerald-600/30 cursor-pointer"
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>{isExportingAll ? 'Menjana Excel...' : 'Muat Turun Semua Jadual (Excel)'}</span>
-            </button>
+        {/* Dedicated Bulk Export Action Strip (Academic Admin ONLY) */}
+        {isAcademicAdmin && (
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-slate-800/80">
+            <span className="text-[11px] font-bold text-slate-400">
+              Eksport Pukal Rasmi (Jadual Induk · 6 Lampiran A Kelas · {teacherMapping.list.length} Lampiran B Guru Option A)
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={isExportingAll}
+                onClick={handleExportAllExcel}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-black uppercase tracking-wider transition shadow-md shadow-emerald-600/30 cursor-pointer"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>{isExportingAll ? 'Menjana Excel...' : 'Muat Turun Semua Jadual (Excel)'}</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={handleBulkPrintPdf}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black uppercase tracking-wider transition shadow-md shadow-indigo-600/30 cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Muat Turun / Cetak Semua (PDF A4 Landskap)</span>
-            </button>
+              <button
+                type="button"
+                onClick={handleBulkPrintPdf}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black uppercase tracking-wider transition shadow-md shadow-indigo-600/30 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Muat Turun / Cetak Semua (PDF A4 Landskap)</span>
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {saveStatus && (
@@ -847,7 +899,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
 
       {/* Main Tab View Rendering (Hidden when bulk-printing all sheets) */}
       <div className={isBulkPrinting ? 'print:hidden' : ''}>
-        {activeTab === 'AGIHAN' && (
+        {isAcademicAdmin && activeTab === 'AGIHAN' && (
           <SchoolTimetableMatrix
             activeAcademicYear={selectedYear}
             schoolCode={activeSchoolCode}
@@ -864,7 +916,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           />
         )}
 
-        {activeTab === 'JKEYIN' && (
+        {isAcademicAdmin && activeTab === 'JKEYIN' && (
           <JKeyinGrid
             schedule={schedule}
             onUpdateSchedule={handleUpdateSchedule}
@@ -890,8 +942,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             displayMode={displayMode}
             teacherMapping={teacherMapping}
             initialOrientation="PORTRAIT"
-            onExportAllExcel={handleExportAllExcel}
-            onBulkPrintPdf={handleBulkPrintPdf}
+            onExportAllExcel={isAcademicAdmin ? handleExportAllExcel : undefined}
+            onBulkPrintPdf={isAcademicAdmin ? handleBulkPrintPdf : undefined}
           />
         )}
 
@@ -906,12 +958,12 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             displayMode={displayMode}
             teacherMapping={teacherMapping}
             initialOrientation="LANDSCAPE"
-            onExportAllExcel={handleExportAllExcel}
-            onBulkPrintPdf={handleBulkPrintPdf}
+            onExportAllExcel={isAcademicAdmin ? handleExportAllExcel : undefined}
+            onBulkPrintPdf={isAcademicAdmin ? handleBulkPrintPdf : undefined}
           />
         )}
 
-        {activeTab === 'JT1_6' && (
+        {activeTab === 'JT1_6' && (isAcademicAdmin || allowedClassGrades.length > 0) && (
           <ClassTimetableView
             schedule={schedule}
             academicYear={selectedYear}
@@ -921,13 +973,14 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             matrixData={matrixData}
             displayMode={displayMode}
             teacherMapping={teacherMapping}
-            onUpdateSchedule={handleUpdateSchedule}
-            onExportAllExcel={handleExportAllExcel}
-            onBulkPrintPdf={handleBulkPrintPdf}
+            allowedGrades={isAcademicAdmin ? undefined : allowedClassGrades}
+            onUpdateSchedule={isAcademicAdmin ? handleUpdateSchedule : undefined}
+            onExportAllExcel={isAcademicAdmin ? handleExportAllExcel : undefined}
+            onBulkPrintPdf={isAcademicAdmin ? handleBulkPrintPdf : undefined}
           />
         )}
 
-        {activeTab === 'PRASEKOLAH' && (
+        {isAcademicAdmin && activeTab === 'PRASEKOLAH' && (
           <PrasekolahTimetableView
             prasekolahDoc={prasekolahDoc}
             teacherList={teacherMapping.list}
@@ -939,7 +992,7 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           />
         )}
 
-        {activeTab === 'BGURU' && (
+        {isAcademicAdmin && activeTab === 'BGURU' && (
           <BilikGuruReliefView
             schedule={schedule}
             academicYear={selectedYear}
@@ -951,8 +1004,8 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
           />
         )}
 
-        {activeTab === 'RELIEF' && (
-          <ReliefSchedulingView />
+        {isAcademicAdmin && activeTab === 'RELIEF' && (
+          <ReliefSchedulingView currentUser={currentUser} />
         )}
 
         {activeTab === 'JG1_50' && (
@@ -963,11 +1016,12 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             schoolCode={activeSchoolCode}
             teacherMapping={teacherMapping}
             displayMode={displayMode}
-            defaultTeacherCode={defaultTeacherCode}
+            defaultTeacherCode={defaultTeacherCode || accessProfile.teacherShortCode}
+            lockedTeacherCode={isAcademicAdmin ? undefined : accessProfile.teacherShortCode}
             classTeachers={classTeachers}
             matrixData={matrixData}
-            onExportAllExcel={handleExportAllExcel}
-            onBulkPrintPdf={handleBulkPrintPdf}
+            onExportAllExcel={isAcademicAdmin ? handleExportAllExcel : undefined}
+            onBulkPrintPdf={isAcademicAdmin ? handleBulkPrintPdf : undefined}
           />
         )}
       </div>

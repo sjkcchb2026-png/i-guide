@@ -25,13 +25,15 @@ import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 interface Props {
   profile: UserProfile;
   role: 'pentadbir' | 'guru' | 'laporan';
+  canManageCommittee?: boolean;
+  kokoRoleLabel?: string;
 }
 
 const DEFAULT_UNIFORMS = ['TKRS', 'Pengakap Kanak-Kanak', 'Bulan Sabit Merah Malaysia (BSMM)'];
 const DEFAULT_CLUBS = ['Kelab STEM & Robotik', 'Kelab Bahasa & Budaya', 'Kelab PALS (Pecinta Alam)', 'Kelab SPBT & Perpustakaan', 'Kelab Seni Kreatif'];
 const DEFAULT_SPORTS = ['Bola Tampar', 'Bola Keranjang', 'Badminton', 'Olahraga & Merentas Desa', 'Catur & Permainan Tradisional', 'Wushu'];
 
-export default function KokoCommitteeManager({ profile, role }: Props) {
+export default function KokoCommitteeManager({ profile, role, canManageCommittee, kokoRoleLabel }: Props) {
   const { schoolCode: activeSchoolCode } = useSchoolTenant();
   const [activeTab, setActiveTab] = useState<'committee' | 'members' | 'groups'>('committee');
   const [selectedCategory, setSelectedCategory] = useState<'uniform' | 'club' | 'sport'>('uniform');
@@ -62,7 +64,7 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
   const [memberSearch, setMemberSearch] = useState('');
   const [filterClass, setFilterClass] = useState('semua');
 
-  const canEdit = role === 'pentadbir' || role === 'guru';
+  const canEdit = canManageCommittee !== undefined ? canManageCommittee : role === 'pentadbir';
 
   // Load Firestore live data
   useEffect(() => {
@@ -414,11 +416,24 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
               <Users className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                Pengurusan Kokurikulum dan Jawatankuasa
-              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                  Pengurusan Kokurikulum dan Jawatankuasa
+                </h2>
+                <span
+                  className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider border ${
+                    canEdit
+                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/70'
+                      : 'bg-amber-950/80 text-amber-300 border-amber-700/70'
+                  }`}
+                >
+                  {kokoRoleLabel || (canEdit ? 'Akses Suntingan Penuh (GB / PKKK / SU Koko)' : 'Mod Paparan Sahaja')}
+                </span>
+              </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Penetapan Jawatankuasa Guru Penasihat & Barisan Pemimpin Murid (KPM Kokurikulum)
+                {canEdit
+                  ? 'Penetapan Jawatankuasa Guru Penasihat & Barisan Pemimpin Murid (Dibenarkan untuk Guru Besar, PKKK & Setiausaha Kokurikulum)'
+                  : 'Mod Paparan Sahaja — Hanya Guru Besar, PK Kokurikulum (PKKK) & Setiausaha Kokurikulum (SU PKKK) dibenarkan mengubah suai struktur unit & jawatankuasa.'}
               </p>
             </div>
           </div>
@@ -854,7 +869,9 @@ export default function KokoCommitteeManager({ profile, role }: Props) {
                   ))
                 ) : (
                   <div className="col-span-full py-4 text-center text-xs text-slate-500 italic">
-                    Tiada AJK tambahan dilantik. Klik "Lantik Jawatan Murid" untuk menambah.
+                    {canEdit
+                      ? 'Tiada AJK tambahan dilantik. Klik "Lantik Jawatan Murid" untuk menambah.'
+                      : 'Tiada AJK tambahan dilantik bagi unit ini.'}
                   </div>
                 )}
               </div>

@@ -30,6 +30,7 @@ export interface AISetiausahaDocument {
   sourceMemoId?: string;
   schoolCode: string;
   academicYear?: string;
+  academicYears?: string[];
   pillar?: string;
   kodMySG?: string;
   jawatankuasaInduk?: string;
@@ -62,7 +63,17 @@ export interface AISetiausahaDocument {
   photos?: string[];
   preparedByName?: string;
   preparedByTitle?: string;
+  driveFolderUrl?: string;
+  driveFileUrl?: string;
+  driveFolderPath?: string;
+  driveSyncedAt?: string;
   createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
 }
+
+export interface SetiausahaExternalPrefill {
+  targetTab: 'MEMO' | 'MINIT' | 'OPR';
+  taskItem: any;
+}
+

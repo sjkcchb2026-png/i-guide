@@ -141,6 +141,7 @@ export interface PaparanMaklumanViewProps {
   isPrincipalOrAdmin?: boolean;
   addToast?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
   onOpenKokoOPR?: (payload: MaklumanOPRPrefill) => void;
+  onOpenSetiausahaDoc?: (payload: { targetTab: 'MEMO' | 'MINIT' | 'OPR'; taskItem: any }) => void;
 }
 
 const MONTH_SHEETS = [
@@ -246,6 +247,7 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
   isPrincipalOrAdmin = false,
   addToast: propAddToast,
   onOpenKokoOPR,
+  onOpenSetiausahaDoc,
 }) => {
   const { schoolCode: activeSchoolCode, schoolName: tenantSchoolName, isLegacySchool } = useSchoolTenant();
   const [items, setItems] = useState<MaklumanTaskItem[]>([]);
@@ -1898,6 +1900,37 @@ export const PaparanMaklumanView: React.FC<PaparanMaklumanViewProps> = ({
                             <ClipboardList className="w-3.5 h-3.5" />
                             <span>Borang SPPK 1-3</span>
                           </button>
+                        )}
+
+                        {item.category === 'MESYUARAT' && onOpenSetiausahaDoc && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onOpenSetiausahaDoc({
+                                  targetTab: 'MEMO',
+                                  taskItem: item,
+                                })
+                              }
+                              className="px-3 py-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                              title="Buka & Jana Memo Panggilan Mesyuarat dalam AI Setiausaha"
+                            >
+                              <span>📩 Memo</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onOpenSetiausahaDoc({
+                                  targetTab: 'MINIT',
+                                  taskItem: item,
+                                })
+                              }
+                              className="px-3 py-2 rounded-xl bg-amber-600/20 hover:bg-amber-600 text-amber-300 hover:text-slate-950 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                              title="Buka & Jana Minit Mesyuarat PKPA Bil. 2/1991 dalam AI Setiausaha"
+                            >
+                              <span>📝 Minit</span>
+                            </button>
+                          </>
                         )}
 
                         <button

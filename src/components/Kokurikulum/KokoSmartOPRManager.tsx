@@ -32,6 +32,10 @@ import {
   triggerSmartPrint,
   downloadStandalonePrintHtml,
 } from '../../utils/oprPrintHelper';
+import {
+  syncDocumentToSchoolDrive,
+  buildFallbackDriveHtml,
+} from '../../utils/schoolDriveArchive';
 import { db } from '../../lib/firebase';
 import {
   collection,
@@ -253,6 +257,108 @@ export default function KokoSmartOPRManager({
   const [images, setImages] = useState<string[]>([]);
   const [newImageUrl, setNewImageUrl] = useState('');
   const [saving, setSaving] = useState(false);
+  const [syncingDriveActId, setSyncingDriveActId] = useState<string | null>(null);
+
+  const handleSyncActivityToDrive = async (
+    act: KokoActivity,
+    elementId?: string,
+    silentSuccessPrefix?: string
+  ) => {
+    if (!act.id) return;
+    setSyncingDriveActId(act.id);
+    try {
+      const skpm = autoResolveKokoSKPM({
+        category: act.category,
+        jenis: act.jenis,
+        level: act.level,
+        programName: act.programName,
+        unit: act.unit,
+        manualCode: act.skpmStandardCode,
+      });
+
+      const summaryLines = [
+        act.objective1 ? `Objektif: ${act.objective1}` : '',
+        `Peringkat: ${act.level} | Pencapaian: ${act.pencapaian || 'Penyertaan'}`,
+        act.jurulatih?.length ? `Jurulatih: ${act.jurulatih.join(', ')}` : '',
+        act.guruPengiring?.length ? `Guru Pengiring: ${act.guruPengiring.join(', ')}` : '',
+        act.impact ? `Impak: ${act.impact}` : '',
+        act.reflection ? `Refleksi: ${act.reflection}` : '',
+      ].filter(Boolean);
+
+      const fallbackHtml = buildFallbackDriveHtml({
+        schoolCode: activeSchoolCode,
+        academicYear: act.academicYear || '2026',
+        docKind: 'OPR',
+        skpmBucket: 'STD_3_2_KOKURIKULUM',
+        skpmCodeBadge: act.skpmStandardCode || skpm.code,
+        programTitle: act.programName,
+        tarikh: act.date,
+        summaryLines,
+      });
+
+      const res = await syncDocumentToSchoolDrive({
+        schoolCode: activeSchoolCode,
+        academicYear: act.academicYear || '2026',
+        docKind: 'OPR',
+        skpmBucket: 'STD_3_2_KOKURIKULUM',
+        skpmCodeBadge: act.skpmStandardCode || skpm.code,
+        programTitle: act.programName,
+        tarikh: act.date,
+        elementId,
+        htmlContent: elementId ? undefined : fallbackHtml,
+        photos: act.images || [],
+      });
+
+      if (res.success) {
+        const nowIso = new Date().toISOString();
+        const drivePatch = deepSanitizeFirestore({
+          driveFolderUrl: res.folderUrl || '',
+          driveFileUrl: res.fileUrl || res.folderUrl || '',
+          driveFolderPath: res.folderPath || '',
+          driveSyncedAt: nowIso,
+          updatedAt: nowIso,
+        });
+        await setDoc(doc(db, 'koko_activities', act.id), drivePatch, { merge: true });
+        const setiausahaDocId = scopedDocId(activeSchoolCode, `koko_opr_${act.id}`);
+        await setDoc(doc(db, 'ai_setiausaha_documents', setiausahaDocId), drivePatch, {
+          merge: true,
+        }).catch(() => null);
+
+        setSelectedPrintActivity((prev) =>
+          prev && prev.id === act.id
+            ? {
+                ...prev,
+                driveFolderUrl: res.folderUrl || '',
+                driveFileUrl: res.fileUrl || res.folderUrl || '',
+                driveFolderPath: res.folderPath || '',
+                driveSyncedAt: nowIso,
+              }
+            : prev
+        );
+
+        setBanner({
+          type: 'success',
+          text: silentSuccessPrefix
+            ? `${silentSuccessPrefix} & disegerakkan ke Google Drive Rasmi Sekolah!`
+            : `☁️ OPR "${act.programName}" berjaya dihantar ke Google Drive Rasmi Sekolah!`,
+        });
+      } else if (!silentSuccessPrefix) {
+        setBanner({
+          type: 'info',
+          text: `Status Drive Sekolah: ${res.error || 'Sila semak sambungan Webhook Google Drive Sekolah.'}`,
+        });
+      }
+    } catch (err: any) {
+      if (!silentSuccessPrefix) {
+        setBanner({
+          type: 'error',
+          text: `Gagal menghantar ke Google Drive Sekolah: ${err?.message || 'Ralat rangkaian'}`,
+        });
+      }
+    } finally {
+      setSyncingDriveActId(null);
+    }
+  };
 
   // Search & Filter for list
   const [searchQuery, setSearchQuery] = useState('');
@@ -1236,8 +1342,17 @@ export default function KokoSmartOPRManager({
           type: 'success',
           text: `OPR "${payload.programName}" disahkan SELESAI (${skpm.code}${
             linked271 ? ' + SKPM 2.7.1/A9' : ''
-          }) & disegerakkan ke AI Setiausaha!`,
+          }) & disegerakkan ke AI Setiausaha! Menyegerak ke Google Drive Sekolah...`,
         });
+        if (targetStatus === 'SELESAI') {
+          setTimeout(() => {
+            void handleSyncActivityToDrive(
+              savedRecord,
+              'koko-skas-opr-poster',
+              `OPR "${payload.programName}" (${skpm.code}) disimpan`
+            );
+          }, 250);
+        }
       } else {
         setViewMode('list');
         setBanner({
@@ -1249,6 +1364,13 @@ export default function KokoSmartOPRManager({
                   skpm.standard5Code ? ` & Std ${skpm.standard5Code}` : ''
                 }${linked271 ? ' + Std 2.7.1/A9' : ''}) disimpan & disegerakkan ke AI Setiausaha!`,
         });
+        if (targetStatus === 'SELESAI') {
+          void handleSyncActivityToDrive(
+            savedRecord,
+            undefined,
+            `OPR "${payload.programName}" (${skpm.code}) disimpan`
+          );
+        }
       }
     } catch (err) {
       console.error('Error saving activity OPR:', err);
@@ -1693,6 +1815,33 @@ export default function KokoSmartOPRManager({
                         <span>Kemas Kini Keputusan, Sumbangan &amp; Jana OPR</span>
                       </button>
                     )}
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {(act.driveFileUrl || act.driveFolderUrl) && (
+                        <a
+                          href={act.driveFileUrl || act.driveFolderUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1 rounded-lg bg-emerald-950/90 hover:bg-emerald-900 text-emerald-300 border border-emerald-600/60 text-[10px] font-black inline-flex items-center gap-1 transition"
+                        >
+                          <span>📂 Buka di Google Drive Sekolah</span>
+                        </a>
+                      )}
+                      {act.id && (
+                        <button
+                          type="button"
+                          disabled={syncingDriveActId === act.id}
+                          onClick={() => void handleSyncActivityToDrive(act)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-300 border border-slate-700 text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer transition disabled:opacity-50"
+                        >
+                          <span>
+                            {syncingDriveActId === act.id
+                              ? '⏳ Menyegerak...'
+                              : '☁️ Hantar ke Drive Sekolah'}
+                          </span>
+                        </button>
+                      )}
+                    </div>
 
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2.5">
@@ -2981,6 +3130,32 @@ export default function KokoSmartOPRManager({
               >
                 <ClipboardList className="w-4 h-4" />
                 <span>Borang SPPK 1, 2 &amp; 3</span>
+              </button>
+
+              {(selectedPrintActivity.driveFileUrl || selectedPrintActivity.driveFolderUrl) && (
+                <a
+                  href={selectedPrintActivity.driveFileUrl || selectedPrintActivity.driveFolderUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/60 rounded-xl text-xs font-black transition"
+                >
+                  <span>📂 Buka di Google Drive Sekolah</span>
+                </a>
+              )}
+
+              <button
+                type="button"
+                disabled={syncingDriveActId === selectedPrintActivity.id}
+                onClick={() =>
+                  void handleSyncActivityToDrive(selectedPrintActivity, 'koko-skas-opr-poster')
+                }
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/50 rounded-xl text-xs font-black cursor-pointer disabled:opacity-50"
+              >
+                <span>
+                  {syncingDriveActId === selectedPrintActivity.id
+                    ? '⏳ Menyegerak Drive...'
+                    : '☁️ Hantar ke Drive Sekolah'}
+                </span>
               </button>
 
               <button

@@ -59,6 +59,8 @@ interface BilikGuruReliefViewProps {
     list: TeacherDirectoryEntry[];
   };
   isAdmin?: boolean;
+  lockedTeacherShortCode?: string;
+  lockedTeacherName?: string;
   displayMode?: 'NUMBER' | 'CODE';
   schoolCode?: string;
   schoolName?: string;
@@ -70,6 +72,8 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
   academicYear,
   teacherMapping,
   isAdmin = true,
+  lockedTeacherShortCode,
+  lockedTeacherName,
   schoolCode = DEFAULT_SCHOOL_CODE,
   schoolName = 'SJK (C) CHUNG HUA BALINGIAN',
   prasekolahTimetable: propPrasekolahTimetable = null,
@@ -641,6 +645,284 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
       // Fallback
     }
   };
+
+  // Personal-only categorized slots for regular teachers (isAdmin === false)
+  const myCodeUpper = String(lockedTeacherShortCode || '').trim().toUpperCase();
+  const personalReliefCategories = useMemo(() => {
+    if (!myCodeUpper) {
+      return {
+        substitutingSlots: [],
+        myAbsentClassSlots: [],
+        swapSlots: [],
+        totalInvolved: 0,
+      };
+    }
+
+    const substitutingSlots = reliefPlan.slots.filter(
+      (s) =>
+        s.reliefMode !== 'TUKAR_WAKTU_KELAS_SAMA' &&
+        String(s.assignedSubstituteCode || '').toUpperCase() === myCodeUpper
+    );
+
+    const myAbsentClassSlots = reliefPlan.slots.filter(
+      (s) =>
+        s.reliefMode !== 'TUKAR_WAKTU_KELAS_SAMA' &&
+        s.absentTeacherCodes.some((c) => c.toUpperCase() === myCodeUpper)
+    );
+
+    const swapSlots = reliefPlan.slots.filter(
+      (s) =>
+        s.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA' &&
+        (String(s.assignedSubstituteCode || '').toUpperCase() === myCodeUpper ||
+          s.absentTeacherCodes.some((c) => c.toUpperCase() === myCodeUpper))
+    );
+
+    return {
+      substitutingSlots,
+      myAbsentClassSlots,
+      swapSlots,
+      totalInvolved: substitutingSlots.length + myAbsentClassSlots.length + swapSlots.length,
+    };
+  }, [reliefPlan.slots, myCodeUpper]);
+
+  if (!isAdmin && myCodeUpper) {
+    return (
+      <div className="space-y-6">
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-[10px] font-black uppercase tracking-wider">
+                  Mode: KAWALAN AKSES PERANAN (RBAC) · Jadual Ganti Peribadi
+                </span>
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-black uppercase">
+                  [{myCodeUpper}] {lockedTeacherName || teacherNameMap.get(myCodeUpper) || myCodeUpper}
+                </span>
+              </div>
+              <h3 className="text-lg sm:text-xl font-black text-white mt-1.5">
+                Jadual Ganti & Pertukaran Waktu Saya ({reliefDate} · {selectedDay})
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Memaparkan hanya rekod jadual ganti dan pertukaran waktu yang melibatkan anda secara langsung pada tarikh ini.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5">
+                <Calendar className="w-4 h-4 text-indigo-400" />
+                <div className="flex flex-col">
+                  <span className="text-[9px] font-bold uppercase text-slate-500">Tarikh Relief</span>
+                  <input
+                    type="date"
+                    value={reliefDate}
+                    onChange={(e) => setReliefDate(e.target.value)}
+                    className="bg-transparent text-xs font-bold text-white focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                {DAYS_OF_WEEK.map((day) => (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => setSelectedDay(day)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      selectedDay === day
+                        ? 'bg-indigo-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {day}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {personalReliefCategories.totalInvolved === 0 ? (
+            <div className="bg-emerald-950/30 border-2 border-emerald-500/40 rounded-2xl p-6 flex items-center gap-4 text-emerald-200 shadow-lg">
+              <div className="p-3 bg-emerald-500/20 rounded-2xl border border-emerald-500/40 text-emerald-300 shrink-0">
+                <CheckCircle2 className="w-7 h-7" />
+              </div>
+              <div>
+                <h4 className="text-sm sm:text-base font-black text-emerald-300">
+                  Tiada jadual ganti melibatkan anda pada tarikh ini.
+                </h4>
+                <p className="text-xs text-emerald-200/80 mt-0.5">
+                  Anda tiada tugas mengganti guru lain, tiada kelas anda yang diganti, dan tiada pertukaran waktu pada <strong>{reliefDate}</strong> ({selectedDay}).
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* 1. Tugas Mengganti Saya (Guru Pengganti) */}
+              <div className="bg-slate-950/90 border border-emerald-500/30 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-emerald-300 flex items-center gap-2">
+                    <UserCheck className="w-4 h-4 text-emerald-400" />
+                    <span>
+                      1. Tugas Mengganti Saya (Guru Pengganti) ({personalReliefCategories.substitutingSlots.length})
+                    </span>
+                  </h4>
+                  <span className="text-[10px] font-bold text-slate-400">
+                    Ganti Sehala · Tidak Perlu Pulang Balik
+                  </span>
+                </div>
+
+                {personalReliefCategories.substitutingSlots.length === 0 ? (
+                  <p className="text-xs text-slate-500 italic">
+                    Tiada tugas mengganti kelas guru lain pada hari ini.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {personalReliefCategories.substitutingSlots.map((slot) => (
+                      <div
+                        key={slot.slotKey}
+                        className="p-3.5 rounded-xl bg-emerald-950/20 border border-emerald-500/40 space-y-1.5 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-black text-white text-sm">
+                            {slot.classLabel} ({slot.slotLabel})
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono font-bold text-[11px]">
+                            {slot.timeLabel}
+                          </span>
+                        </div>
+                        <div className="text-slate-300 font-semibold">
+                          Subjek: <strong className="text-white">{slot.subjectCode}</strong> — {slot.subjectName}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          Menggantikan:{' '}
+                          <strong className="text-rose-300">
+                            {slot.absentTeacherCodes
+                              .map((ac) => `${ac} (${teacherNameMap.get(ac) || ac})`)
+                              .join(', ')}
+                          </strong>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 2. Kelas Saya Yang Diganti (Guru Tidak Hadir) */}
+              <div className="bg-slate-950/90 border border-amber-500/30 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-amber-300 flex items-center gap-2">
+                    <UserX className="w-4 h-4 text-amber-400" />
+                    <span>
+                      2. Kelas Saya Yang Diganti (Guru Tidak Hadir) ({personalReliefCategories.myAbsentClassSlots.length})
+                    </span>
+                  </h4>
+                </div>
+
+                {personalReliefCategories.myAbsentClassSlots.length === 0 ? (
+                  <p className="text-xs text-slate-500 italic">
+                    Tiada kelas anda yang diganti secara sehala pada hari ini.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {personalReliefCategories.myAbsentClassSlots.map((slot) => (
+                      <div
+                        key={slot.slotKey}
+                        className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/40 space-y-1.5 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-black text-white text-sm">
+                            {slot.classLabel} ({slot.slotLabel})
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono font-bold text-[11px]">
+                            {slot.timeLabel}
+                          </span>
+                        </div>
+                        <div className="text-slate-300 font-semibold">
+                          Subjek Asal: <strong className="text-white">{slot.subjectCode}</strong> — {slot.subjectName}
+                        </div>
+                        <div className="text-[11px] text-slate-300">
+                          Diganti Oleh:{' '}
+                          <strong className="text-emerald-300">
+                            [{slot.assignedSubstituteCode}] {slot.assignedSubstituteName}
+                          </strong>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 3. Pertukaran Waktu (Swap) */}
+              <div className="bg-slate-950/90 border border-indigo-500/30 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-indigo-300 flex items-center gap-2">
+                    <ArrowLeftRight className="w-4 h-4 text-indigo-400" />
+                    <span>
+                      3. Pertukaran Waktu (Swap Kelas Sama & Tarikh Pulang Balik) ({personalReliefCategories.swapSlots.length})
+                    </span>
+                  </h4>
+                </div>
+
+                {personalReliefCategories.swapSlots.length === 0 ? (
+                  <p className="text-xs text-slate-500 italic">
+                    Tiada pertukaran waktu 2-hala melibatkan anda pada hari ini.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {personalReliefCategories.swapSlots.map((slot) => {
+                      const amISubstitute =
+                        String(slot.assignedSubstituteCode || '').toUpperCase() === myCodeUpper;
+                      return (
+                        <div
+                          key={slot.slotKey}
+                          className="p-3.5 rounded-xl bg-indigo-950/25 border border-indigo-500/40 space-y-2 text-xs"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-black text-white text-sm">
+                              {slot.classLabel} ({slot.slotLabel})
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-200 font-mono font-bold text-[11px]">
+                              {slot.timeLabel}
+                            </span>
+                          </div>
+                          <div className="text-slate-200">
+                            {amISubstitute ? (
+                              <>
+                                Hari ini anda masuk <strong>{slot.classLabel}</strong> ajar subjek{' '}
+                                <strong className="text-amber-300">
+                                  {slot.substituteTeachingSubjectCode || slot.subjectCode}
+                                </strong>{' '}
+                                (menggantikan <strong>{slot.absentTeacherCodes.join(', ')}</strong>).
+                              </>
+                            ) : (
+                              <>
+                                Kelas anda (<strong>{slot.subjectCode}</strong>) diambil alih oleh{' '}
+                                <strong className="text-emerald-300">
+                                  [{slot.assignedSubstituteCode}] {slot.assignedSubstituteName}
+                                </strong>
+                                .
+                              </>
+                            )}
+                          </div>
+                          {slot.repaymentDate && (
+                            <div className="p-2 rounded-lg bg-slate-900 border border-indigo-500/30 text-[11px] text-indigo-200">
+                              🔄 <strong>Tarikh Pulang Balik:</strong> {slot.repaymentDate} (
+                              {slot.repaymentDay}) · {slot.repaymentSlotLabel} ({slot.repaymentTimeLabel}) —{' '}
+                              <strong>{slot.absentTeacherCodes[0]}</strong> masuk ajar{' '}
+                              <strong>{slot.repaymentSubjectCode || slot.subjectCode}</strong>.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

@@ -50,6 +50,8 @@ import { PaparanMaklumanView } from '../Dashboard/PaparanMaklumanView';
 import { SuratMasukManagerView } from '../SuratMasukManagerView';
 import { ReliefSchedulingView } from '../ReliefSchedulingView';
 import { AISetiausahaHub } from '../AISetiausaha/AISetiausahaHub';
+import { SetiausahaExternalPrefill } from '../AISetiausaha/types';
+import { useAcademicAccessControl } from '../../utils/academicAccessControl';
 
 export type Workspace = 'dashboard' | 'makluman' | 'surat-masuk' | 'ai-setiausaha' | 'academic' | 'kokurikulum' | 'attendance' | 'master-data';
 export type AcademicTab = 'pbd' | 'uasa' | 'analysis' | 'timetable' | 'relief' | 'opr';
@@ -70,6 +72,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace>('dashboard');
   const [academicTab, setAcademicTab] = useState<AcademicTab>('pbd');
   const [kokoOprPrefill, setKokoOprPrefill] = useState<MaklumanOPRPrefill | null>(null);
+  const [setiausahaPrefill, setSetiausahaPrefill] = useState<SetiausahaExternalPrefill | null>(null);
   const [principalAttendanceView, setPrincipalAttendanceView] = useState<'punch' | 'management'>('management');
   const [isLogoModalOpen, setIsLogoModalOpen] = useState<boolean>(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState<boolean>(
@@ -93,6 +96,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
   const displaySchoolCode = schoolSettings?.schoolCode || activeSchoolCode;
   const displaySlogan = schoolSettings?.slogan || DEFAULT_SCHOOL_SLOGAN;
   const displayLogo = schoolSettings?.schoolLogo || schoolSettings?.logoUrl || '';
+  const academicAccess = useAcademicAccessControl(currentUser, '2026', displaySchoolCode);
 
   useEffect(() => {
     let isMounted = true;
@@ -716,6 +720,10 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                 setKokoOprPrefill(payload);
                 setActiveWorkspace('kokurikulum');
               }}
+              onOpenSetiausahaDoc={(payload) => {
+                setSetiausahaPrefill(payload);
+                setActiveWorkspace('ai-setiausaha');
+              }}
             />
           </div>
         )}
@@ -741,6 +749,8 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
             <AISetiausahaHub
               currentUser={currentUser}
               schoolSettings={schoolSettings}
+              externalPrefill={setiausahaPrefill}
+              onClearExternalPrefill={() => setSetiausahaPrefill(null)}
             />
           </div>
         )}
@@ -789,7 +799,9 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                       : 'text-slate-400 hover:text-white hover:bg-slate-800'
                   }`}
                 >
-                  Jadual Waktu (Matriks Agihan)
+                  {academicAccess.isAcademicAdmin
+                    ? 'Jadual Waktu (Matriks Agihan)'
+                    : 'Jadual Waktu Saya & Induk'}
                 </button>
                 <button
                   onClick={() => setAcademicTab('relief')}
@@ -800,7 +812,11 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                   }`}
                 >
                   <Clock className="w-3.5 h-3.5" />
-                  <span>Jadual Ganti (Relief)</span>
+                  <span>
+                    {academicAccess.isAcademicAdmin
+                      ? 'Jadual Ganti (Relief)'
+                      : 'Jadual Ganti Saya (Relief)'}
+                  </span>
                 </button>
                 <button
                   onClick={() => setAcademicTab('opr')}
@@ -814,9 +830,20 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                 </button>
               </div>
 
-              <span className="text-[11px] font-mono font-bold text-emerald-400 px-3 py-1 bg-emerald-950/60 border border-emerald-800/60 rounded-lg">
-                Mode: OPEN_TEACHERS
-              </span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-mono font-bold text-indigo-300 px-3 py-1 bg-indigo-950/60 border border-indigo-700/60 rounded-lg flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
+                  Mode: KAWALAN AKSES PERANAN (RBAC)
+                </span>
+                {academicAccess.roleBadges.map((rb, idx) => (
+                  <span
+                    key={idx}
+                    className="text-[10px] font-mono font-bold text-emerald-300 px-2.5 py-1 bg-emerald-950/60 border border-emerald-800/60 rounded-lg"
+                  >
+                    {rb}
+                  </span>
+                ))}
+              </div>
             </div>
 
             {/* Academic Workspace Content */}
@@ -830,7 +857,10 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
 
             {academicTab === 'analysis' && (
               <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6">
-                <AcademicAnalysisDashboard records={[]} />
+                <AcademicAnalysisDashboard
+                  currentUser={currentUser}
+                  schoolCode={displaySchoolCode}
+                />
               </div>
             )}
 
@@ -838,9 +868,10 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               <div className="animate-fade-in">
                 <TimetableSystem 
                   activeAcademicYear="2027" 
-                  initialTab={isPrincipal ? 'AGIHAN' : 'JG1_50'}
+                  initialTab={academicAccess.isAcademicAdmin ? 'AGIHAN' : 'JG1_50'}
                   schoolCode={displaySchoolCode}
                   schoolName={displaySchoolName}
+                  currentUser={currentUser}
                 />
               </div>
             )}
@@ -873,6 +904,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               currentUser={currentUser}
               profile={currentUser}
               role={isPrincipal ? 'pentadbir' : 'guru'}
+              academicYear="2026"
               schoolSettings={schoolSettings}
               oprPrefill={kokoOprPrefill}
               onClearOprPrefill={() => setKokoOprPrefill(null)}

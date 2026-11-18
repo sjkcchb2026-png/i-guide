@@ -114,6 +114,9 @@ export interface SchoolConfig {
   schoolLogo?: string;
   slogan?: string;
   adminEmails?: string[];
+  schoolDriveWebhookUrl?: string;
+  schoolDriveSecretToken?: string;
+  schoolDriveAccountEmail?: string;
 }
 
 export interface AcademicYearConfig {

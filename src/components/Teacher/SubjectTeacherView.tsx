@@ -31,9 +31,10 @@ import {
 import { SUBJECTS_BY_YEAR, ACADEMIC_YEARS, DEFAULT_ACADEMIC_YEAR, CLASSES } from '../../constants';
 import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
+import { useAcademicAccessControl } from '../../utils/academicAccessControl';
 import SchoolLogo from '../SchoolLogo';
 import { StudentProfileModal } from '../Student/StudentProfileModal';
-import { Save, Search, Table as TableIcon, FileEdit, CheckCircle, AlertTriangle, Users, BarChart3, PieChart as PieChartIcon, TrendingUp, BookOpen } from 'lucide-react';
+import { Save, Search, Table as TableIcon, FileEdit, CheckCircle, AlertTriangle, Users, BarChart3, PieChart as PieChartIcon, TrendingUp, BookOpen, ShieldCheck, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, LineChart, Line, LabelList } from 'recharts';
 
@@ -93,12 +94,35 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
   const [searchQuery, setSearchQuery] = useState('');
   const [profileStudentId, setProfileStudentId] = useState<string | null>(null);
 
-  // OPEN_TEACHERS Mode: active teachers have full subject and year access
-  const availableYears = useMemo<number[]>(() => [1, 2, 3, 4, 5, 6], []);
+  const accessProfile = useAcademicAccessControl(profile, academicYear, activeSchoolCode);
+  const isAcademicAdmin = accessProfile.isAcademicAdmin;
+
+  // RBAC Mode: restrict Tahun & Mata Pelajaran to teacher's teachingAssignments unless isAcademicAdmin
+  const availableYears = useMemo<number[]>(() => {
+    if (isAcademicAdmin) return [1, 2, 3, 4, 5, 6];
+    const years = Array.from(
+      new Set(accessProfile.teachingAssignments.map((a) => a.yearLevel))
+    ).sort((a, b) => a - b);
+    return years;
+  }, [isAcademicAdmin, accessProfile.teachingAssignments]);
 
   const availableSubjects = useMemo<string[]>(() => {
-    return SUBJECTS_BY_YEAR[selectedYear] || [];
-  }, [selectedYear]);
+    if (isAcademicAdmin) {
+      return SUBJECTS_BY_YEAR[selectedYear] || [];
+    }
+    const subjectsForYear = Array.from(
+      new Set(
+        accessProfile.teachingAssignments
+          .filter((a) => a.yearLevel === selectedYear)
+          .map((a) => a.subjectName)
+      )
+    );
+    return subjectsForYear;
+  }, [isAcademicAdmin, selectedYear, accessProfile.teachingAssignments]);
+
+  const hasNoTeachingAssignments =
+    !isAcademicAdmin && !accessProfile.loading && accessProfile.teachingAssignments.length === 0;
+  const isKeyInLocked = hasNoTeachingAssignments || !selectedSubject;
 
   // Versioned Assessment Scale resolution: 2026 -> 6-level (TP1-TP6), 2027 Tahun 1 -> 3-level (TP1-TP3)
   const activeScale = useMemo<PbdScaleConfig>(() => {
@@ -242,6 +266,7 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
   };
 
   const forceSave = (studentId: string) => {
+    if (isKeyInLocked) return;
     if (saveTimeouts.current[studentId]) {
       clearTimeout(saveTimeouts.current[studentId]);
       delete saveTimeouts.current[studentId];
@@ -253,6 +278,7 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
   };
 
   const handleResultChange = (studentId: string, field: string, value: any) => {
+    if (isKeyInLocked) return;
     // Update local state and ref immediately for snappy UI
     setResults(prev => {
       const updated = {

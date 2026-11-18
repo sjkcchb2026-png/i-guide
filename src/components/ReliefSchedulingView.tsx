@@ -57,6 +57,7 @@ import {
   PrasekolahTimetableDoc,
   normalizePrasekolahTimetableDoc,
 } from '../utils/prasekolahTimetable';
+import { useAcademicAccessControl } from '../utils/academicAccessControl';
 
 export interface ReliefAlertRecord {
   id: string;
@@ -132,6 +133,8 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
   const [scheduleGrid, setScheduleGrid] = useState<ScheduleGrid>(createEmptyScheduleGrid());
   const [prasekolahTimetable, setPrasekolahTimetable] = useState<PrasekolahTimetableDoc | null>(null);
   const [activeAcademicYear, setActiveAcademicYear] = useState<string>('2027');
+  const accessProfile = useAcademicAccessControl(currentUser, activeAcademicYear, activeSchoolCode);
+  const isAcademicAdmin = accessProfile.isAcademicAdmin;
   const [absenceRecords, setAbsenceRecords] = useState<AbsenceSyncSourceRecord[]>([]);
   const [unavailabilityRecords, setUnavailabilityRecords] = useState<AbsenceSyncSourceRecord[]>([]);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
@@ -714,6 +717,25 @@ export const ReliefSchedulingView: React.FC<ReliefSchedulingViewProps> = ({
   const getAbsentTeacherNames = (ids: string[]) => {
     return formatCleanAbsentTeacherNames(ids || [], teacherMappingList.list, teacherList);
   };
+
+  if (!isAcademicAdmin) {
+    return (
+      <div className="flex-1 flex flex-col gap-6 max-w-7xl w-full mx-auto font-sans">
+        <BilikGuruReliefView
+          schedule={scheduleGrid}
+          academicYear={activeAcademicYear}
+          teacherMapping={teacherMappingList}
+          isAdmin={false}
+          lockedTeacherShortCode={accessProfile.teacherShortCode}
+          lockedTeacherName={accessProfile.teacherName}
+          displayMode="CODE"
+          schoolCode={activeSchoolCode}
+          schoolName={schoolSettings?.schoolName || tenantSchoolName}
+          prasekolahTimetable={prasekolahTimetable}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col gap-6 max-w-7xl w-full mx-auto font-sans">

@@ -86,6 +86,20 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isKokoManager() {
+      return isAdmin() || (
+        userExists() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true && (
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAny(['subRole']) &&
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.subRole in ['PKKK', 'pkkk', 'SU_KOKO', 'GPK_KOKO']) ||
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAny(['primaryRoleCode']) &&
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.primaryRoleCode in ['PKKK', 'PG04', 'JR21', 'JK23-SU-KOKURIKULUM']) ||
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.keys().hasAny(['isSetiausahaKoko']) &&
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSetiausahaKoko == true)
+        )
+      );
+    }
+
     // Health / Connection probes
     match /test/{docId} {
       allow read: if true;
@@ -340,9 +354,9 @@ service cloud.firestore {
     match /koko_groups/{groupId} {
       allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
       allow list: if isSignedIn();
-      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
-      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
-      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
+      allow create: if isKokoManager() && belongsToCallerSchool(request.resource.data);
+      allow update: if isKokoManager() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isKokoManager() && belongsToCallerSchool(resource.data);
     }
 
     match /koko_attendance/{attId} {
@@ -356,17 +370,17 @@ service cloud.firestore {
     match /koko_committees/{commId} {
       allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
       allow list: if isSignedIn();
-      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
-      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
-      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
+      allow create: if isKokoManager() && belongsToCallerSchool(request.resource.data);
+      allow update: if isKokoManager() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isKokoManager() && belongsToCallerSchool(resource.data);
     }
 
     match /koko_settings/{settingId} {
       allow get: if isSignedIn() && belongsToCallerSchool(resource.data);
       allow list: if isSignedIn();
-      allow create: if isAdmin() && belongsToCallerSchool(request.resource.data);
-      allow update: if isAdmin() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
-      allow delete: if isAdmin() && belongsToCallerSchool(resource.data);
+      allow create: if isKokoManager() && belongsToCallerSchool(request.resource.data);
+      allow update: if isKokoManager() && belongsToCallerSchool(resource.data) && belongsToCallerSchool(request.resource.data);
+      allow delete: if isKokoManager() && belongsToCallerSchool(resource.data);
     }
 
     match /koko_activities/{actId} {

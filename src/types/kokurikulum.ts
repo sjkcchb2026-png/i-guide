@@ -182,7 +182,11 @@ export interface KokoActivity {
   tindakanSusulan?: string;
   images: string[];
 
-  // Metadata
+  // Metadata & Google Drive Archive Links
+  driveFolderUrl?: string;
+  driveFileUrl?: string;
+  driveFolderPath?: string;
+  driveSyncedAt?: string;
   createdBy: string;
   academicYear: string;
   createdAt: string;

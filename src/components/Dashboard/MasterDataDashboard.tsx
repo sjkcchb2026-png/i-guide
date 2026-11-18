@@ -48,6 +48,12 @@ import { SchoolLogo } from '../SchoolLogo';
 import { SchoolLogoModal } from '../SchoolLogoModal';
 import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 import {
+  DEFAULT_SCHOOL_DRIVE_WEBHOOK_URL,
+  DEFAULT_SCHOOL_DRIVE_SECRET_TOKEN,
+  DEFAULT_SCHOOL_DRIVE_ACCOUNT_EMAIL,
+  testSchoolDriveConnection,
+} from '../../utils/schoolDriveArchive';
+import {
   belongsToSchool,
   DEFAULT_SCHOOL_NAME,
   DEFAULT_SCHOOL_SLOGAN,
@@ -353,6 +359,21 @@ export default function MasterDataDashboard({
           schoolLogo: sp?.logoUrl ?? cfg.schoolLogo ?? schoolSettings?.schoolLogo ?? '',
           slogan: sp?.slogan || cfg.slogan || schoolSettings?.slogan || DEFAULT_SCHOOL_SLOGAN,
           adminEmails: sp?.adminEmails || cfg.adminEmails || schoolSettings?.adminEmails || [],
+          schoolDriveWebhookUrl:
+            cfg.schoolDriveWebhookUrl ||
+            sp?.schoolDriveWebhookUrl ||
+            schoolSettings?.schoolDriveWebhookUrl ||
+            DEFAULT_SCHOOL_DRIVE_WEBHOOK_URL,
+          schoolDriveSecretToken:
+            cfg.schoolDriveSecretToken ||
+            sp?.schoolDriveSecretToken ||
+            schoolSettings?.schoolDriveSecretToken ||
+            DEFAULT_SCHOOL_DRIVE_SECRET_TOKEN,
+          schoolDriveAccountEmail:
+            cfg.schoolDriveAccountEmail ||
+            sp?.schoolDriveAccountEmail ||
+            schoolSettings?.schoolDriveAccountEmail ||
+            DEFAULT_SCHOOL_DRIVE_ACCOUNT_EMAIL,
         };
         setSchoolConfig(merged);
       } else {
@@ -372,6 +393,18 @@ export default function MasterDataDashboard({
             sp?.adminEmails ||
             schoolSettings?.adminEmails ||
             (currentUser?.email ? [currentUser.email.toLowerCase().trim()] : []),
+          schoolDriveWebhookUrl:
+            sp?.schoolDriveWebhookUrl ||
+            schoolSettings?.schoolDriveWebhookUrl ||
+            DEFAULT_SCHOOL_DRIVE_WEBHOOK_URL,
+          schoolDriveSecretToken:
+            sp?.schoolDriveSecretToken ||
+            schoolSettings?.schoolDriveSecretToken ||
+            DEFAULT_SCHOOL_DRIVE_SECRET_TOKEN,
+          schoolDriveAccountEmail:
+            sp?.schoolDriveAccountEmail ||
+            schoolSettings?.schoolDriveAccountEmail ||
+            DEFAULT_SCHOOL_DRIVE_ACCOUNT_EMAIL,
         };
         await setDoc(doc(db, 'school_config', configDocId), deepSanitizeFirestore(defaultConfig), { merge: true });
         setSchoolConfig(defaultConfig);
@@ -614,10 +647,54 @@ export default function MasterDataDashboard({
   const [configForm, setConfigForm] = useState<Partial<SchoolConfig>>({});
   const [editingConfig, setEditingConfig] = useState(false);
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
+  const [testingDrive, setTestingDrive] = useState(false);
+  const [driveTestResult, setDriveTestResult] = useState<{
+    success: boolean;
+    message: string;
+    folderUrl?: string;
+    fileUrl?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (schoolConfig) setConfigForm(schoolConfig);
   }, [schoolConfig]);
+
+  const handleTestSchoolDrive = async () => {
+    setTestingDrive(true);
+    setDriveTestResult(null);
+    try {
+      const res = await testSchoolDriveConnection({
+        schoolCode: activeSchoolCode,
+        academicYear: selectedAcademicYear || '2026',
+        webhookUrl:
+          (configForm.schoolDriveWebhookUrl || '').trim() || DEFAULT_SCHOOL_DRIVE_WEBHOOK_URL,
+        secretToken:
+          (configForm.schoolDriveSecretToken || '').trim() || DEFAULT_SCHOOL_DRIVE_SECRET_TOKEN,
+      });
+      if (res.success) {
+        setDriveTestResult({
+          success: true,
+          message:
+            res.message ||
+            'Sambungan ke Google Drive Rasmi Sekolah berjaya disahkan! Folder SKAS/SKPM sedia menerima dokumen.',
+          folderUrl: res.folderUrl,
+          fileUrl: res.fileUrl,
+        });
+      } else {
+        setDriveTestResult({
+          success: false,
+          message: res.error || 'Gagal menguji sambungan ke Google Drive Rasmi Sekolah.',
+        });
+      }
+    } catch (err: any) {
+      setDriveTestResult({
+        success: false,
+        message: err?.message || 'Ralat rangkaian semasa menguji sambungan Drive Sekolah.',
+      });
+    } finally {
+      setTestingDrive(false);
+    }
+  };
 
   const saveSchoolConfig = async () => {
     if (!configForm.schoolName) return;
@@ -628,6 +705,12 @@ export default function MasterDataDashboard({
       const cleanName = configForm.schoolName.trim();
       const cleanLogo = (configForm.schoolLogo || '').trim();
       const cleanSlogan = (configForm.slogan || '').trim() || DEFAULT_SCHOOL_SLOGAN;
+      const cleanDriveWebhook =
+        (configForm.schoolDriveWebhookUrl || '').trim() || DEFAULT_SCHOOL_DRIVE_WEBHOOK_URL;
+      const cleanDriveToken =
+        (configForm.schoolDriveSecretToken || '').trim() || DEFAULT_SCHOOL_DRIVE_SECRET_TOKEN;
+      const cleanDriveEmail =
+        (configForm.schoolDriveAccountEmail || '').trim() || DEFAULT_SCHOOL_DRIVE_ACCOUNT_EMAIL;
       const cleanAdmins = Array.from(
         new Set(
           (configForm.adminEmails || [])
@@ -657,6 +740,9 @@ export default function MasterDataDashboard({
         schoolLogo: cleanLogo,
         slogan: cleanSlogan,
         adminEmails: cleanAdmins,
+        schoolDriveWebhookUrl: cleanDriveWebhook,
+        schoolDriveSecretToken: cleanDriveToken,
+        schoolDriveAccountEmail: cleanDriveEmail,
       };
 
       await setDoc(doc(db, 'school_config', configDocId), deepSanitizeFirestore(nextConfig), { merge: true });
@@ -674,6 +760,9 @@ export default function MasterDataDashboard({
           hasPreschool: nextConfig.hasPreschool,
           hasPPKI: nextConfig.hasPPKI,
           academicSession: nextConfig.academicSession,
+          schoolDriveWebhookUrl: cleanDriveWebhook,
+          schoolDriveSecretToken: cleanDriveToken,
+          schoolDriveAccountEmail: cleanDriveEmail,
           updatedAt: nowIso,
         }),
         { merge: true }
@@ -688,6 +777,9 @@ export default function MasterDataDashboard({
           logoUrl: cleanLogo,
           slogan: cleanSlogan,
           adminEmails: cleanAdmins,
+          schoolDriveWebhookUrl: cleanDriveWebhook,
+          schoolDriveSecretToken: cleanDriveToken,
+          schoolDriveAccountEmail: cleanDriveEmail,
           updatedAt: nowIso,
         }),
         { merge: true }
@@ -705,6 +797,9 @@ export default function MasterDataDashboard({
           logoUrl: cleanLogo,
           slogan: cleanSlogan,
           adminEmails: cleanAdmins,
+          schoolDriveWebhookUrl: cleanDriveWebhook,
+          schoolDriveSecretToken: cleanDriveToken,
+          schoolDriveAccountEmail: cleanDriveEmail,
           updatedAt: nowIso,
         });
       }
@@ -2598,6 +2693,131 @@ export default function MasterDataDashboard({
                           </button>
                         </div>
                       )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ======================================================== */}
+                {/* ☁️ PAUTAN GOOGLE DRIVE RASMI SEKOLAH (ARKIB SKAS) */}
+                {/* ======================================================== */}
+                <div className="mt-8 pt-6 border-t border-slate-200">
+                  <div className="p-6 rounded-3xl bg-gradient-to-br from-emerald-50/90 via-teal-50/70 to-slate-50 border border-emerald-200/80 space-y-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2.5 py-0.5 rounded-lg bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider">
+                            ARKIB CLOUD SEKOLAH
+                          </span>
+                          <h4 className="text-sm sm:text-base font-black uppercase tracking-tight text-slate-900">
+                            ☁️ PAUTAN GOOGLE DRIVE RASMI SEKOLAH (ARKIB SKAS)
+                          </h4>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-1">
+                          Semua bukti SKPM Kualiti@Sekolah (Poster OPR, Memo Panggilan, Minit Mesyuarat PKPA, Surat Lantikan &amp; Foto Aktiviti) disegerakkan secara automatik ke dalam Google Drive rasmi sekolah.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleTestSchoolDrive}
+                        disabled={testingDrive}
+                        className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-black uppercase tracking-wide flex items-center gap-2 shrink-0 cursor-pointer shadow-sm transition-all"
+                      >
+                        <span>{testingDrive ? '⏳ Menguji Sambungan...' : '🧪 Uji Sambungan Drive Sekolah'}</span>
+                      </button>
+                    </div>
+
+                    {driveTestResult && (
+                      <div
+                        className={`p-3.5 rounded-2xl border text-xs font-bold flex flex-wrap items-center justify-between gap-3 ${
+                          driveTestResult.success
+                            ? 'bg-emerald-100/80 border-emerald-300 text-emerald-950'
+                            : 'bg-rose-50 border-rose-200 text-rose-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span>{driveTestResult.success ? '✅' : '⚠️'}</span>
+                          <span>{driveTestResult.message}</span>
+                        </div>
+                        {(driveTestResult.folderUrl || driveTestResult.fileUrl) && (
+                          <a
+                            href={driveTestResult.folderUrl || driveTestResult.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-black uppercase tracking-wider inline-flex items-center gap-1.5"
+                          >
+                            <span>📂 Buka di Google Drive Sekolah</span>
+                          </a>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="md:col-span-2">
+                        <label className="block text-[11px] font-black uppercase text-slate-600 mb-1.5">
+                          URL Webhook Google Apps Script (Web App URL)
+                        </label>
+                        <input
+                          type="text"
+                          disabled={!editingConfig}
+                          value={
+                            configForm.schoolDriveWebhookUrl ?? DEFAULT_SCHOOL_DRIVE_WEBHOOK_URL
+                          }
+                          onChange={(e) =>
+                            setConfigForm({
+                              ...configForm,
+                              schoolDriveWebhookUrl: e.target.value,
+                            })
+                          }
+                          className="w-full bg-white disabled:bg-slate-100/80 border border-emerald-300/80 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-emerald-600"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-black uppercase text-slate-600 mb-1.5">
+                          Token Keselamatan Drive (Secret Token)
+                        </label>
+                        <input
+                          type="text"
+                          disabled={!editingConfig}
+                          value={
+                            configForm.schoolDriveSecretToken ?? DEFAULT_SCHOOL_DRIVE_SECRET_TOKEN
+                          }
+                          onChange={(e) =>
+                            setConfigForm({
+                              ...configForm,
+                              schoolDriveSecretToken: e.target.value,
+                            })
+                          }
+                          className="w-full bg-white disabled:bg-slate-100/80 border border-emerald-300/80 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-emerald-600"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                      <div>
+                        <label className="block text-[11px] font-black uppercase text-slate-600 mb-1.5">
+                          Akaun E-mel Google Drive Rasmi Sekolah (Label Paparan)
+                        </label>
+                        <input
+                          type="text"
+                          disabled={!editingConfig}
+                          value={
+                            configForm.schoolDriveAccountEmail ?? DEFAULT_SCHOOL_DRIVE_ACCOUNT_EMAIL
+                          }
+                          onChange={(e) =>
+                            setConfigForm({
+                              ...configForm,
+                              schoolDriveAccountEmail: e.target.value,
+                            })
+                          }
+                          placeholder="cth: ycc3404@moe.edu.my"
+                          className="w-full bg-white disabled:bg-slate-100/80 border border-emerald-300/80 rounded-xl px-3.5 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-emerald-600"
+                        />
+                      </div>
+                      <div className="text-[11px] text-slate-600 leading-relaxed bg-white/80 p-3 rounded-xl border border-emerald-200/60">
+                        <strong className="text-emerald-800">Status Pra-Konfigurasi:</strong> URL Webhook &amp; Token Keselamatan rasmi <code className="font-mono font-bold">{ DEFAULT_SCHOOL_DRIVE_SECRET_TOKEN }</code> telah diaktifkan secara lalai. Klik <strong>&ldquo;Kemas Kini Profil&rdquo;</strong> di atas jika ingin mengubah tetapan.
+                      </div>
                     </div>
                   </div>
                 </div>

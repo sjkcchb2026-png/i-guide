@@ -382,6 +382,7 @@ interface TeacherTimetableViewProps {
   schoolName?: string;
   schoolCode?: string;
   defaultTeacherCode?: string;
+  lockedTeacherCode?: string;
   classTeachers?: Record<number, string>;
   matrixData?: SubjectAllocationRow[];
   onExportAllExcel?: () => void;
@@ -396,6 +397,7 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
   schoolName: propSchoolName,
   schoolCode: propSchoolCode,
   defaultTeacherCode,
+  lockedTeacherCode,
   classTeachers = {},
   matrixData = [],
   onExportAllExcel,
@@ -405,12 +407,14 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
   const schoolName = propSchoolName || tenant.schoolName;
   const schoolCode = propSchoolCode || tenant.schoolCode;
   const [selectedTeacherCode, setSelectedTeacherCode] = useState<string>(
-    defaultTeacherCode || teacherMapping.list[0]?.code || ''
+    lockedTeacherCode || defaultTeacherCode || teacherMapping.list[0]?.code || ''
   );
   const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
-    if (defaultTeacherCode && teacherMapping.list.some((t) => t.code === defaultTeacherCode)) {
+    if (lockedTeacherCode) {
+      setSelectedTeacherCode(lockedTeacherCode);
+    } else if (defaultTeacherCode && teacherMapping.list.some((t) => t.code === defaultTeacherCode)) {
       setSelectedTeacherCode(defaultTeacherCode);
     } else if (
       !selectedTeacherCode &&
@@ -418,11 +422,15 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
     ) {
       setSelectedTeacherCode(teacherMapping.list[0].code);
     }
-  }, [defaultTeacherCode, teacherMapping.list, selectedTeacherCode]);
+  }, [lockedTeacherCode, defaultTeacherCode, teacherMapping.list, selectedTeacherCode]);
 
   const selectedTeacher = useMemo(() => {
-    return teacherMapping.list.find((t) => t.code === selectedTeacherCode) || teacherMapping.list[0];
-  }, [teacherMapping, selectedTeacherCode]);
+    const targetCode = lockedTeacherCode || selectedTeacherCode;
+    return (
+      teacherMapping.list.find((t) => t.code.toUpperCase() === String(targetCode || '').toUpperCase()) ||
+      teacherMapping.list[0]
+    );
+  }, [teacherMapping, selectedTeacherCode, lockedTeacherCode]);
 
   const guruPemulihanCode = useMemo(
     () => getDesignatedPemulihanTeacherCode(teacherMapping.list),
@@ -473,7 +481,9 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
               Lampiran B · Option A
             </span>
             <span className="text-xs text-slate-400">
-              JG1 – JG50 Jadual Waktu Peribadi Guru (Dwi-Waktu Tahun 1)
+              {lockedTeacherCode
+                ? 'Jadual Persendirian Saya (Akses Peribadi RBAC)'
+                : 'JG1 – JG50 Jadual Waktu Peribadi Guru (Dwi-Waktu Tahun 1)'}
             </span>
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-white mt-1">
@@ -526,18 +536,24 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {/* Teacher Selector Dropdown */}
-          <select
-            value={selectedTeacher?.code || ''}
-            onChange={(e) => setSelectedTeacherCode(e.target.value)}
-            className="px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs font-bold text-white outline-none focus:border-blue-500 cursor-pointer max-w-xs"
-          >
-            {teacherMapping.list.map((t, idx) => (
-              <option key={`${t.code}_${t.id}_${idx}`} value={t.code}>
-                [{t.num}] {t.code} - {t.name}
-              </option>
-            ))}
-          </select>
+          {/* Teacher Selector Dropdown or Locked Personal Badge */}
+          {lockedTeacherCode ? (
+            <div className="px-3.5 py-2 bg-slate-950 border border-emerald-500/40 rounded-xl text-xs font-black text-emerald-300">
+              Jadual Persendirian Saya: [{selectedTeacher?.code}] {selectedTeacher?.name}
+            </div>
+          ) : (
+            <select
+              value={selectedTeacher?.code || ''}
+              onChange={(e) => setSelectedTeacherCode(e.target.value)}
+              className="px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs font-bold text-white outline-none focus:border-blue-500 cursor-pointer max-w-xs"
+            >
+              {teacherMapping.list.map((t, idx) => (
+                <option key={`${t.code}_${t.id}_${idx}`} value={t.code}>
+                  [{t.num}] {t.code} - {t.name}
+                </option>
+              ))}
+            </select>
+          )}
 
           <button
             type="button"
@@ -558,7 +574,7 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
             <span>Cetak / PDF A4</span>
           </button>
 
-          {onExportAllExcel && (
+          {!lockedTeacherCode && onExportAllExcel && (
             <button
               type="button"
               onClick={onExportAllExcel}
@@ -570,7 +586,7 @@ export const TeacherTimetableView: React.FC<TeacherTimetableViewProps> = ({
             </button>
           )}
 
-          {onBulkPrintPdf && (
+          {!lockedTeacherCode && onBulkPrintPdf && (
             <button
               type="button"
               onClick={onBulkPrintPdf}

@@ -16,7 +16,7 @@ export interface SmartPrintResult {
   message: string;
 }
 
-function buildPrintableHtmlDocument(
+export function buildPrintableHtmlDocument(
   innerHtml: string,
   title: string,
   orientation: 'portrait' | 'landscape' = 'portrait'
