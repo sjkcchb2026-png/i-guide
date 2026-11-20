@@ -69,6 +69,12 @@ import {
   autoResolveKokoSKPM,
   getKokoSKPMOption,
 } from '../../utils/skpmCatalog';
+import {
+  SKAS_STANDARDS_DICTIONARY,
+  SkasStandardGroupKey,
+  getSkasGroup,
+  resolveSkasSelection,
+} from '../../data/skasStandards';
 import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
 import SchoolLogo from '../SchoolLogo';
 import SPPKCompetitionFormsModal, { SPPKInitialData } from './SPPKCompetitionFormsModal';
@@ -205,9 +211,10 @@ export default function KokoSmartOPRManager({
   const [unit, setUnit] = useState('');
   const [koakademikCoordinators, setKoakademikCoordinators] = useState<Record<string, string>>({});
 
-  // SKPM Standard 3.2 & Standard 5 Auto-Detection + Manual Override
+  // SKPM Standard 1 - Standard 5 Auto-Detection + 2-Level Cascading Manual Selection
   const [skpmManualOverride, setSkpmManualOverride] = useState<boolean>(false);
-  const [skpmStandardCode, setSkpmStandardCode] = useState<SKPMKokoStandardCode>('3.2.5.1');
+  const [skasStandardGroup, setSkasStandardGroup] = useState<SkasStandardGroupKey>('Std 3.2');
+  const [skpmStandardCode, setSkpmStandardCode] = useState<string>('3.2.5.1');
   const [linkedMaklumanTaskId, setLinkedMaklumanTaskId] = useState<string>('');
 
   // Teacher Role Separation
@@ -273,8 +280,13 @@ export default function KokoSmartOPRManager({
         level: act.level,
         programName: act.programName,
         unit: act.unit,
-        manualCode: act.skpmStandardCode,
+        manualCode: act.subStandardCode || act.skpmStandardCode,
       });
+      const resolvedSkas = resolveSkasSelection(
+        act.standardGroup || 'Std 3.2',
+        act.subStandardCode || act.skpmStandardCode || skpm.code,
+        'KOKURIKULUM'
+      );
 
       const summaryLines = [
         act.objective1 ? `Objektif: ${act.objective1}` : '',
@@ -289,9 +301,16 @@ export default function KokoSmartOPRManager({
         schoolCode: activeSchoolCode,
         academicYear: act.academicYear || '2026',
         docKind: 'OPR',
-        skpmBucket: 'Std 3.2',
-        skpmCodeBadge: skpm.code,
-        skpmStandard: skpm.standardTitle,
+        standardGroup: resolvedSkas.standardGroup,
+        subStandardCode: resolvedSkas.subStandardCode,
+        subStandardTitle: resolvedSkas.subStandardTitle,
+        driveTargetFolderPath:
+          act.driveTargetFolderPath && act.driveTargetFolderPath.length > 0
+            ? act.driveTargetFolderPath
+            : resolvedSkas.driveTargetFolderPath,
+        skpmBucket: resolvedSkas.standardGroup,
+        skpmCodeBadge: `${resolvedSkas.subStandardCode} — ${resolvedSkas.subStandardTitle}`,
+        skpmStandard: resolvedSkas.standardFullTitle,
         pillar: 'KOKURIKULUM',
         programTitle: act.programName,
         tarikh: act.date,
@@ -304,13 +323,20 @@ export default function KokoSmartOPRManager({
         schoolLogoUrl: effectiveSchoolLogo,
         academicYear: act.academicYear || '2026',
         docKind: 'OPR',
-        skpmBucket: 'Std 3.2',
-        skpmCodeBadge: skpm.code,
-        skpmStandard: skpm.standardTitle,
-        skpmAspek: skpm.aspekTitle,
-        skpmStandardKualiti: skpm.kualitiStatement,
+        standardGroup: resolvedSkas.standardGroup,
+        subStandardCode: resolvedSkas.subStandardCode,
+        subStandardTitle: resolvedSkas.subStandardTitle,
+        driveTargetFolderPath:
+          act.driveTargetFolderPath && act.driveTargetFolderPath.length > 0
+            ? act.driveTargetFolderPath
+            : resolvedSkas.driveTargetFolderPath,
+        skpmBucket: resolvedSkas.standardGroup,
+        skpmCodeBadge: `${resolvedSkas.subStandardCode} — ${resolvedSkas.subStandardTitle}`,
+        skpmStandard: resolvedSkas.standardFullTitle,
+        skpmAspek: `SUB-STANDARD ${resolvedSkas.subStandardCode}: ${resolvedSkas.subStandardTitle.toUpperCase()}`,
+        skpmStandardKualiti: resolvedSkas.kualitiStatement || skpm.kualitiStatement,
         pillar: 'KOKURIKULUM',
-        kodMySG: skpm.code,
+        kodMySG: resolvedSkas.subStandardCode,
         jawatankuasaInduk: act.unit || 'Pengurusan Kokurikulum & Koakademik',
         programTitle: act.programName,
         tarikh: act.date,
@@ -358,10 +384,29 @@ export default function KokoSmartOPRManager({
 
       if (res.success) {
         const nowIso = new Date().toISOString();
+        const savedFolderPath =
+          res.folderPath ||
+          (
+            res.driveTargetFolderPath ||
+            act.driveTargetFolderPath ||
+            resolvedSkas.driveTargetFolderPath
+          ).join(' / ');
+        const savedFileUrl = res.fileUrl || res.folderUrl || '';
+        const savedFolderUrl = res.folderUrl || res.fileUrl || '';
         const drivePatch = deepSanitizeFirestore({
-          driveFolderUrl: res.folderUrl || '',
-          driveFileUrl: res.fileUrl || res.folderUrl || '',
-          driveFolderPath: res.folderPath || '',
+          standardGroup: resolvedSkas.standardGroup,
+          subStandardCode: resolvedSkas.subStandardCode,
+          subStandardTitle: resolvedSkas.subStandardTitle,
+          folderUrl: savedFolderUrl,
+          fileUrl: savedFileUrl,
+          folderPath: savedFolderPath,
+          driveFolderUrl: savedFolderUrl,
+          driveFileUrl: savedFileUrl,
+          driveFolderPath: savedFolderPath,
+          driveTargetFolderPath:
+            res.driveTargetFolderPath ||
+            act.driveTargetFolderPath ||
+            resolvedSkas.driveTargetFolderPath,
           driveSyncedAt: nowIso,
           updatedAt: nowIso,
         });
@@ -375,9 +420,15 @@ export default function KokoSmartOPRManager({
           prev && prev.id === act.id
             ? {
                 ...prev,
-                driveFolderUrl: res.folderUrl || '',
-                driveFileUrl: res.fileUrl || res.folderUrl || '',
-                driveFolderPath: res.folderPath || '',
+                standardGroup: resolvedSkas.standardGroup,
+                subStandardCode: resolvedSkas.subStandardCode,
+                subStandardTitle: resolvedSkas.subStandardTitle,
+                folderUrl: savedFolderUrl,
+                fileUrl: savedFileUrl,
+                folderPath: savedFolderPath,
+                driveFolderUrl: savedFolderUrl,
+                driveFileUrl: savedFileUrl,
+                driveFolderPath: savedFolderPath,
                 driveSyncedAt: nowIso,
               }
             : prev
@@ -386,8 +437,8 @@ export default function KokoSmartOPRManager({
         setBanner({
           type: 'success',
           text: silentSuccessPrefix
-            ? `${silentSuccessPrefix} & disegerakkan ke Google Drive Rasmi Sekolah!`
-            : `☁️ OPR "${act.programName}" berjaya dihantar ke Google Drive Rasmi Sekolah!`,
+            ? `${silentSuccessPrefix} & disegerakkan ke Google Drive Rasmi Sekolah (${savedFolderPath})!`
+            : `☁️ OPR "${act.programName}" berjaya dihantar ke Google Drive Rasmi Sekolah (${savedFolderPath})!`,
         });
       } else if (!silentSuccessPrefix) {
         setBanner({
@@ -417,24 +468,50 @@ export default function KokoSmartOPRManager({
   const canEdit = role === 'pentadbir' || role === 'guru';
 
   // Auto-resolve SKPM Standard whenever form classification changes (unless overridden)
-  const resolvedSkpmSpec = useMemo(
-    () =>
-      autoResolveKokoSKPM({
-        category,
-        jenis,
-        level,
-        programName,
-        unit,
-        manualCode: skpmManualOverride ? skpmStandardCode : undefined,
-      }),
-    [category, jenis, level, programName, unit, skpmManualOverride, skpmStandardCode]
-  );
+  const resolvedSkpmSpec = useMemo(() => {
+    const base = autoResolveKokoSKPM({
+      category,
+      jenis,
+      level,
+      programName,
+      unit,
+      manualCode: skpmManualOverride ? skpmStandardCode : undefined,
+    });
+    const skas = resolveSkasSelection(
+      skpmManualOverride ? skasStandardGroup : 'Std 3.2',
+      skpmManualOverride ? skpmStandardCode : base.code,
+      'KOKURIKULUM'
+    );
+    return {
+      ...base,
+      code: skas.subStandardCode as SKPMKokoStandardCode,
+      standardGroup: skas.standardGroup,
+      subStandardCode: skas.subStandardCode,
+      subStandardTitle: skas.subStandardTitle,
+      dropdownLabel: skas.dropdownLabel,
+      standardTitle: skas.standardFullTitle,
+      aspekTitle: `ASPEK / TUMS ${skas.subStandardCode}: ${skas.subStandardTitle.toUpperCase()}`,
+      kualitiStatement: skas.kualitiStatement,
+      suggestedEvidens: skas.suggestedEvidens,
+      driveTargetFolderPath: skas.driveTargetFolderPath,
+    };
+  }, [
+    category,
+    jenis,
+    level,
+    programName,
+    unit,
+    skpmManualOverride,
+    skasStandardGroup,
+    skpmStandardCode,
+  ]);
 
   useEffect(() => {
     if (!skpmManualOverride) {
-      setSkpmStandardCode(resolvedSkpmSpec.code);
+      setSkasStandardGroup(resolvedSkpmSpec.standardGroup);
+      setSkpmStandardCode(resolvedSkpmSpec.subStandardCode);
     }
-  }, [resolvedSkpmSpec.code, skpmManualOverride]);
+  }, [resolvedSkpmSpec.standardGroup, resolvedSkpmSpec.subStandardCode, skpmManualOverride]);
 
   // Load Firestore Data
   useEffect(() => {
@@ -868,6 +945,7 @@ export default function KokoSmartOPRManager({
     setCategory('sport');
     setUnit('');
     setSkpmManualOverride(false);
+    setSkasStandardGroup('Std 3.2');
     setSkpmStandardCode('3.2.5.1');
     setLinkedMaklumanTaskId('');
     setJurulatih([profile.name.toUpperCase()]);
@@ -926,11 +1004,18 @@ export default function KokoSmartOPRManager({
     setLevel(act.level);
     setCategory(act.category as KokoActivity['category']);
     setUnit(act.unit || '');
-    if (act.skpmStandardCode) {
+    if (act.subStandardCode || act.skpmStandardCode) {
+      const resolved = resolveSkasSelection(
+        act.standardGroup || 'Std 3.2',
+        act.subStandardCode || act.skpmStandardCode,
+        'KOKURIKULUM'
+      );
       setSkpmManualOverride(true);
-      setSkpmStandardCode(getKokoSKPMOption(act.skpmStandardCode).code);
+      setSkasStandardGroup(resolved.standardGroup);
+      setSkpmStandardCode(resolved.subStandardCode);
     } else {
       setSkpmManualOverride(false);
+      setSkasStandardGroup('Std 3.2');
     }
     setLinkedMaklumanTaskId(act.linkedMaklumanTaskId || '');
     setJurulatih(act.jurulatih || []);
@@ -1105,7 +1190,11 @@ export default function KokoSmartOPRManager({
       level,
       category,
       unit,
-      skpmStandardCode: skpm.code,
+      standardGroup: skpm.standardGroup,
+      subStandardCode: skpm.subStandardCode,
+      subStandardTitle: skpm.subStandardTitle,
+      driveTargetFolderPath: skpm.driveTargetFolderPath,
+      skpmStandardCode: skpm.subStandardCode,
       skpmStandardTitle: skpm.standardTitle,
       skpmAspekTitle: skpm.aspekTitle,
       skpmKualitiStatement: skpm.kualitiStatement,
@@ -1256,7 +1345,11 @@ export default function KokoSmartOPRManager({
             category === 'KOAKADEMIK'
               ? `Penyelaras ${unit || 'Koakademik'}`
               : 'Jurulatih / Guru Penasihat Kokurikulum',
-          skpmBucket: 'Std 3.2',
+          standardGroup: skpm.standardGroup,
+          subStandardCode: skpm.subStandardCode,
+          subStandardTitle: skpm.subStandardTitle,
+          driveTargetFolderPath: skpm.driveTargetFolderPath,
+          skpmBucket: skpm.standardGroup,
           secondarySkpmBucket:
             skpm.standard5Code || jenis === 'pertandingan' ? 'Std 5' : undefined,
           additionalSkpmBuckets: additionalBuckets,
@@ -1475,21 +1568,49 @@ export default function KokoSmartOPRManager({
 
   // Resolve SKPM metadata for currently viewed print poster (supports legacy records cleanly)
   const printSkpm = useMemo(() => {
-    if (!selectedPrintActivity) return getKokoSKPMOption('3.2.4.1');
+    if (!selectedPrintActivity) {
+      const def = resolveSkasSelection('Std 3.2', '3.2.4.1', 'KOKURIKULUM');
+      return {
+        ...getKokoSKPMOption('3.2.4.1'),
+        standardGroup: def.standardGroup,
+        subStandardCode: def.subStandardCode,
+        subStandardTitle: def.subStandardTitle,
+        driveTargetFolderPath: def.driveTargetFolderPath,
+      };
+    }
     const base = autoResolveKokoSKPM({
       category: selectedPrintActivity.category,
       jenis: selectedPrintActivity.jenis,
       level: selectedPrintActivity.level,
       programName: selectedPrintActivity.programName,
       unit: selectedPrintActivity.unit,
-      manualCode: selectedPrintActivity.skpmStandardCode,
+      manualCode:
+        selectedPrintActivity.subStandardCode || selectedPrintActivity.skpmStandardCode,
     });
+    const skas = resolveSkasSelection(
+      selectedPrintActivity.standardGroup || 'Std 3.2',
+      selectedPrintActivity.subStandardCode ||
+        selectedPrintActivity.skpmStandardCode ||
+        base.code,
+      'KOKURIKULUM'
+    );
     return {
       ...base,
-      standardTitle: selectedPrintActivity.skpmStandardTitle || base.standardTitle,
-      aspekTitle: selectedPrintActivity.skpmAspekTitle || base.aspekTitle,
+      code: skas.subStandardCode as SKPMKokoStandardCode,
+      standardGroup: skas.standardGroup,
+      subStandardCode: skas.subStandardCode,
+      subStandardTitle: skas.subStandardTitle,
+      driveTargetFolderPath:
+        selectedPrintActivity.driveTargetFolderPath &&
+        selectedPrintActivity.driveTargetFolderPath.length > 0
+          ? selectedPrintActivity.driveTargetFolderPath
+          : skas.driveTargetFolderPath,
+      standardTitle: selectedPrintActivity.skpmStandardTitle || skas.standardFullTitle,
+      aspekTitle:
+        selectedPrintActivity.skpmAspekTitle ||
+        `ASPEK / TUMS ${skas.subStandardCode}: ${skas.subStandardTitle.toUpperCase()}`,
       kualitiStatement:
-        selectedPrintActivity.skpmKualitiStatement || base.kualitiStatement,
+        selectedPrintActivity.skpmKualitiStatement || skas.kualitiStatement,
       standard5Code: selectedPrintActivity.skpmStandard5Code || base.standard5Code,
       standard5Label: selectedPrintActivity.skpmStandard5Label || base.standard5Label,
     };
@@ -2254,16 +2375,16 @@ export default function KokoSmartOPRManager({
             </div>
           </div>
 
-          {/* 2B. Auto-Resolved SKPM Kualiti@Sekolah Standard 3.2 & Standard 5 Card */}
+          {/* 2B. 2-Level Cascading SKAS Standard & Sub-Standard Dropdowns + Suggested Evidens Reference Bar */}
           <div className="p-5 bg-teal-950/30 border border-teal-700/50 rounded-2xl space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h4 className="text-xs font-black uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4" />
-                  Pemetaan Automatik SKPM Kualiti@Sekolah (SKAS Std 3.2 &amp; Std 5)
+                  Pemetaan Standard &amp; Sub-Standard SKPM Kualiti@Sekolah (SKAS 2026 &amp; Google Drive)
                 </h4>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Dipilih secara automatik mengikut kategori, jenis &amp; peringkat program (boleh ditukar manual).
+                  Dipilih secara automatik ke Standard 3.2 mengikut kategori/jenis program, atau boleh ditukar kepada mana-mana Std 1 – Std 5.
                 </p>
               </div>
               {skpmManualOverride && (
@@ -2272,42 +2393,82 @@ export default function KokoSmartOPRManager({
                   onClick={() => setSkpmManualOverride(false)}
                   className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] font-bold text-teal-300 flex items-center gap-1 cursor-pointer self-start"
                 >
-                  <RefreshCw className="w-3 h-3" /> Guna Auto-Kesan
+                  <RefreshCw className="w-3 h-3" /> Guna Auto-Kesan (Std 3.2)
                 </button>
               )}
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-start">
               <div className="lg:col-span-5">
                 <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                  Aspek Standard Kualiti (3.2.1.1 – 3.2.7.1):
+                  1. Standard Utama (Std 1 – Std 5):
                 </label>
                 <select
-                  value={resolvedSkpmSpec.code}
+                  value={resolvedSkpmSpec.standardGroup}
                   onChange={(e) => {
+                    const nextGroup = e.target.value as SkasStandardGroupKey;
                     setSkpmManualOverride(true);
-                    setSkpmStandardCode(e.target.value as SKPMKokoStandardCode);
+                    setSkasStandardGroup(nextGroup);
+                    const grpObj = getSkasGroup(nextGroup);
+                    setSkpmStandardCode(grpObj.defaultSubStandardCode);
                   }}
-                  className="w-full bg-slate-950 border border-teal-700/70 rounded-xl px-3 py-2 text-xs font-bold text-teal-200 outline-none"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-white outline-none"
                 >
-                  {SKPM_KOKO_STANDARD_OPTIONS.map((opt) => (
-                    <option key={opt.code} value={opt.code}>
-                      {opt.shortTitle}
+                  {SKAS_STANDARDS_DICTIONARY.map((g) => (
+                    <option key={g.standardGroup} value={g.standardGroup}>
+                      {g.dropdownGroupLabel}
                     </option>
                   ))}
                 </select>
               </div>
-              <div className="lg:col-span-7 bg-slate-950/90 border border-slate-800 rounded-xl p-3 space-y-1 text-[11px]">
-                <div className="font-black text-white">
-                  {resolvedSkpmSpec.standardTitle} · {resolvedSkpmSpec.aspekTitle}
-                </div>
-                <div className="italic text-amber-300">{resolvedSkpmSpec.kualitiStatement}</div>
-                {resolvedSkpmSpec.standard5Label && (
-                  <div className="text-purple-300 font-bold">
-                    Dual-Link KPI: {resolvedSkpmSpec.standard5Label}
-                  </div>
-                )}
+
+              <div className="lg:col-span-7">
+                <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                  2. Sub-Standard / TUMS (Format: [Kod] — [Nama BM]（[中文说明]）):
+                </label>
+                <select
+                  value={resolvedSkpmSpec.subStandardCode}
+                  onChange={(e) => {
+                    setSkpmManualOverride(true);
+                    setSkpmStandardCode(e.target.value);
+                  }}
+                  className="w-full bg-slate-950 border border-teal-700/70 rounded-xl px-3 py-2 text-xs font-bold text-teal-200 outline-none"
+                >
+                  {getSkasGroup(resolvedSkpmSpec.standardGroup).subStandards.map((sub) => (
+                    <option key={sub.code} value={sub.code}>
+                      {sub.dropdownLabel}
+                    </option>
+                  ))}
+                </select>
               </div>
+            </div>
+
+            {/* Light Evidens Reference & Google Drive Folder Path Bar */}
+            <div className="bg-slate-950/90 border border-teal-800/60 rounded-xl p-3 space-y-1.5 text-[11px]">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-black text-white">
+                  {resolvedSkpmSpec.standardTitle} &bull; {resolvedSkpmSpec.aspekTitle}
+                </div>
+                <span className="px-2 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/30 font-mono text-[10px]">
+                  📁 {resolvedSkpmSpec.driveTargetFolderPath.join(' / ')}
+                </span>
+              </div>
+              <div className="italic text-amber-300">&ldquo;{resolvedSkpmSpec.kualitiStatement}&rdquo;</div>
+              <div className="pt-1 border-t border-slate-800/80">
+                <div className="text-[10px] font-black uppercase text-teal-300 mb-0.5">
+                  💡 Senarai Semak Cadangan Evidens ({resolvedSkpmSpec.subStandardCode}):
+                </div>
+                <ul className="list-disc pl-4 space-y-0.5 text-[10.5px] text-slate-300">
+                  {resolvedSkpmSpec.suggestedEvidens.map((ev, idx) => (
+                    <li key={idx}>{ev}</li>
+                  ))}
+                </ul>
+              </div>
+              {resolvedSkpmSpec.standard5Label && (
+                <div className="text-purple-300 font-bold pt-0.5">
+                  Dual-Link KPI: {resolvedSkpmSpec.standard5Label}
+                </div>
+              )}
             </div>
 
             {pendingMaklumanTasks.length > 0 && (
@@ -3259,10 +3420,10 @@ export default function KokoSmartOPRManager({
             <div className="bg-[#0D3B42] text-white px-5 py-3 border-b-4 border-[#D4AF37] print-color-exact">
               <div className="flex items-center justify-between gap-4 border-b border-teal-700/70 pb-1.5 mb-1.5">
                 <span className="text-[11px] font-black uppercase tracking-widest text-[#FDE047]">
-                  SKPM Kualiti@Sekolah {(selectedPrintActivity.date || '2026').slice(0, 4)}
+                  SKPM Kualiti@Sekolah {(selectedPrintActivity.date || '2026').slice(0, 4)} &bull; {printSkpm.standardGroup}
                 </span>
                 <div className="flex items-center gap-2 flex-wrap text-[10px] font-bold uppercase tracking-wider text-teal-100">
-                  <span>Kod: {printSkpm.code}</span>
+                  <span>Sub-Standard: {printSkpm.subStandardCode}</span>
                   {printSkpm.standard5Code && (
                     <span className="px-2 py-0.5 rounded bg-teal-900/90 text-[#FDE047] border border-[#D4AF37]/60">
                       Std {printSkpm.standard5Code}

@@ -2,6 +2,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { scopedDocId } from './schoolTenant';
 import { buildPrintableHtmlDocument } from './oprPrintHelper';
+import { resolveSkasSelection } from '../data/skasStandards';
 
 export const DEFAULT_SCHOOL_DRIVE_WEBHOOK_URL =
   'https://script.google.com/macros/s/AKfycbxS7_W-tZinbOYu7TxU6rhTT6UkYNsS0marUn6cxkMkQkuy3O6z0SuXi3k5W7-VWnoktw/exec';
@@ -17,6 +18,10 @@ export interface SyncSchoolDriveParams {
   academicYear: string;
   docKind: 'OPR' | 'MEMO' | 'MINIT' | 'SURAT_LANTIKAN' | 'PERTANDINGAN_OPR' | 'PING_TEST' | string;
   targetFolderName?: string;
+  standardGroup?: string;
+  subStandardCode?: string;
+  subStandardTitle?: string;
+  driveTargetFolderPath?: string[];
   skpmBucket?: string;
   skpmCodeBadge?: string;
   skpmStandard?: string;
@@ -51,6 +56,7 @@ export interface SyncSchoolDriveResult {
   fileUrl?: string;
   folderPath?: string;
   targetFolderName?: string;
+  driveTargetFolderPath?: string[];
   message?: string;
   error?: string;
 }
@@ -222,19 +228,30 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
     (schoolCode === 'YCC3404' ? 'SJK (C) CHUNG HUA BALINGIAN' : `SEKOLAH ${schoolCode}`)
   ).toUpperCase();
   const academicYear = params.academicYear || '2026';
-  const skpmBadge = params.skpmCodeBadge || 'SKPM Kualiti@Sekolah';
+  const resolvedSkas = resolveSkasSelection(
+    params.standardGroup || params.skpmBucket,
+    params.subStandardCode || params.skpmCodeBadge,
+    params.pillar
+  );
+  const skpmBadge =
+    params.skpmCodeBadge ||
+    `${resolvedSkas.standardGroup.toUpperCase()} • ASPEK ${resolvedSkas.subStandardCode}`;
   const skpmStandard =
     params.skpmStandard ||
+    resolvedSkas.standardFullTitle ||
     params.targetFolderName ||
     'STANDARD 3.1: PENGURUSAN KURIKULUM';
   const skpmAspek =
     params.skpmAspek ||
-    (params.jawatankuasaInduk
-      ? `EVIDENS PELAKSANAAN: ${params.jawatankuasaInduk.toUpperCase()}`
-      : 'ASPEK PENGURUSAN & PELAKSANAAN PROGRAM SEKOLAH');
+    `SUB-STANDARD ${resolvedSkas.subStandardCode}: ${resolvedSkas.subStandardTitle.toUpperCase()}`;
   const skpmKualiti =
     params.skpmStandardKualiti ||
+    resolvedSkas.kualitiStatement ||
     'Program dan aktiviti diurus secara sistematik, profesional dan terancang.';
+  const drivePathList =
+    params.driveTargetFolderPath && params.driveTargetFolderPath.length > 0
+      ? params.driveTargetFolderPath
+      : resolvedSkas.driveTargetFolderPath;
 
   const objektifList =
     params.objektif && params.objektif.length > 0
@@ -316,7 +333,7 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
       <table style="width:100%;border-collapse:collapse;border-bottom:1px solid #115e59;padding-bottom:4px;margin-bottom:4px;">
         <tr>
           <td style="font-size:10px;font-weight:900;letter-spacing:1px;color:#FDE047;text-transform:uppercase;padding-bottom:4px;">
-            SKPM KUALITI@SEKOLAH ${escapeHtml(academicYear)}
+            SKPM KUALITI@SEKOLAH ${escapeHtml(academicYear)} &bull; ${escapeHtml(resolvedSkas.standardGroup)} (${escapeHtml(resolvedSkas.subStandardCode)})
           </td>
           <td style="text-align:right;font-size:9.5px;font-weight:bold;color:#ccfbf1;text-transform:uppercase;padding-bottom:4px;">
             ${params.kodMySG ? `<span>${escapeHtml(params.kodMySG)} &bull; </span>` : ''}
@@ -352,7 +369,7 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
       </div>
       <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;color:#B48A18;margin-top:2px;">
         EVIDENS PENGURUSAN BERKUALITI &bull; ${escapeHtml(
-          (params.jawatankuasaInduk || params.targetFolderName || 'SKPM KUALITI@SEKOLAH').toUpperCase()
+          `${resolvedSkas.subStandardCode} - ${resolvedSkas.subStandardTitle}`.toUpperCase()
         )}
       </div>
       <div style="margin-top:6px;padding:5px 12px;border-radius:8px;background:#f0fdfa;border:1px solid #99f6e4;">
@@ -409,10 +426,15 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
           <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;font-size:9.5px;margin-bottom:8px;">
             <table style="width:100%;border-collapse:collapse;">
               <tr>
-                <td style="width:50%;padding:1.5px 4px 1.5px 0;">
+                <td colspan="2" style="padding:1.5px 0 3px 0;border-bottom:1px dashed #cbd5e1;">
+                  <strong>Standard SKAS:</strong> ${escapeHtml(resolvedSkas.standardGroup)} &bull; <strong>${escapeHtml(resolvedSkas.subStandardCode)}</strong> &mdash; ${escapeHtml(resolvedSkas.subStandardTitle)}
+                </td>
+              </tr>
+              <tr>
+                <td style="width:50%;padding:2.5px 4px 1.5px 0;">
                   <strong>Tarikh:</strong> ${escapeHtml(params.tarikh)}
                 </td>
-                <td style="width:50%;padding:1.5px 0 1.5px 4px;">
+                <td style="width:50%;padding:2.5px 0 1.5px 4px;">
                   <strong>Masa:</strong> ${escapeHtml(params.masa || '08:00 pagi – 12:00 tengah hari')}
                 </td>
               </tr>
@@ -429,6 +451,11 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
                   ? `<tr><td colspan="2" style="padding-top:2px;"><strong>Pencapaian:</strong> ${escapeHtml(params.pencapaian)}</td></tr>`
                   : ''
               }
+              <tr>
+                <td colspan="2" style="padding-top:2px;font-size:8.5px;color:#475569;">
+                  <strong>Folder Google Drive:</strong> ${escapeHtml(drivePathList.join(' / '))}
+                </td>
+              </tr>
             </table>
           </div>
 
@@ -451,6 +478,10 @@ export function buildFallbackDriveHtml(params: {
   academicYear: string;
   docKind: string;
   targetFolderName?: string;
+  standardGroup?: string;
+  subStandardCode?: string;
+  subStandardTitle?: string;
+  driveTargetFolderPath?: string[];
   skpmBucket?: string;
   skpmCodeBadge?: string;
   skpmStandard?: string;
@@ -463,8 +494,8 @@ export function buildFallbackDriveHtml(params: {
     params.targetFolderName ||
     resolveTargetDriveFolderName({
       docKind: params.docKind,
-      skpmBucket: params.skpmBucket,
-      skpmCodeBadge: params.skpmCodeBadge,
+      skpmBucket: params.standardGroup || params.skpmBucket,
+      skpmCodeBadge: params.subStandardCode || params.skpmCodeBadge,
       skpmStandard: params.skpmStandard,
       pillar: params.pillar,
     });
@@ -514,18 +545,39 @@ export async function syncDocumentToSchoolDrive(
     const webhookUrl = (params.webhookUrlOverride || creds.webhookUrl || DEFAULT_SCHOOL_DRIVE_WEBHOOK_URL).trim();
     const secretToken = (params.secretTokenOverride || creds.secretToken || DEFAULT_SCHOOL_DRIVE_SECRET_TOKEN).trim();
 
+    const isSuratLantikan = String(params.docKind || '').toUpperCase() === 'SURAT_LANTIKAN';
+
+    const resolvedSkas = resolveSkasSelection(
+      params.standardGroup || (isSuratLantikan ? 'Std 2' : params.skpmBucket),
+      params.subStandardCode ||
+        (isSuratLantikan
+          ? '2.1.1'
+          : params.skpmCodeBadge || params.skpmAspek || params.skpmStandard),
+      params.pillar
+    );
+
+    const isOpr = String(params.docKind || '').toUpperCase() === 'OPR';
+
     const targetFolderName =
       params.targetFolderName?.trim() ||
-      resolveTargetDriveFolderName({
-        docKind: params.docKind,
-        skpmBucket: params.skpmBucket,
-        skpmCodeBadge: params.skpmCodeBadge,
-        skpmStandard: params.skpmStandard,
-        pillar: params.pillar,
-      });
+      (isOpr
+        ? resolvedSkas.standardFolderName
+        : resolveTargetDriveFolderName({
+            docKind: params.docKind,
+            skpmBucket: params.standardGroup || params.skpmBucket,
+            skpmCodeBadge: params.subStandardCode || params.skpmCodeBadge,
+            skpmStandard: params.skpmStandard,
+            pillar: params.pillar,
+          }));
 
-    const resolvedSkpmBucket = resolveCanonicalSkpmBucket(targetFolderName, params.skpmBucket);
-    const isOpr = String(params.docKind || '').toUpperCase() === 'OPR';
+    const resolvedSkpmBucket = isOpr
+      ? resolvedSkas.standardGroup
+      : resolveCanonicalSkpmBucket(targetFolderName, params.standardGroup || params.skpmBucket);
+
+    const driveTargetFolderPath: string[] =
+      params.driveTargetFolderPath && params.driveTargetFolderPath.length > 0
+        ? params.driveTargetFolderPath
+        : resolvedSkas.driveTargetFolderPath;
 
     let finalHtml = '';
     if (isOpr) {
@@ -533,6 +585,10 @@ export async function syncDocumentToSchoolDrive(
       finalHtml = buildSinglePageOprDriveHtml({
         ...params,
         targetFolderName,
+        standardGroup: resolvedSkas.standardGroup,
+        subStandardCode: resolvedSkas.subStandardCode,
+        subStandardTitle: resolvedSkas.subStandardTitle,
+        driveTargetFolderPath,
         skpmBucket: resolvedSkpmBucket,
       });
     } else {
@@ -554,6 +610,10 @@ export async function syncDocumentToSchoolDrive(
           academicYear: params.academicYear,
           docKind: params.docKind,
           targetFolderName,
+          standardGroup: resolvedSkas.standardGroup,
+          subStandardCode: resolvedSkas.subStandardCode,
+          subStandardTitle: resolvedSkas.subStandardTitle,
+          driveTargetFolderPath,
           skpmBucket: resolvedSkpmBucket,
           skpmCodeBadge: params.skpmCodeBadge,
           skpmStandard: params.skpmStandard,
@@ -570,9 +630,17 @@ export async function syncDocumentToSchoolDrive(
       academicYear: params.academicYear || '2026',
       docKind: params.docKind || 'OPR',
       targetFolderName,
+      subFolderName: resolvedSkas.subStandardFolderName,
+      driveTargetFolderPath,
+      // Uniform SKAS 3-field contract for all document kinds (OPR, MEMO, MINIT, SURAT_LANTIKAN)
+      standardGroup: resolvedSkas.standardGroup,
+      subStandardCode: resolvedSkas.subStandardCode,
+      subStandardTitle: resolvedSkas.subStandardTitle,
       skpmBucket: resolvedSkpmBucket,
-      skpmCodeBadge: params.skpmCodeBadge || 'SKPM',
-      skpmStandard: params.skpmStandard || targetFolderName,
+      skpmCodeBadge:
+        params.skpmCodeBadge ||
+        `${resolvedSkas.subStandardCode} — ${resolvedSkas.subStandardTitle}`,
+      skpmStandard: params.skpmStandard || resolvedSkas.standardFullTitle || targetFolderName,
       pillar: params.pillar || '',
       programTitle: params.programTitle || 'DOKUMEN RASMI SEKOLAH',
       tarikh: params.tarikh || new Date().toISOString().split('T')[0],
@@ -598,20 +666,30 @@ export async function syncDocumentToSchoolDrive(
       parsed = null;
     }
 
+    const formattedFolderPath = driveTargetFolderPath.join(' / ');
+
     if (parsed && typeof parsed === 'object') {
       if (parsed.success || parsed.folderUrl || parsed.fileUrl) {
+        const returnedFolderPath = parsed.folderPath || formattedFolderPath;
+        const returnedFolderUrl = parsed.folderUrl || parsed.url || '';
+        const returnedFileUrl =
+          parsed.fileUrl || parsed.pdfUrl || parsed.docUrl || returnedFolderUrl || '';
         return {
           success: true,
-          folderUrl: parsed.folderUrl || parsed.url || '',
-          fileUrl: parsed.fileUrl || parsed.pdfUrl || parsed.docUrl || parsed.folderUrl || '',
-          folderPath: parsed.folderPath || targetFolderName,
+          folderUrl: returnedFolderUrl,
+          fileUrl: returnedFileUrl,
+          folderPath: returnedFolderPath,
           targetFolderName,
-          message: parsed.message || `Berjaya disegerakkan ke Google Drive Rasmi Sekolah (${targetFolderName}).`,
+          driveTargetFolderPath,
+          message:
+            parsed.message ||
+            `Berjaya disegerakkan ke Google Drive Rasmi Sekolah (${returnedFolderPath}).`,
         };
       }
       return {
         success: false,
         targetFolderName,
+        driveTargetFolderPath,
         error: parsed.error || parsed.message || 'Gagal menyegerakkan dokumen ke Google Drive Sekolah.',
       };
     }
@@ -619,15 +697,17 @@ export async function syncDocumentToSchoolDrive(
     if (response.ok) {
       return {
         success: true,
-        folderPath: targetFolderName,
+        folderPath: formattedFolderPath,
         targetFolderName,
-        message: `Permintaan dihantar ke Google Drive Rasmi Sekolah (${targetFolderName}).`,
+        driveTargetFolderPath,
+        message: `Permintaan dihantar ke Google Drive Rasmi Sekolah (${formattedFolderPath}).`,
       };
     }
 
     return {
       success: false,
       targetFolderName,
+      driveTargetFolderPath,
       error: `Ralat sambungan Drive (${response.status})`,
     };
   } catch (err: any) {
@@ -648,8 +728,11 @@ export async function testSchoolDriveConnection(options?: {
     schoolCode: options?.schoolCode || 'YCC3404',
     academicYear: options?.academicYear || '2026',
     docKind: 'OPR',
+    standardGroup: 'Std 1',
+    subStandardCode: '1.1.1',
+    subStandardTitle: 'PGB menetapkan hala tuju sekolah secara terancang',
     skpmBucket: 'Std 1',
-    skpmCodeBadge: '1.1.1 — UJIAN SAMBUNGAN',
+    skpmCodeBadge: '1.1.1 — PGB menetapkan hala tuju sekolah secara terancang',
     skpmStandard: 'STANDARD 1: KEPEMIMPINAN',
     pillar: 'PENTADBIRAN',
     programTitle: 'UJIAN SAMBUNGAN GOOGLE DRIVE RASMI SEKOLAH (iSEPADU AI)',

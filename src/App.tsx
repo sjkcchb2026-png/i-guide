@@ -13,6 +13,7 @@ import { Header } from './components/Header';
 import { LoginView } from './components/LoginView';
 import { SchoolOnboardingView } from './components/SchoolOnboardingView';
 import { ISEPADUShell } from './components/Shell/ISEPADUShell';
+import { PortalMuridView } from './components/Student/PortalMuridView';
 import { SchoolTenantProvider } from './contexts/SchoolTenantContext';
 import {
   DEFAULT_SCHOOL_CODE,
@@ -161,10 +162,11 @@ export default function App() {
       setLoading(true);
       try {
         const userEmail = (user.email || '').toLowerCase().trim();
+        const isStudentAuthEmail = userEmail.endsWith('@murid.sjkcchb.edu.my');
         const isDesignatedAdmin = userEmail === 'sjkcchb2026@gmail.com' || userEmail === 'sean3919531@gmail.com';
         const adminDocRef = doc(db, 'admins', user.uid);
-        const adminSnap = await getDoc(adminDocRef).catch(() => null);
-        const isLegacySuperAdmin = (adminSnap && adminSnap.exists()) || isDesignatedAdmin;
+        const adminSnap = isStudentAuthEmail ? null : await getDoc(adminDocRef).catch(() => null);
+        const isLegacySuperAdmin = !isStudentAuthEmail && ((adminSnap && adminSnap.exists()) || isDesignatedAdmin);
 
         if (isDesignatedAdmin && (!adminSnap || !adminSnap.exists())) {
           await setDoc(adminDocRef, {
@@ -180,8 +182,92 @@ export default function App() {
         const userDocRef = doc(db, 'users', user.uid);
         let resolvedUserSnap = await getDoc(userDocRef);
 
-        // If /users/{uid} doesn't exist yet, try email auto-link for pre-registered users/personnel/teachers/YCC3404 roster
-        if (!resolvedUserSnap.exists() && userEmail) {
+        // Special handling for Student IC accounts (@murid.sjkcchb.edu.my) if /users/{uid} hasn't finished writing yet
+        if (!resolvedUserSnap.exists() && isStudentAuthEmail) {
+          const cleanedIc = userEmail.split('@')[0].replace(/[\s-]/g, '').trim().toUpperCase();
+          const isInactiveStatus = (statusVal: any) => {
+            const s = String(statusVal || '').trim().toUpperCase();
+            return ['BERPINDAH', 'TIDAK AKTIF', 'INACTIVE', 'KELUAR', 'TRANSFERRED'].includes(s);
+          };
+
+          let matchedDocId = '';
+          let matchedStudentData: any = null;
+
+          try {
+            const masterSnap = await getDocs(collection(db, 'student_master'));
+            for (const d of masterSnap.docs) {
+              const data: any = d.data();
+              const docIc = String(data.noKp || data.icNumber || data.ic || data.mykid || '')
+                .replace(/[\s-]/g, '')
+                .trim()
+                .toUpperCase();
+              if (docIc && docIc === cleanedIc && !isInactiveStatus(data.studyStatus || data.status)) {
+                matchedDocId = d.id;
+                matchedStudentData = data;
+                break;
+              }
+            }
+          } catch (err) {
+            console.warn('App student_master lookup:', err);
+          }
+
+          if (!matchedStudentData) {
+            try {
+              const studentsSnap = await getDocs(collection(db, 'students'));
+              for (const d of studentsSnap.docs) {
+                const data: any = d.data();
+                const docIc = String(data.noKp || data.icNumber || data.ic || data.mykid || '')
+                  .replace(/[\s-]/g, '')
+                  .trim()
+                  .toUpperCase();
+                if (docIc && docIc === cleanedIc && !isInactiveStatus(data.studyStatus || data.status)) {
+                  matchedDocId = data.student_id || d.id;
+                  matchedStudentData = data;
+                  break;
+                }
+              }
+            } catch (err) {
+              console.warn('App students fallback lookup:', err);
+            }
+          }
+
+          if (matchedStudentData) {
+            const matchedSchoolCode = resolveRecordSchoolCode(matchedStudentData);
+            const studentClassName =
+              matchedStudentData.currentClass ||
+              matchedStudentData.className ||
+              matchedStudentData.class ||
+              '';
+            const studentProfile = deepSanitizeFirestore({
+              uid: user.uid,
+              email: userEmail,
+              role: 'murid',
+              studentId: matchedDocId,
+              student_id: matchedStudentData.student_id || matchedDocId,
+              noKp: cleanedIc,
+              icNumber: cleanedIc,
+              ic: cleanedIc,
+              name: matchedStudentData.name || 'Murid',
+              className: studentClassName,
+              class_assigned: studentClassName,
+              schoolCode: matchedSchoolCode,
+              active: true,
+              isPreRegistered: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            await setDoc(userDocRef, studentProfile, { merge: true });
+            resolvedUserSnap = await getDoc(userDocRef);
+          } else {
+            // Unmatched student account -> LoginView will clean up and show error
+            setCurrentUserProfile(null);
+            setLoading(false);
+            return;
+          }
+        }
+
+        // If /users/{uid} doesn't exist yet for staff, try email auto-link for pre-registered users/personnel/teachers/YCC3404 roster
+        if (!resolvedUserSnap.exists() && userEmail && !isStudentAuthEmail) {
           // Stage A: Query pre-registered `users` collection by email (keeps its schoolCode, or YCC3404 if legacy)
           try {
             const qUsers = query(collection(db, 'users'), where('email', '==', userEmail));
@@ -393,8 +479,8 @@ export default function App() {
           await setDoc(userDocRef, deepSanitizeFirestore(fallbackProfile), { merge: true }).catch(() => {});
           setCurrentUserProfile(fallbackProfile);
           setActiveView('principal');
-        } else {
-          // Unlinked authenticated user -> launch Multi-School Onboarding flow!
+        } else if (!isStudentAuthEmail) {
+          // Unlinked authenticated staff user -> launch Multi-School Onboarding flow!
           setNeedsOnboarding(true);
           setCurrentUserProfile(null);
         }
@@ -455,7 +541,7 @@ export default function App() {
             </h3>
 
             <p className="text-xs sm:text-sm text-slate-400 leading-relaxed mb-6">
-              Akaun kakitangan anda ({firebaseUser.email}) telah dinyahaktifkan oleh pihak pentadbir sekolah. Sila hubungi Guru Besar atau Pentadbir sekolah anda untuk pengaktifan semula.
+              Akaun anda ({firebaseUser.email}) telah dinyahaktifkan oleh pihak pentadbir sekolah. Sila hubungi Guru Besar atau Pentadbir sekolah anda untuk pengaktifan semula.
             </p>
 
             <button
@@ -515,6 +601,23 @@ export default function App() {
           />
         </main>
       </div>
+    );
+  }
+
+  // Student Portal (Portal Murid) when logged in as role === 'murid' or 'student'
+  if (currentUserProfile.role === 'murid' || currentUserProfile.role === 'student') {
+    return (
+      <SchoolTenantProvider
+        schoolCode={activeSchoolCode}
+        schoolSettings={schoolSettings}
+        schoolProfile={schoolProfile}
+      >
+        <PortalMuridView
+          currentUser={currentUserProfile}
+          schoolSettings={schoolSettings}
+          onLogout={handleLogout}
+        />
+      </SchoolTenantProvider>
     );
   }
 

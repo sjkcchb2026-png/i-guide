@@ -122,7 +122,11 @@ export interface KokoActivity {
   unit?: string;
   masa?: string;
 
-  // SKPM Kualiti@Sekolah (SKAS) Standard 3.2, Standard 5 & Dual-Link Std 2 (Aspek 2.7.1 / A9)
+  // SKPM Kualiti@Sekolah (SKAS) Standard 1 - Standard 5 & Dual-Link Std 2 (Aspek 2.7.1 / A9)
+  standardGroup?: string;
+  subStandardCode?: string;
+  subStandardTitle?: string;
+  driveTargetFolderPath?: string[];
   skpmStandardCode?: string;
   skpmStandardTitle?: string;
   skpmAspekTitle?: string;
@@ -183,6 +187,9 @@ export interface KokoActivity {
   images: string[];
 
   // Metadata & Google Drive Archive Links
+  folderUrl?: string;
+  fileUrl?: string;
+  folderPath?: string;
   driveFolderUrl?: string;
   driveFileUrl?: string;
   driveFolderPath?: string;

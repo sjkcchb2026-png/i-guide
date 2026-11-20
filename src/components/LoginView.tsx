@@ -5,9 +5,11 @@ import {
   updateProfile,
   sendPasswordResetEmail,
   setPersistence,
-  inMemoryPersistence
+  inMemoryPersistence,
+  signOut
 } from 'firebase/auth';
-import { auth } from '../firebase';
+import { collection, doc, getDoc, getDocs, setDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db } from '../firebase';
 import { SchoolSettings } from '../types';
 import { 
   School, 
@@ -22,10 +24,14 @@ import {
   Info,
   Key,
   Smartphone,
-  RefreshCw
+  GraduationCap,
+  CreditCard,
+  Users
 } from 'lucide-react';
 import { InstallAppModal } from './InstallAppModal';
 import { SchoolLogo } from './SchoolLogo';
+import { DEFAULT_SCHOOL_CODE, resolveRecordSchoolCode } from '../utils/schoolTenant';
+import { deepSanitizeFirestore } from '../utils/sanitizeFirestore';
 
 interface LoginViewProps {
   schoolSettings: SchoolSettings | null;
@@ -36,11 +42,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
   schoolSettings,
   onLoginSuccess,
 }) => {
+  const [loginRoleTab, setLoginRoleTab] = useState<'STAFF' | 'MURID'>('STAFF');
   const [isSetupMode, setIsSetupMode] = useState(false);
   const [isRegisterAccountMode, setIsRegisterAccountMode] = useState(false);
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [studentIcInput, setStudentIcInput] = useState('');
+  const [studentPassword, setStudentPassword] = useState('12345678');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -62,6 +71,172 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [principalName, setPrincipalName] = useState('');
   const [principalEmail, setPrincipalEmail] = useState('');
   const [principalPassword, setPrincipalPassword] = useState('');
+
+  // Handle Student IC Login (Password fixed to 12345678 + Auto-Provisioning against student_master)
+  const handleStudentLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setResetStatus(null);
+
+    const cleanedIc = studentIcInput.replace(/[\s-]/g, '').trim().toUpperCase();
+    if (!cleanedIc || cleanedIc.length < 6) {
+      setErrorMsg('Sila masukkan No. MyKid / Kad Pengenalan murid yang sah.');
+      return;
+    }
+
+    if (studentPassword.trim() !== '12345678') {
+      setErrorMsg('Kata laluan murid tidak sah. Sila gunakan kata laluan rasmi sekolah: 12345678');
+      return;
+    }
+
+    const mappedStudentEmail = `${cleanedIc.toLowerCase()}@murid.sjkcchb.edu.my`;
+
+    const verifyAndProvisionStudentProfile = async (uid: string) => {
+      // Check if /users/{uid} already exists with role == 'murid'
+      const userDocRef = doc(db, 'users', uid);
+      const existingSnap = await getDoc(userDocRef).catch(() => null);
+      if (existingSnap && existingSnap.exists()) {
+        const existingData = existingSnap.data();
+        if (existingData?.role === 'murid' || existingData?.role === 'student') {
+          return true;
+        }
+      }
+
+      // Query student_master (and fallback to students) for matching noKp / icNumber
+      const isInactiveStatus = (statusVal: any) => {
+        const s = String(statusVal || '').trim().toUpperCase();
+        return ['BERPINDAH', 'TIDAK AKTIF', 'INACTIVE', 'KELUAR', 'TRANSFERRED'].includes(s);
+      };
+
+      let matchedDocId = '';
+      let matchedStudentData: any = null;
+
+      try {
+        const masterSnap = await getDocs(collection(db, 'student_master'));
+        for (const d of masterSnap.docs) {
+          const data: any = d.data();
+          const docIc = String(data.noKp || data.icNumber || data.ic || data.mykid || '')
+            .replace(/[\s-]/g, '')
+            .trim()
+            .toUpperCase();
+          if (docIc && docIc === cleanedIc && !isInactiveStatus(data.studyStatus || data.status)) {
+            matchedDocId = d.id;
+            matchedStudentData = data;
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn('student_master lookup error:', err);
+      }
+
+      // Fallback check in active year `students` collection if not yet in `student_master`
+      if (!matchedStudentData) {
+        try {
+          const studentsSnap = await getDocs(collection(db, 'students'));
+          for (const d of studentsSnap.docs) {
+            const data: any = d.data();
+            const docIc = String(data.noKp || data.icNumber || data.ic || data.mykid || '')
+              .replace(/[\s-]/g, '')
+              .trim()
+              .toUpperCase();
+            if (docIc && docIc === cleanedIc && !isInactiveStatus(data.studyStatus || data.status)) {
+              matchedDocId = data.student_id || d.id;
+              matchedStudentData = data;
+              break;
+            }
+          }
+        } catch (err) {
+          console.warn('students fallback lookup error:', err);
+        }
+      }
+
+      if (!matchedStudentData) {
+        return false;
+      }
+
+      const resolvedSchoolCode = resolveRecordSchoolCode(matchedStudentData) || schoolSettings?.schoolCode || DEFAULT_SCHOOL_CODE;
+      const studentClassName =
+        matchedStudentData.currentClass ||
+        matchedStudentData.className ||
+        matchedStudentData.class ||
+        '';
+
+      const studentProfilePayload = deepSanitizeFirestore({
+        uid,
+        email: mappedStudentEmail,
+        role: 'murid',
+        studentId: matchedDocId,
+        student_id: matchedStudentData.student_id || matchedDocId,
+        noKp: cleanedIc,
+        icNumber: cleanedIc,
+        ic: cleanedIc,
+        name: matchedStudentData.name || 'Murid',
+        className: studentClassName,
+        class_assigned: studentClassName,
+        schoolCode: resolvedSchoolCode,
+        active: true,
+        isPreRegistered: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      await setDoc(userDocRef, studentProfilePayload, { merge: true });
+      return true;
+    };
+
+    try {
+      setLoading(true);
+      try {
+        const signInCred = await signInWithEmailAndPassword(auth, mappedStudentEmail, '12345678');
+        const verified = await verifyAndProvisionStudentProfile(signInCred.user.uid);
+        if (!verified) {
+          await signOut(auth).catch(() => {});
+          setErrorMsg('No. MyKid tidak dijumpai dalam rekod sekolah');
+          return;
+        }
+        onLoginSuccess();
+        return;
+      } catch (signInErr: any) {
+        const isStorageQuotaError =
+          signInErr?.code === 'auth/internal-error' ||
+          String(signInErr?.message || '').toLowerCase().includes('transaction was aborted') ||
+          String(signInErr?.message || '').toLowerCase().includes('file_error_no_space') ||
+          String(signInErr?.message || '').toLowerCase().includes('indexeddb');
+
+        if (isStorageQuotaError) {
+          await setPersistence(auth, inMemoryPersistence);
+        }
+
+        if (
+          signInErr?.code === 'auth/user-not-found' ||
+          signInErr?.code === 'auth/invalid-credential' ||
+          isStorageQuotaError
+        ) {
+          // First-time student login: create Auth session, check student_master, rollback if not found
+          const createCred = await createUserWithEmailAndPassword(auth, mappedStudentEmail, '12345678');
+          const matchedAndSaved = await verifyAndProvisionStudentProfile(createCred.user.uid);
+          if (!matchedAndSaved) {
+            await createCred.user.delete().catch(() => {});
+            await signOut(auth).catch(() => {});
+            setErrorMsg('No. MyKid tidak dijumpai dalam rekod sekolah');
+            return;
+          }
+          onLoginSuccess();
+          return;
+        }
+        throw signInErr;
+      }
+    } catch (err: any) {
+      console.error('Student sign in error:', err);
+      if (err?.code === 'auth/wrong-password') {
+        setErrorMsg('Kata laluan murid tidak sah. Sila gunakan kata laluan rasmi sekolah: 12345678');
+      } else {
+        setErrorMsg('No. MyKid tidak dijumpai dalam rekod sekolah');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Handle Self-Service Password Reset
   const handleResetPassword = async () => {
@@ -279,36 +454,76 @@ export const LoginView: React.FC<LoginViewProps> = ({
         {/* Main Form Container */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-md">
           
-          {/* Status badge / Multi-School Auth Tabs */}
-          <div className="flex bg-slate-950 p-1 rounded-xl mb-5 border border-slate-800 text-xs font-medium">
+          {/* Top-Level Portal Switcher: Log Masuk Staf / Guru vs Log Masuk Murid */}
+          <div className="grid grid-cols-2 bg-slate-950 p-1.5 rounded-2xl mb-5 border border-slate-800 text-xs font-semibold gap-1.5">
             <button
               type="button"
               onClick={() => {
+                setLoginRoleTab('STAFF');
+                setErrorMsg(null);
+                setResetStatus(null);
+              }}
+              className={`py-2.5 px-3 rounded-xl transition flex items-center justify-center space-x-2 ${
+                loginRoleTab === 'STAFF'
+                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Users className="w-4 h-4 shrink-0" />
+              <span>Log Masuk Staf / Guru</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setLoginRoleTab('MURID');
                 setIsSetupMode(false);
                 setIsRegisterAccountMode(false);
                 setErrorMsg(null);
+                setResetStatus(null);
               }}
-              className={`flex-1 py-2 rounded-lg transition ${
-                !isSetupMode && !isRegisterAccountMode ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              className={`py-2.5 px-3 rounded-xl transition flex items-center justify-center space-x-2 ${
+                loginRoleTab === 'MURID'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/40'
+                  : 'text-slate-400 hover:text-white'
               }`}
             >
-              Log Masuk
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsSetupMode(false);
-                setIsRegisterAccountMode(true);
-                setErrorMsg(null);
-              }}
-              className={`flex-1 py-2 rounded-lg transition flex items-center justify-center space-x-1 ${
-                !isSetupMode && isRegisterAccountMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Daftar Sekolah / Akaun</span>
+              <GraduationCap className="w-4 h-4 shrink-0" />
+              <span>Log Masuk Murid</span>
             </button>
           </div>
+
+          {/* Secondary Staff Sub-tabs (only shown in STAFF mode) */}
+          {loginRoleTab === 'STAFF' && (
+            <div className="flex bg-slate-950/70 p-1 rounded-xl mb-5 border border-slate-800/80 text-xs font-medium">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSetupMode(false);
+                  setIsRegisterAccountMode(false);
+                  setErrorMsg(null);
+                }}
+                className={`flex-1 py-1.5 rounded-lg transition ${
+                  !isSetupMode && !isRegisterAccountMode ? 'bg-slate-800 text-white shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Log Masuk Staf
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSetupMode(false);
+                  setIsRegisterAccountMode(true);
+                  setErrorMsg(null);
+                }}
+                className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 ${
+                  !isSetupMode && isRegisterAccountMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Daftar Sekolah / Akaun</span>
+              </button>
+            </div>
+          )}
 
           {schoolSettings && !isRegisterAccountMode && (
             <div className="mb-5 p-2.5 bg-emerald-950/30 border border-emerald-800/30 rounded-xl text-center text-[11px] text-emerald-300 flex items-center justify-center space-x-2">
@@ -325,7 +540,88 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
           )}
 
-          {!isSetupMode ? (
+          {loginRoleTab === 'MURID' ? (
+            /* --- Student Portal Login Form (IC + Fixed Default Password 12345678, No Password Change/Forgot Links) --- */
+            <form onSubmit={handleStudentLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span>No. MyKid / Kad Pengenalan Murid</span>
+                  <span className="text-[11px] text-emerald-400 font-normal">Tanpa sengkang (-)</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                    <CreditCard className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={studentIcInput}
+                    onChange={(e) => setStudentIcInput(e.target.value.replace(/[\s-]/g, ''))}
+                    placeholder="Contoh: 150812130456"
+                    required
+                    className="w-full pl-10 pr-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span>Kata Laluan</span>
+                  <span className="text-[11px] text-slate-500 font-normal">Kata laluan seragam sekolah</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={studentPassword}
+                    onChange={(e) => setStudentPassword(e.target.value)}
+                    placeholder="12345678"
+                    required
+                    className="w-full pl-10 pr-10 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500 hover:text-slate-300"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                <div className="flex items-center text-emerald-300 font-medium space-x-1.5">
+                  <Info className="w-3.5 h-3.5 shrink-0" />
+                  <span>Panduan Log Masuk Portal Murid</span>
+                </div>
+                <p>
+                  Sila masukkan <strong className="text-white">No. MyKid / Kad Pengenalan</strong> murid dan kata laluan rasmi sekolah <strong className="text-emerald-300 font-mono">12345678</strong>.
+                </p>
+                <p className="text-slate-500">
+                  Akaun murid diuruskan sepenuhnya oleh pihak pentadbiran sekolah.
+                </p>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-sm rounded-xl shadow-lg shadow-emerald-900/30 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+              >
+                {loading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                    <span>Menyemak Rekod Murid...</span>
+                  </>
+                ) : (
+                  <>
+                    <GraduationCap className="w-4 h-4" />
+                    <span>Log Masuk Portal Murid</span>
+                  </>
+                )}
+              </button>
+            </form>
+          ) : !isSetupMode ? (
             /* --- Standard Login / Sign-Up Form --- */
             <form onSubmit={handleLogin} className="space-y-4">
               {isRegisterAccountMode && (

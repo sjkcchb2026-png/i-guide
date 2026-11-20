@@ -30,6 +30,17 @@ import {
   triggerSmartPrint,
   downloadStandalonePrintHtml,
 } from '../../utils/oprPrintHelper';
+import {
+  syncDocumentToSchoolDrive,
+  buildFallbackDriveHtml,
+} from '../../utils/schoolDriveArchive';
+import { deepSanitizeFirestore } from '../../utils/sanitizeFirestore';
+import {
+  SKAS_STANDARDS_DICTIONARY,
+  SkasStandardGroupKey,
+  getSkasGroup,
+  resolveSkasSelection,
+} from '../../data/skasStandards';
 
 export type AcademicOPRType = 'AKTIVITI' | 'PLC';
 
@@ -39,6 +50,16 @@ export interface AcademicOPRRecord {
   reportType: AcademicOPRType; // 'AKTIVITI' | 'PLC'
   plcTool?: string; // e.g. "Lesson Study", "Teacher Sharing Sessions", etc.
   bidang: string; // e.g. "Prasekolah (Pengurusan)" or "Panitia Sains"
+  standardGroup?: string;
+  subStandardCode?: string;
+  subStandardTitle?: string;
+  driveTargetFolderPath?: string[];
+  folderUrl?: string;
+  fileUrl?: string;
+  folderPath?: string;
+  driveFolderUrl?: string;
+  driveFileUrl?: string;
+  driveFolderPath?: string;
   programName: string;
   tarikh: string; // YYYY-MM-DD
   hari: string; // e.g. "Sabtu", "Isnin"
@@ -118,6 +139,8 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
   const [reportType, setReportType] = useState<AcademicOPRType>('AKTIVITI');
   const [plcTool, setPlcTool] = useState<string>(PLC_TOOLS[0].label);
   const [bidang, setBidang] = useState<string>('Kurikulum');
+  const [standardGroup, setStandardGroup] = useState<SkasStandardGroupKey>('Std 3.1');
+  const [subStandardCode, setSubStandardCode] = useState<string>('3.1.2.1');
   const [programName, setProgramName] = useState<string>('');
   const [tarikh, setTarikh] = useState<string>(new Date().toISOString().slice(0, 10));
   const [hari, setHari] = useState<string>('Isnin');
@@ -131,6 +154,12 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
   const [photos, setPhotos] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [printNotice, setPrintNotice] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
+
+  const activeSkas = useMemo(
+    () => resolveSkasSelection(standardGroup, subStandardCode, 'KURIKULUM'),
+    [standardGroup, subStandardCode]
+  );
 
   // 1. 读取 Firestore 中的学术 OPR 记录
   const fetchRecords = async () => {
@@ -172,9 +201,12 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
   // 打开新建表单
   const handleOpenCreate = (type: AcademicOPRType) => {
     setEditingId(null);
+    setFormNotice(null);
     setReportType(type);
     setPlcTool(PLC_TOOLS[0].label);
     setBidang(type === 'PLC' ? 'Kurikulum / PLC' : 'Kurikulum');
+    setStandardGroup('Std 3.1');
+    setSubStandardCode(type === 'PLC' ? '3.1.2.2' : '3.1.2.1');
     setProgramName('');
     setTarikh(new Date().toISOString().slice(0, 10));
     setHari('Isnin');
@@ -192,9 +224,17 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
   // 打开编辑表单
   const handleOpenEdit = (rec: AcademicOPRRecord) => {
     setEditingId(rec.id);
+    setFormNotice(null);
     setReportType(rec.reportType);
     setPlcTool(rec.plcTool || PLC_TOOLS[0].label);
     setBidang(rec.bidang);
+    const resolved = resolveSkasSelection(
+      rec.standardGroup || 'Std 3.1',
+      rec.subStandardCode || (rec.reportType === 'PLC' ? '3.1.2.2' : '3.1.2.1'),
+      'KURIKULUM'
+    );
+    setStandardGroup(resolved.standardGroup);
+    setSubStandardCode(resolved.subStandardCode);
     setProgramName(rec.programName);
     setTarikh(rec.tarikh);
     setHari(rec.hari);
@@ -215,7 +255,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
     if (!files || files.length === 0) return;
 
     if (photos.length + files.length > 4) {
-      alert('Maksimum 4 keping gambar sahaja dibenarkan.');
+      setFormNotice('Maksimum 4 keping gambar sahaja dibenarkan.');
       return;
     }
 
@@ -236,19 +276,27 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!programName.trim()) {
-      alert('Sila isikan Nama Program / Tajuk PLC.');
+      setFormNotice('Sila isikan Nama Program / Tajuk PLC.');
       return;
     }
 
     try {
       setIsSaving(true);
+      setFormNotice(null);
       const docId = editingId || scopedDocId(activeSchoolCode, `opr_${Date.now()}`);
+      const nowIso = new Date().toISOString();
+      const academicYear = (tarikh || '2026').slice(0, 4) || '2026';
+
       const payload: AcademicOPRRecord = {
         id: docId,
         schoolCode: activeSchoolCode,
         reportType,
         plcTool: reportType === 'PLC' ? plcTool : undefined,
         bidang: bidang.trim(),
+        standardGroup: activeSkas.standardGroup,
+        subStandardCode: activeSkas.subStandardCode,
+        subStandardTitle: activeSkas.subStandardTitle,
+        driveTargetFolderPath: activeSkas.driveTargetFolderPath,
         programName: programName.trim(),
         tarikh,
         hari,
@@ -262,16 +310,168 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
         photos,
         createdBy: currentUser.uid,
         creatorName: currentUser.name,
-        createdAt: editingId ? undefined : new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: editingId ? undefined : nowIso,
+        updatedAt: nowIso,
       };
 
-      await setDoc(doc(db, 'academic_opr_reports', docId), payload, { merge: true });
+      await setDoc(
+        doc(db, 'academic_opr_reports', docId),
+        deepSanitizeFirestore(payload),
+        { merge: true }
+      );
+
+      // Mirror to ai_setiausaha_documents so RADAR EVIDENS SKPM KUALITI@SEKOLAH counts this OPR automatically
+      const setiausahaDocId = scopedDocId(activeSchoolCode, `acad_opr_${docId}`);
+      const objLines = objektif
+        .split('\n')
+        .map((s) => s.replace(/^[•\-*]\s*/, '').trim())
+        .filter(Boolean);
+      const agendaLines = agenda
+        .split('\n')
+        .map((s) => s.replace(/^[•\-*]\s*/, '').trim())
+        .filter(Boolean);
+      const impakLines = [
+        kekuatan ? `Kekuatan: ${kekuatan.replace(/^[•\-*]\s*/, '').trim()}` : '',
+        reportType === 'PLC' && plcTool ? `Alat Kolaboratif PLC: ${plcTool}` : '',
+      ].filter(Boolean);
+      const refleksiLines = [
+        kelemahan ? `Penambahbaikan: ${kelemahan.replace(/^[•\-*]\s*/, '').trim()}` : '',
+        tindakanSusulan
+          ? `Tindakan Susulan: ${tindakanSusulan.replace(/^[•\-*]\s*/, '').trim()}`
+          : '',
+      ].filter(Boolean);
+
+      const mirrorDoc = deepSanitizeFirestore({
+        id: setiausahaDocId,
+        docKind: 'OPR',
+        sourceModule: 'ACADEMIC_OPR',
+        sourceActivityId: docId,
+        schoolCode: activeSchoolCode,
+        academicYear,
+        academicYears: [academicYear],
+        pillar: 'KURIKULUM',
+        kodMySG: activeSkas.subStandardCode,
+        jawatankuasaInduk: bidang.trim() || 'Jawatankuasa Kurikulum Sekolah',
+        jawatanRasmi: penyelaras.trim() || 'Penyelaras Program Akademik',
+        standardGroup: activeSkas.standardGroup,
+        subStandardCode: activeSkas.subStandardCode,
+        subStandardTitle: activeSkas.subStandardTitle,
+        driveTargetFolderPath: activeSkas.driveTargetFolderPath,
+        skpmBucket: activeSkas.standardGroup,
+        skpmCodeBadge: `${activeSkas.subStandardCode} — ${activeSkas.subStandardTitle}`,
+        skpmStandard: activeSkas.standardFullTitle,
+        skpmAspek: `SUB-STANDARD ${activeSkas.subStandardCode}: ${activeSkas.subStandardTitle.toUpperCase()}`,
+        skpmStandardKualiti: activeSkas.kualitiStatement,
+        programTitle: payload.programName.toUpperCase(),
+        tarikh: payload.tarikh,
+        masa: payload.hari,
+        tempat: schoolSettings?.schoolName || tenantSchoolName,
+        sasaran: payload.sasaran,
+        objektif: objLines,
+        pengisianAktiviti: agendaLines,
+        impak: impakLines,
+        refleksiDanTindakanSusulan: refleksiLines,
+        photos: (photos || []).slice(0, 3),
+        preparedByName: (currentUser.name || 'PENYELARAS').toUpperCase(),
+        preparedByTitle: penyelaras.trim() || 'Guru Akademik',
+        createdBy: currentUser.email || currentUser.uid,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
+
+      await setDoc(doc(db, 'ai_setiausaha_documents', setiausahaDocId), mirrorDoc, {
+        merge: true,
+      }).catch(() => null);
+
+      // Background sync to School Google Drive with exact 3-level folder path
+      void (async () => {
+        try {
+          const fallbackHtml = buildFallbackDriveHtml({
+            schoolCode: activeSchoolCode,
+            academicYear,
+            docKind: 'OPR',
+            standardGroup: activeSkas.standardGroup,
+            subStandardCode: activeSkas.subStandardCode,
+            subStandardTitle: activeSkas.subStandardTitle,
+            driveTargetFolderPath: activeSkas.driveTargetFolderPath,
+            skpmBucket: activeSkas.standardGroup,
+            skpmCodeBadge: `${activeSkas.subStandardCode} — ${activeSkas.subStandardTitle}`,
+            skpmStandard: activeSkas.standardFullTitle,
+            pillar: 'KURIKULUM',
+            programTitle: payload.programName,
+            tarikh: payload.tarikh,
+            summaryLines: [...objLines, ...agendaLines],
+          });
+          const res = await syncDocumentToSchoolDrive({
+            schoolCode: activeSchoolCode,
+            schoolName: schoolSettings?.schoolName || tenantSchoolName,
+            schoolLogoUrl: schoolSettings?.schoolLogo || (schoolSettings as any)?.logoUrl,
+            academicYear,
+            docKind: 'OPR',
+            standardGroup: activeSkas.standardGroup,
+            subStandardCode: activeSkas.subStandardCode,
+            subStandardTitle: activeSkas.subStandardTitle,
+            driveTargetFolderPath: activeSkas.driveTargetFolderPath,
+            skpmBucket: activeSkas.standardGroup,
+            skpmCodeBadge: `${activeSkas.subStandardCode} — ${activeSkas.subStandardTitle}`,
+            skpmStandard: activeSkas.standardFullTitle,
+            skpmAspek: `SUB-STANDARD ${activeSkas.subStandardCode}: ${activeSkas.subStandardTitle.toUpperCase()}`,
+            skpmStandardKualiti: activeSkas.kualitiStatement,
+            pillar: 'KURIKULUM',
+            kodMySG: activeSkas.subStandardCode,
+            jawatankuasaInduk: bidang.trim() || 'Jawatankuasa Kurikulum Sekolah',
+            programTitle: payload.programName,
+            tarikh: payload.tarikh,
+            masa: payload.hari,
+            tempat: schoolSettings?.schoolName || tenantSchoolName,
+            sasaran: payload.sasaran,
+            objektif: objLines,
+            pengisianAktiviti: agendaLines,
+            impak: impakLines,
+            refleksiDanTindakanSusulan: refleksiLines,
+            preparedByName: (currentUser.name || 'PENYELARAS').toUpperCase(),
+            preparedByTitle: penyelaras.trim() || 'Guru Akademik',
+            htmlContent: fallbackHtml,
+            photos: (photos || []).slice(0, 3),
+          });
+          if (res.success) {
+            const savedFolderPath =
+              res.folderPath || activeSkas.driveTargetFolderPath.join(' / ');
+            const savedFileUrl = res.fileUrl || res.folderUrl || '';
+            const savedFolderUrl = res.folderUrl || res.fileUrl || '';
+            const drivePatch = deepSanitizeFirestore({
+              standardGroup: activeSkas.standardGroup,
+              subStandardCode: activeSkas.subStandardCode,
+              subStandardTitle: activeSkas.subStandardTitle,
+              folderUrl: savedFolderUrl,
+              fileUrl: savedFileUrl,
+              folderPath: savedFolderPath,
+              driveFolderUrl: savedFolderUrl,
+              driveFileUrl: savedFileUrl,
+              driveFolderPath: savedFolderPath,
+              driveTargetFolderPath: activeSkas.driveTargetFolderPath,
+              updatedAt: new Date().toISOString(),
+            });
+            await setDoc(doc(db, 'academic_opr_reports', docId), drivePatch, {
+              merge: true,
+            }).catch(() => null);
+            await setDoc(
+              doc(db, 'ai_setiausaha_documents', setiausahaDocId),
+              drivePatch,
+              { merge: true }
+            ).catch(() => null);
+            await fetchRecords();
+          }
+        } catch {
+          // Ignore background Drive sync failure
+        }
+      })();
+
       await fetchRecords();
       setViewMode('list');
     } catch (err: any) {
       console.error('Error saving OPR:', err);
-      alert(`Gagal menyimpan rekod: ${err.message}`);
+      setFormNotice(`Gagal menyimpan rekod: ${err.message}`);
     } finally {
       setIsSaving(false);
     }
@@ -279,12 +479,13 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
 
   // 删除记录
   const handleDelete = async (id: string) => {
-    if (!confirm('Adakah anda pasti ingin memadamkan laporan OPR ini?')) return;
     try {
       await deleteDoc(doc(db, 'academic_opr_reports', id));
+      const setiausahaDocId = scopedDocId(activeSchoolCode, `acad_opr_${id}`);
+      await deleteDoc(doc(db, 'ai_setiausaha_documents', setiausahaDocId)).catch(() => null);
       setRecords((prev) => prev.filter((r) => r.id !== id));
     } catch (err: any) {
-      alert(`Gagal memadam: ${err.message}`);
+      setFormNotice(`Gagal memadam: ${err.message}`);
     }
   };
 
@@ -445,17 +646,42 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
                     )}
                   </div>
 
-                  <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                    <button
-                      onClick={() => {
-                        setSelectedRecord(item);
-                        setViewMode('print');
-                      }}
-                      className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 font-bold transition cursor-pointer"
-                    >
-                      <Printer className="w-3.5 h-3.5" />
-                      <span>Cetak OPR</span>
-                    </button>
+                  <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between text-xs gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setSelectedRecord(item);
+                          setViewMode('print');
+                        }}
+                        className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 font-bold transition cursor-pointer"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        <span>Cetak OPR</span>
+                      </button>
+                      {(item.fileUrl ||
+                        item.driveFileUrl ||
+                        item.folderUrl ||
+                        item.driveFolderUrl) && (
+                        <a
+                          href={
+                            item.fileUrl ||
+                            item.driveFileUrl ||
+                            item.folderUrl ||
+                            item.driveFolderUrl
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={
+                            item.folderPath ||
+                            item.driveFolderPath ||
+                            'Buka di Google Drive Sekolah'
+                          }
+                          className="px-2 py-0.5 rounded-lg bg-emerald-950/90 hover:bg-emerald-900 text-emerald-300 border border-emerald-600/60 text-[10px] font-black inline-flex items-center gap-1 transition"
+                        >
+                          <span>📂 Drive</span>
+                        </a>
+                      )}
+                    </div>
 
                     <div className="flex items-center gap-2">
                       <button
@@ -524,6 +750,18 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
 
           {/* Form Fields Card */}
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6 text-xs text-slate-200">
+            {formNotice && (
+              <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-500/50 text-rose-200 font-bold flex items-center justify-between">
+                <span>{formNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => setFormNotice(null)}
+                  className="p-1 hover:bg-white/10 rounded-lg cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
             
             {/* 1. Report Type Switcher & PLC Tool */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pb-4 border-b border-slate-800">
@@ -535,6 +773,9 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
                     onClick={() => {
                       setReportType('AKTIVITI');
                       setBidang('Kurikulum');
+                      if (standardGroup === 'Std 3.1') {
+                        setSubStandardCode('3.1.2.1');
+                      }
                     }}
                     className={`py-2 rounded-xl font-bold border transition ${
                       reportType === 'AKTIVITI'
@@ -549,6 +790,9 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
                     onClick={() => {
                       setReportType('PLC');
                       setBidang('Kurikulum / PLC');
+                      if (standardGroup === 'Std 3.1') {
+                        setSubStandardCode('3.1.2.2');
+                      }
                     }}
                     className={`py-2 rounded-xl font-bold border transition ${
                       reportType === 'PLC'
@@ -579,6 +823,71 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
                   </select>
                 </div>
               )}
+            </div>
+
+            {/* 1B. 2-Level Cascading SKAS Standard & Sub-Standard Dropdowns + Suggested Evidens Reference Bar */}
+            <div className="p-4 rounded-2xl bg-slate-950 border border-indigo-500/40 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-black uppercase tracking-wider text-indigo-300">
+                  Pemetaan Standard &amp; Sub-Standard SKPM Kualiti@Sekolah (SKAS 2026 &amp; Google Drive)
+                </span>
+                <span className="px-2.5 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-mono text-[10px] font-black">
+                  📁 {activeSkas.driveTargetFolderPath.join(' / ')}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+                <div className="lg:col-span-5">
+                  <label className="block text-slate-300 font-bold mb-1">
+                    1. Standard Utama (Std 1 – Std 5):
+                  </label>
+                  <select
+                    value={activeSkas.standardGroup}
+                    onChange={(e) => {
+                      const nextGrp = e.target.value as SkasStandardGroupKey;
+                      setStandardGroup(nextGrp);
+                      const grpObj = getSkasGroup(nextGrp);
+                      setSubStandardCode(grpObj.defaultSubStandardCode);
+                    }}
+                    className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-slate-700 text-white font-bold outline-none"
+                  >
+                    {SKAS_STANDARDS_DICTIONARY.map((g) => (
+                      <option key={g.standardGroup} value={g.standardGroup}>
+                        {g.dropdownGroupLabel}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="lg:col-span-7">
+                  <label className="block text-slate-300 font-bold mb-1">
+                    2. Sub-Standard / TUMS (Format: [Kod] — [Nama BM]（[中文说明]）):
+                  </label>
+                  <select
+                    value={activeSkas.subStandardCode}
+                    onChange={(e) => setSubStandardCode(e.target.value)}
+                    className="w-full py-2 px-3 rounded-xl bg-slate-900 border border-teal-500/50 text-teal-200 font-bold outline-none"
+                  >
+                    {getSkasGroup(activeSkas.standardGroup).subStandards.map((sub) => (
+                      <option key={sub.code} value={sub.code}>
+                        {sub.dropdownLabel}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Light Suggested Evidens Reference Bar */}
+              <div className="p-3 rounded-xl bg-indigo-950/35 border border-indigo-500/30 space-y-1">
+                <div className="text-[11px] font-black text-amber-300">
+                  💡 Senarai Semak Cadangan Evidens ({activeSkas.subStandardCode} — {activeSkas.subStandardTitle}):
+                </div>
+                <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-slate-300">
+                  {activeSkas.suggestedEvidens.map((ev, idx) => (
+                    <li key={idx}>{ev}</li>
+                  ))}
+                </ul>
+              </div>
             </div>
 
             {/* 2. Top Metarows matching physical sheet */}
@@ -819,6 +1128,29 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
               <span>Kembali ke Senarai</span>
             </button>
             <div className="flex flex-wrap items-center gap-2">
+              {(selectedRecord.fileUrl ||
+                selectedRecord.driveFileUrl ||
+                selectedRecord.folderUrl ||
+                selectedRecord.driveFolderUrl) && (
+                <a
+                  href={
+                    selectedRecord.fileUrl ||
+                    selectedRecord.driveFileUrl ||
+                    selectedRecord.folderUrl ||
+                    selectedRecord.driveFolderUrl
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={
+                    selectedRecord.folderPath ||
+                    selectedRecord.driveFolderPath ||
+                    'Buka di Google Drive Sekolah'
+                  }
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-950/90 hover:bg-emerald-900 text-emerald-300 border border-emerald-600/60 rounded-xl text-xs font-black transition"
+                >
+                  <span>📂 Buka di Google Drive Sekolah</span>
+                </a>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -877,23 +1209,55 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
           >
             
             {/* Header Table */}
-            <div className="text-center font-bold pb-4 border-b border-slate-300 mb-4">
-              <h2 className="text-base uppercase tracking-tight">
-                {schoolSettings?.schoolName || tenantSchoolName}
-              </h2>
-              <h3 className="text-sm font-black uppercase text-slate-800">
-                LAPORAN SATU MUKA SURAT (ONE PAGE REPORTING - OPR)
-              </h3>
-              <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono">
-                {selectedRecord.reportType === 'PLC'
-                  ? `KOMUNITI PEMBELAJARAN PROFESIONAL (PLC) - ${selectedRecord.plcTool}`
-                  : 'AKTIVITI & PROGRAM KURIKULUM'}
-              </span>
-            </div>
+            {(() => {
+              const printSkas = resolveSkasSelection(
+                selectedRecord.standardGroup || 'Std 3.1',
+                selectedRecord.subStandardCode ||
+                  (selectedRecord.reportType === 'PLC' ? '3.1.2.2' : '3.1.2.1'),
+                'KURIKULUM'
+              );
+              return (
+                <div className="text-center font-bold pb-3 border-b border-slate-300 mb-3">
+                  <div className="inline-block px-3 py-0.5 rounded bg-slate-900 text-amber-300 text-[10px] font-black uppercase tracking-wider mb-1">
+                    SKPM KUALITI@SEKOLAH &bull; {printSkas.standardGroup} &bull; SUB-STANDARD {printSkas.subStandardCode}
+                  </div>
+                  <h2 className="text-base uppercase tracking-tight">
+                    {schoolSettings?.schoolName || tenantSchoolName}
+                  </h2>
+                  <h3 className="text-sm font-black uppercase text-slate-800">
+                    LAPORAN SATU MUKA SURAT (ONE PAGE REPORTING - OPR)
+                  </h3>
+                  <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono block">
+                    {selectedRecord.reportType === 'PLC'
+                      ? `KOMUNITI PEMBELAJARAN PROFESIONAL (PLC) - ${selectedRecord.plcTool}`
+                      : 'AKTIVITI & PROGRAM KURIKULUM'}
+                  </span>
+                </div>
+              );
+            })()}
 
             {/* Exact Table Layout Matching Image */}
             <table className="w-full border-collapse border border-slate-900 text-xs">
               <tbody>
+                {(() => {
+                  const printSkas = resolveSkasSelection(
+                    selectedRecord.standardGroup || 'Std 3.1',
+                    selectedRecord.subStandardCode ||
+                      (selectedRecord.reportType === 'PLC' ? '3.1.2.2' : '3.1.2.1'),
+                    'KURIKULUM'
+                  );
+                  return (
+                    <tr>
+                      <td className="w-44 bg-[#fef08a] border border-slate-900 p-2 font-bold uppercase text-slate-900">
+                        STANDARD &amp; SUB-STANDARD SKAS
+                      </td>
+                      <td className="border border-slate-900 p-2 font-bold text-slate-900">
+                        {printSkas.standardGroup} &bull; {printSkas.subStandardCode} &mdash; {printSkas.subStandardTitle}
+                      </td>
+                    </tr>
+                  );
+                })()}
+
                 <tr>
                   <td className="w-44 bg-[#fef08a] border border-slate-900 p-2 font-bold uppercase text-slate-900">
                     BIDANG

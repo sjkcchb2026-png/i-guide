@@ -43,6 +43,10 @@ export interface AISetiausahaDocument {
   skpmStandard?: string;
   skpmAspek?: string;
   skpmStandardKualiti?: string;
+  standardGroup?: string;
+  subStandardCode?: string;
+  subStandardTitle?: string;
+  driveTargetFolderPath?: string[];
   programTitle: string;
   tarikh: string;
   masa?: string;
@@ -75,6 +79,9 @@ export interface AISetiausahaDocument {
   hadirNames?: string[];
   tidakHadirBersebab?: { name: string; sebab: string }[];
   agendaEntries?: { bil: string; perkara: string; butiranPerbincangan: string; tindakan: string }[];
+  folderUrl?: string;
+  fileUrl?: string;
+  folderPath?: string;
   driveFolderUrl?: string;
   driveFileUrl?: string;
   driveFolderPath?: string;

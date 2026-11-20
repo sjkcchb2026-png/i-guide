@@ -1,6 +1,6 @@
 export type StaffCategory = 'GURU' | 'AKP' | 'PRINCIPAL';
 
-export type UserRole = 'PRINCIPAL' | 'GURU' | 'AKP' | 'CLERK' | 'subject_teacher' | 'class_teacher' | 'head_department' | 'admin' | 'student' | 'secretary' | 'principal' | 'visitor';
+export type UserRole = 'PRINCIPAL' | 'GURU' | 'AKP' | 'CLERK' | 'subject_teacher' | 'class_teacher' | 'head_department' | 'admin' | 'student' | 'murid' | 'secretary' | 'principal' | 'visitor';
 
 export interface SchoolProfile {
   schoolCode: string;
@@ -46,6 +46,11 @@ export interface UserProfile {
   schoolCode?: string;
   category?: StaffCategory;
   role: UserRole;
+  studentId?: string;
+  student_id?: string;
+  noKp?: string;
+  icNumber?: string;
+  className?: string;
   hasClerkAccess?: boolean; // 书记假期管理权限 (Kuasa Kerani Cuti)
   active?: boolean;
   year_assigned?: number;
