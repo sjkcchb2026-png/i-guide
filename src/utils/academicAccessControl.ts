@@ -41,6 +41,7 @@ const SUBJECT_CODE_TO_FULL_NAME: Record<string, string> = {
   BC: 'Bahasa Cina',
   MT: 'Matematik',
   SN: 'Sains',
+  AM: 'Alam Manusia (AM)',
   SEJ: 'Sejarah',
   RBT: 'Reka Bentuk & Teknologi',
   PJ: 'Pendidikan Jasmani & Kesihatan',
@@ -52,6 +53,192 @@ const SUBJECT_CODE_TO_FULL_NAME: Record<string, string> = {
   PAI: 'Pendidikan Moral',
   'PM/PAI': 'Pendidikan Moral',
 };
+
+export interface PanitiaSubjectDefinition {
+  panitiaKey: string;
+  panitiaTitle: string;
+  displayLabel: string;
+  shortCode: string;
+  sortOrder: number;
+  matchesSubject: (rawCodeOrName: string) => boolean;
+}
+
+export const OFFICIAL_PANITIA_CATALOG: PanitiaSubjectDefinition[] = [
+  {
+    panitiaKey: 'PANITIA_BM',
+    panitiaTitle: 'Panitia Bahasa Melayu',
+    displayLabel: 'Bahasa Melayu (BM)',
+    shortCode: 'BM',
+    sortOrder: 1,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return u === 'BM' || u.includes('BAHASA MELAYU');
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_BI',
+    panitiaTitle: 'Panitia Bahasa Inggeris',
+    displayLabel: 'Bahasa Inggeris (BI)',
+    shortCode: 'BI',
+    sortOrder: 2,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return u === 'BI' || u.includes('BAHASA INGGERIS');
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_BC',
+    panitiaTitle: 'Panitia Bahasa Cina',
+    displayLabel: 'Bahasa Cina (BC)',
+    shortCode: 'BC',
+    sortOrder: 3,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return u === 'BC' || u === 'KLIBC' || u.includes('BAHASA CINA');
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_MT',
+    panitiaTitle: 'Panitia Matematik',
+    displayLabel: 'Matematik (MT)',
+    shortCode: 'MT',
+    sortOrder: 4,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return u === 'MT' || u === 'KLIMT' || u.includes('MATEMATIK');
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_SAINS',
+    panitiaTitle: 'Panitia Sains',
+    displayLabel: 'Sains (SN / AM)',
+    shortCode: 'SN',
+    sortOrder: 5,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return (
+        u === 'SN' ||
+        u === 'AM' ||
+        u === 'SAINS' ||
+        u.includes('SAINS') ||
+        u.includes('ALAM MANUSIA') ||
+        u.includes('ALAM DAN MANUSIA') ||
+        /\bAM\b/.test(u)
+      );
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_SEJ',
+    panitiaTitle: 'Panitia Sejarah',
+    displayLabel: 'Sejarah (SEJ)',
+    shortCode: 'SEJ',
+    sortOrder: 6,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return u === 'SEJ' || u.includes('SEJARAH');
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_RBT',
+    panitiaTitle: 'Panitia Reka Bentuk & Teknologi',
+    displayLabel: 'Reka Bentuk & Teknologi (RBT)',
+    shortCode: 'RBT',
+    sortOrder: 7,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return u === 'RBT' || u.includes('REKA BENTUK');
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_PJPK',
+    panitiaTitle: 'Panitia Pendidikan Jasmani & Kesihatan',
+    displayLabel: 'Pendidikan Jasmani & Kesihatan (PJPK)',
+    shortCode: 'PJPK',
+    sortOrder: 8,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return (
+        u === 'PJ' ||
+        u === 'PK' ||
+        u === 'PJPK' ||
+        u.includes('JASMANI') ||
+        u.includes('KESIHATAN')
+      );
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_PSV',
+    panitiaTitle: 'Panitia Pendidikan Seni Visual / Kesenian',
+    displayLabel: 'Pendidikan Seni Visual / Kesenian (PSV)',
+    shortCode: 'PSV',
+    sortOrder: 9,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return u === 'PSV' || u.includes('SENI VISUAL') || u.includes('KESENIAN');
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_MZ',
+    panitiaTitle: 'Panitia Pendidikan Muzik',
+    displayLabel: 'Pendidikan Muzik (MZ)',
+    shortCode: 'MZ',
+    sortOrder: 10,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return u === 'MZ' || u.includes('MUZIK');
+    },
+  },
+  {
+    panitiaKey: 'PANITIA_PM',
+    panitiaTitle: 'Panitia Pendidikan Moral / Islam',
+    displayLabel: 'Pendidikan Moral / Islam (PM / PAI)',
+    shortCode: 'PM',
+    sortOrder: 11,
+    matchesSubject: (s) => {
+      const u = String(s || '').trim().toUpperCase();
+      return (
+        u === 'PM' ||
+        u === 'PAI' ||
+        u === 'PM/PAI' ||
+        u.includes('MORAL') ||
+        u.includes('ISLAM')
+      );
+    },
+  },
+];
+
+/**
+ * Unified Panitia Subject Resolver:
+ * Maps any subject code or name — including 'AM', 'ALAM MANUSIA', 'ALAM DAN MANUSIA', 'SN', 'SAINS' —
+ * into its canonical Panitia group (where AM/SN both map to Panitia Sains -> "Sains (SN / AM)").
+ */
+export function resolvePanitiaForSubject(rawSubjectCodeOrName: string): {
+  panitiaKey: string;
+  panitiaTitle: string;
+  displayLabel: string;
+  shortCode: string;
+  sortOrder: number;
+} {
+  const cleaned = String(rawSubjectCodeOrName || '').trim();
+  const matched = OFFICIAL_PANITIA_CATALOG.find((p) => p.matchesSubject(cleaned));
+  if (matched) {
+    return {
+      panitiaKey: matched.panitiaKey,
+      panitiaTitle: matched.panitiaTitle,
+      displayLabel: matched.displayLabel,
+      shortCode: matched.shortCode,
+      sortOrder: matched.sortOrder,
+    };
+  }
+  const fallbackCode = normalizePbdNameToSubjectCode(cleaned) || cleaned.toUpperCase() || 'UMUM';
+  return {
+    panitiaKey: `PANITIA_${fallbackCode}`,
+    panitiaTitle: `Panitia ${cleaned || 'Subjek'}`,
+    displayLabel: cleaned || 'Subjek Umum',
+    shortCode: fallbackCode,
+    sortOrder: 99,
+  };
+}
 
 /**
  * Maps a subject code or name to canonical PBD/UASA subject names for a given yearLevel (1..6).
@@ -75,7 +262,20 @@ export function normalizeSubjectCodeToPbdNames(codeOrName: string, yearLevel?: n
   if (upper === 'BI' || upper.includes('BAHASA INGGERIS')) results.add('Bahasa Inggeris');
   if (upper === 'BC' || upper.includes('BAHASA CINA')) results.add('Bahasa Cina');
   if (upper === 'MT' || upper.includes('MATEMATIK')) results.add('Matematik');
-  if (upper === 'SN' || upper.includes('SAINS')) results.add('Sains');
+  if (upper === 'SN' || upper.includes('SAINS')) {
+    results.add('Sains');
+    if (!yearLevel || isLowerPrimary) {
+      results.add('Alam Manusia (AM)');
+    }
+  }
+  if (
+    upper === 'AM' ||
+    upper.includes('ALAM MANUSIA') ||
+    upper.includes('ALAM DAN MANUSIA')
+  ) {
+    results.add('Alam Manusia (AM)');
+    results.add('Sains');
+  }
   if (upper === 'SEJ' || upper.includes('SEJARAH')) results.add('Sejarah');
   if (upper === 'RBT' || upper.includes('REKA BENTUK')) results.add('Reka Bentuk & Teknologi');
   if (
@@ -127,12 +327,12 @@ export function normalizeSubjectCodeToPbdNames(codeOrName: string, yearLevel?: n
 }
 
 /**
- * Converts a PBD/UASA subject name or code to its canonical short code ('BM', 'BI', 'BC', 'MT', 'SN', 'SEJ', 'RBT', 'PJPK', 'PSV', 'MZ', 'PM').
+ * Converts a PBD/UASA subject name or code to its canonical short code ('BM', 'BI', 'BC', 'MT', 'SN', 'AM', 'SEJ', 'RBT', 'PJPK', 'PSV', 'MZ', 'PM').
  */
 export function normalizePbdNameToSubjectCode(subjectNameOrCode: string): string {
   const upper = String(subjectNameOrCode || '').trim().toUpperCase();
   if (!upper) return '';
-  if (['BM', 'BI', 'BC', 'MT', 'SN', 'SEJ', 'RBT', 'PJPK', 'PSV', 'MZ', 'PM', 'PAI'].includes(upper)) {
+  if (['BM', 'BI', 'BC', 'MT', 'SN', 'AM', 'SEJ', 'RBT', 'PJPK', 'PSV', 'MZ', 'PM', 'PAI'].includes(upper)) {
     return upper === 'PAI' ? 'PM' : upper;
   }
   if (upper === 'PJ' || upper === 'PK') return 'PJPK';
@@ -143,6 +343,7 @@ export function normalizePbdNameToSubjectCode(subjectNameOrCode: string): string
   if (upper.includes('BAHASA INGGERIS')) return 'BI';
   if (upper.includes('BAHASA CINA')) return 'BC';
   if (upper.includes('MATEMATIK')) return 'MT';
+  if (upper.includes('ALAM MANUSIA') || upper.includes('ALAM DAN MANUSIA')) return 'AM';
   if (upper.includes('SAINS')) return 'SN';
   if (upper.includes('SEJARAH')) return 'SEJ';
   if (upper.includes('REKA BENTUK')) return 'RBT';
@@ -164,7 +365,16 @@ function extractPanitiaSubjectCodesFromText(text: string): string[] {
   if (upper.includes('BAHASA INGGERIS') || /\bBI\b/.test(upper)) codes.add('BI');
   if (upper.includes('BAHASA CINA') || /\bBC\b/.test(upper)) codes.add('BC');
   if (upper.includes('MATEMATIK') || /\bMT\b/.test(upper)) codes.add('MT');
-  if (upper.includes('SAINS') || /\bSN\b/.test(upper)) codes.add('SN');
+  if (
+    upper.includes('SAINS') ||
+    upper.includes('ALAM MANUSIA') ||
+    upper.includes('ALAM DAN MANUSIA') ||
+    /\bSN\b/.test(upper) ||
+    /\bAM\b/.test(upper)
+  ) {
+    codes.add('SN');
+    codes.add('AM');
+  }
   if (upper.includes('SEJARAH') || /\bSEJ\b/.test(upper)) codes.add('SEJ');
   if (upper.includes('REKA BENTUK') || /\bRBT\b/.test(upper)) codes.add('RBT');
   if (upper.includes('JASMANI') || upper.includes('KESIHATAN') || /\bPJPK\b/.test(upper) || /\bPJ\b/.test(upper)) {
@@ -429,8 +639,12 @@ export function computeAcademicAccessFromData(params: {
     for (let grade = 1; grade <= 6; grade++) {
       const periods = Number(row?.periods?.[grade] ?? row?.grades?.[grade]?.periods ?? 0);
       const teacherToken = row?.teachers?.[grade] ?? row?.grades?.[grade]?.teacher ?? '';
+      const secondaryTeacherToken = row?.secondaryTeachers?.[grade] ?? '';
       if (periods <= 0) continue;
-      if (doesTeacherMatchProfile(teacherToken, matched)) {
+      if (
+        doesTeacherMatchProfile(teacherToken, matched) ||
+        doesTeacherMatchProfile(secondaryTeacherToken, matched)
+      ) {
         addTeachingAssignment(grade, subjCode);
       }
     }
