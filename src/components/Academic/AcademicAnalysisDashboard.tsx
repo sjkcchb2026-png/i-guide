@@ -321,7 +321,8 @@ export default function AcademicAnalysisDashboard({
 
   const [academicYear, setAcademicYear] = useState<string>(DEFAULT_ACADEMIC_YEAR);
   const accessProfile = useAcademicAccessControl(currentUser, academicYear, activeSchoolCode);
-  const isAcademicAdmin = accessProfile.isAcademicAdmin;
+  const isOpenAccess2026 = String(academicYear).trim() === '2026';
+  const isAcademicAdmin = accessProfile.isAcademicAdmin || isOpenAccess2026;
   const canViewMyClass = isAcademicAdmin || accessProfile.classTeacherOf.length > 0;
   const canViewMyPanitia = isAcademicAdmin || accessProfile.ketuaPanitiaSubjects.length > 0;
 

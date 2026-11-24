@@ -97,17 +97,19 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
   const accessProfile = useAcademicAccessControl(profile, academicYear, activeSchoolCode);
   const isAcademicAdmin = accessProfile.isAcademicAdmin;
 
-  // RBAC Mode: restrict Tahun & Mata Pelajaran to teacher's teachingAssignments unless isAcademicAdmin
+  const isOpenAccess2026 = String(academicYear).trim() === '2026';
+
+  // Open 2026 PBD & UASA to all teachers across all years (Tahun 1–6) and all subjects
   const availableYears = useMemo<number[]>(() => {
-    if (isAcademicAdmin) return [1, 2, 3, 4, 5, 6];
+    if (isAcademicAdmin || isOpenAccess2026) return [1, 2, 3, 4, 5, 6];
     const years = Array.from(
       new Set(accessProfile.teachingAssignments.map((a) => a.yearLevel))
     ).sort((a, b) => a - b);
-    return years;
-  }, [isAcademicAdmin, accessProfile.teachingAssignments]);
+    return years.length > 0 ? years : [1, 2, 3, 4, 5, 6];
+  }, [isAcademicAdmin, isOpenAccess2026, accessProfile.teachingAssignments]);
 
   const availableSubjects = useMemo<string[]>(() => {
-    if (isAcademicAdmin) {
+    if (isAcademicAdmin || isOpenAccess2026) {
       return SUBJECTS_BY_YEAR[selectedYear] || [];
     }
     const subjectsForYear = Array.from(
@@ -117,11 +119,11 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
           .map((a) => a.subjectName)
       )
     );
-    return subjectsForYear;
-  }, [isAcademicAdmin, selectedYear, accessProfile.teachingAssignments]);
+    return subjectsForYear.length > 0 ? subjectsForYear : (SUBJECTS_BY_YEAR[selectedYear] || []);
+  }, [isAcademicAdmin, isOpenAccess2026, selectedYear, accessProfile.teachingAssignments]);
 
   const hasNoTeachingAssignments =
-    !isAcademicAdmin && !accessProfile.loading && accessProfile.teachingAssignments.length === 0;
+    !isAcademicAdmin && !isOpenAccess2026 && !accessProfile.loading && accessProfile.teachingAssignments.length === 0;
   const isKeyInLocked = hasNoTeachingAssignments || !selectedSubject;
 
   // Versioned Assessment Scale resolution: 2026 -> 6-level (TP1-TP6), 2027 Tahun 1 -> 3-level (TP1-TP3)

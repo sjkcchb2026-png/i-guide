@@ -668,6 +668,16 @@ export function computeAcademicAccessFromData(params: {
     }
   }
 
+  // Special Rule: 2026 has no scheduled timetable — open all Tahun 1–6 subjects & classes to all teachers for viewing and key-in
+  const isOpenYear2026 = String(academicYear || '').trim() === '2026';
+  if (isOpenYear2026) {
+    for (let y = 1; y <= 6; y++) {
+      for (const sName of SUBJECTS_BY_YEAR[y] || []) {
+        addTeachingAssignment(y, sName);
+      }
+    }
+  }
+
   const teachingAssignments = Array.from(assignmentMap.values()).sort((a, b) =>
     a.yearLevel !== b.yearLevel
       ? a.yearLevel - b.yearLevel
@@ -684,6 +694,12 @@ export function computeAcademicAccessFromData(params: {
       });
     }
   };
+
+  if (isOpenYear2026) {
+    for (let y = 1; y <= 6; y++) {
+      addClassTeacher(y);
+    }
+  }
 
   // 3a. From classes collection
   for (const cls of classDocs) {
@@ -742,6 +758,12 @@ export function computeAcademicAccessFromData(params: {
   // 4. Resolve ketuaPanitiaSubjects (Ketua Panitia)
   const panitiaCodeSet = new Set<string>();
 
+  if (isOpenYear2026) {
+    ['BM', 'BI', 'BC', 'MT', 'SN', 'AM', 'SEJ', 'RBT', 'PJPK', 'PSV', 'MZ', 'PM'].forEach((c) =>
+      panitiaCodeSet.add(c)
+    );
+  }
+
   // 4a. From mysg_jawatankuasa_assignments (Penyelaras of Panitia)
   for (const item of effectiveMysgList) {
     const title = String(item.jawatanRasmi || item.jawatanTitle || '');
@@ -793,12 +815,16 @@ export function computeAcademicAccessFromData(params: {
     roleBadges.push(`Guru Subjek (${matched.teacherShortCode})`);
   }
 
-  if (classTeacherOf.length > 0) {
-    roleBadges.push(`Guru Kelas ${classTeacherOf.map((c) => c.className).join(', ')}`);
-  }
+  if (isOpenYear2026) {
+    roleBadges.push('Akses Penuh PBD & UASA 2026 (Semua Tahun & Subjek)');
+  } else {
+    if (classTeacherOf.length > 0) {
+      roleBadges.push(`Guru Kelas ${classTeacherOf.map((c) => c.className).join(', ')}`);
+    }
 
-  if (ketuaPanitiaSubjects.length > 0) {
-    roleBadges.push(`Ketua Panitia (${ketuaPanitiaSubjects.join(', ')})`);
+    if (ketuaPanitiaSubjects.length > 0) {
+      roleBadges.push(`Ketua Panitia (${ketuaPanitiaSubjects.join(', ')})`);
+    }
   }
 
   return {
