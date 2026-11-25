@@ -2017,7 +2017,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
   const [memoTitle, setMemoTitle] = useState<string>(
     'MESYUARAT JAWATANKUASA KURIKULUM SEKOLAH (JKS) BIL. 1/2026'
   );
-  const [memoRujKami, setMemoRujKami] = useState<string>('YCC3404/600-1/1/01');
+  const [memoRujKami, setMemoRujKami] = useState<string>('');
   const [memoBilangan, setMemoBilangan] = useState<string>('Bil. 1/2026');
   const [memoTarikhSurat, setMemoTarikhSurat] = useState<string>(
     new Date().toISOString().slice(0, 10)
@@ -2070,6 +2070,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
   const [minitTitle, setMinitTitle] = useState<string>(
     'MINIT MESYUARAT JAWATANKUASA KURIKULUM SEKOLAH (JKS) BIL. 1/2026'
   );
+  const [minitRujKami, setMinitRujKami] = useState<string>('');
   const [minitTarikh, setMinitTarikh] = useState<string>(new Date().toISOString().slice(0, 10));
   const [minitMasa, setMinitMasa] = useState<string>('2:15 petang – 4:15 petang');
   const [minitTempat, setMinitTempat] = useState<string>('Bilik Mesyuarat SJK(C) Chung Hua Balingian');
@@ -2494,6 +2495,8 @@ export const AISetiausahaHub: React.FC<Props> = ({
               kodMySG: m.kodMySG || '',
               jawatankuasaInduk: m.jawatankuasaInduk || m.tindakanLabel || 'Jawatankuasa Sekolah',
               programTitle: String(m.title || 'MESYUARAT SEKOLAH').toUpperCase(),
+              rujKami: m.rujKami || '',
+              skpmCodeBadge: m.rujKami || '',
               tarikh: m.dueDate || new Date().toISOString().slice(0, 10),
               masa: m.masa || m.dueTime || '2:15 petang',
               tempat: m.venue || m.location || 'Bilik Mesyuarat',
@@ -2670,7 +2673,6 @@ export const AISetiausahaHub: React.FC<Props> = ({
         `MESYUARAT ${selectedPortfolio.jawatankuasaInduk.toUpperCase()} BIL. 1/${selectedAcademicYear}`
       );
       setMemoBilangan(`Bil. 1/${selectedAcademicYear}`);
-      setMemoRujKami(`${effectiveSchoolCode}/${selectedPortfolio.fileRefPrefix}/01`);
       setMemoSetiausaha(assignedCoordinator);
       setMemoJawatanSetiausaha(selectedPortfolio.jawatanRasmi);
 
@@ -3363,7 +3365,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
       }
     }
     setMemoTitle(d.programTitle || d.tajukMesyuarat || '');
-    if (d.skpmCodeBadge) setMemoRujKami(d.skpmCodeBadge);
+    setMemoRujKami(d.rujKami ?? d.skpmCodeBadge ?? '');
     setMemoTarikhMesyuarat(
       d.tarikh || d.tarikhMesyuarat || new Date().toISOString().slice(0, 10)
     );
@@ -3410,6 +3412,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
       setSelectedKodMySG(activePort.kodMySG);
     }
     setMinitTitle(d.programTitle || d.tajukMesyuarat || '');
+    setMinitRujKami(d.rujKami ?? d.skpmCodeBadge ?? '');
     setMinitTarikh(d.tarikh || d.tarikhMesyuarat || new Date().toISOString().slice(0, 10));
     setMinitMasa(d.masa || d.masaMesyuarat || '2:15 petang – 4:15 petang');
     setMinitTempat(d.tempat || d.tempatMesyuarat || 'Bilik Mesyuarat');
@@ -3551,7 +3554,8 @@ export const AISetiausahaHub: React.FC<Props> = ({
       subStandardTitle: memoSkas.subStandardTitle,
       driveTargetFolderPath: memoSkas.driveTargetFolderPath,
       skpmBucket: selectedPortfolio.skpmBucket,
-      skpmCodeBadge: memoRujKami,
+      rujKami: memoRujKami.trim(),
+      skpmCodeBadge: memoRujKami.trim(),
       programTitle: memoTitle.trim().toUpperCase(),
       tajukMesyuarat: memoTitle.trim().toUpperCase(),
       tarikh: memoTarikhMesyuarat,
@@ -3765,6 +3769,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
         ? safeMemoTitle
         : `MINIT ${safeMemoTitle}`
     );
+    setMinitRujKami(memo.rujKami ?? memo.skpmCodeBadge ?? '');
     setMinitTarikh(
       memo.tarikh || memo.tarikhMesyuarat || new Date().toISOString().slice(0, 10)
     );
@@ -3873,6 +3878,8 @@ export const AISetiausahaHub: React.FC<Props> = ({
       subStandardTitle: minitSkas.subStandardTitle,
       driveTargetFolderPath: minitSkas.driveTargetFolderPath,
       skpmBucket: selectedPortfolio.skpmBucket,
+      rujKami: minitRujKami.trim(),
+      skpmCodeBadge: minitRujKami.trim(),
       programTitle: minitTitle.trim().toUpperCase(),
       tarikh: minitTarikh,
       masa: minitMasa,
@@ -5143,7 +5150,10 @@ export const AISetiausahaHub: React.FC<Props> = ({
               </h3>
               <button
                 type="button"
-                onClick={() => setMemoDocId('')}
+                onClick={() => {
+                  setMemoDocId('');
+                  setMemoRujKami('');
+                }}
                 className="text-[11px] font-bold text-indigo-300 hover:text-indigo-200 flex items-center gap-1 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -5200,14 +5210,15 @@ export const AISetiausahaHub: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
-                  <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
-                    Ruj. Kami
+                  <label className="block text-[10px] font-black uppercase text-amber-300 mb-1">
+                    Rujukan Kami (Isi Manual)
                   </label>
                   <input
                     type="text"
                     value={memoRujKami}
                     onChange={(e) => setMemoRujKami(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono"
+                    placeholder="Sila isi No. Rujukan Kami (cth: YCC3404/600-1/1/01)"
+                    className="w-full bg-slate-950 border border-amber-500/40 focus:border-amber-400 rounded-xl px-3 py-2 text-xs text-white font-mono"
                   />
                 </div>
                 <div>
@@ -5869,6 +5880,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                   onClick={() => {
                     setMinitDocId('');
                     setMinitSourceMemoId('');
+                    setMinitRujKami('');
                   }}
                   className="text-[11px] font-bold text-amber-300 hover:text-amber-200 flex items-center gap-1 cursor-pointer"
                 >
@@ -5887,6 +5899,19 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     value={minitTitle}
                     onChange={(e) => setMinitTitle(e.target.value.toUpperCase())}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-black text-white uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-amber-300 mb-1">
+                    Rujukan Kami (Isi Manual)
+                  </label>
+                  <input
+                    type="text"
+                    value={minitRujKami}
+                    onChange={(e) => setMinitRujKami(e.target.value)}
+                    placeholder="Sila isi No. Rujukan Kami (cth: YCC3404/600-1/1/01)"
+                    className="w-full bg-slate-950 border border-amber-500/40 focus:border-amber-400 rounded-xl px-3 py-2 text-xs text-white font-mono"
                   />
                 </div>
 
@@ -6328,6 +6353,14 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     {/* 2-Column Metadata Table */}
                     <table className="w-full border-collapse border border-black text-xs">
                       <tbody>
+                        <tr>
+                          <td className="border border-black px-3 py-1.5 font-bold w-36 bg-slate-50">
+                            Ruj. Kami
+                          </td>
+                          <td className="border border-black px-3 py-1.5 font-mono">
+                            {minitRujKami}
+                          </td>
+                        </tr>
                         <tr>
                           <td className="border border-black px-3 py-1.5 font-bold w-36 bg-slate-50">
                             Tarikh

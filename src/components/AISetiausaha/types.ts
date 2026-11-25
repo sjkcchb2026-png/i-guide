@@ -48,6 +48,7 @@ export interface AISetiausahaDocument {
   subStandardTitle?: string;
   driveTargetFolderPath?: string[];
   programTitle: string;
+  rujKami?: string;
   tarikh: string;
   masa?: string;
   tempat?: string;
