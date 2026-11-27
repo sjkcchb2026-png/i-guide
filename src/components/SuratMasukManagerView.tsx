@@ -31,6 +31,7 @@ import { UserProfile, SchoolSettings } from '../types';
 import { SmartDatePicker } from './Common/SmartDatePicker';
 import { useSchoolTenant } from '../contexts/SchoolTenantContext';
 import { belongsToSchool, scopedDocId } from '../utils/schoolTenant';
+import { OFFICIAL_TEACHERS } from '../constants/officialRoster';
 
 export type SuratDomain = 'PENTADBIRAN' | 'KURIKULUM' | 'HEM' | 'KOKURIKULUM';
 
@@ -339,10 +340,10 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
     let isMounted = true;
     async function hydrateStaff() {
       try {
-        const [usersSnap, personnelSnap, teacherProfilesSnap] = await Promise.all([
+        const [usersSnap, personnelSnap, teachersSnap] = await Promise.all([
           getDocs(collection(db, 'users')).catch(() => ({ docs: [] })),
           getDocs(collection(db, 'personnel')).catch(() => ({ docs: [] })),
-          getDocs(collection(db, 'teacher_profiles')).catch(() => ({ docs: [] })),
+          getDocs(collection(db, 'teachers')).catch(() => ({ docs: [] })),
         ]);
 
         const map = new Map<string, TeacherProfile>();
@@ -364,10 +365,11 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           });
         });
 
-        // Supplement from users scoped to active school
+        // Supplement from users scoped to active school (skip students)
         usersSnap.docs.forEach((d) => {
           const data = d.data();
           if (!belongsToSchool(data, activeSchoolCode)) return;
+          if (data.role === 'murid' || data.role === 'student') return;
           const existing = map.get(d.id);
           if (!existing) {
             map.set(d.id, {
@@ -387,16 +389,49 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
           }
         });
 
-        // Supplement from teacher_profiles scoped to active school
-        teacherProfilesSnap.docs.forEach((d) => {
+        // Supplement from teachers scoped to active school
+        teachersSnap.docs.forEach((d) => {
           const data = d.data();
           if (!belongsToSchool(data, activeSchoolCode)) return;
           const existing = map.get(d.id);
-          if (existing) {
+          if (!existing) {
+            map.set(d.id, {
+              teacherId: d.id,
+              fullName: data.name || data.fullName || d.id,
+              email: data.email || '',
+              phone: data.phone || '',
+              position: data.position || data.role || 'GURU',
+              status: data.status || 'ACTIVE',
+              category: data.category || 'GURU',
+              subRole: data.subRole || data.primaryRoleCode || '',
+              leadershipRole: data.leadershipRole || '',
+            });
+          } else {
             if (data.subRole && !existing.subRole) existing.subRole = data.subRole;
             if (data.leadershipRole && !existing.leadershipRole) existing.leadershipRole = data.leadershipRole;
           }
         });
+
+        // Fallback to OFFICIAL_TEACHERS for legacy school YCC3404 so PO always has full teacher list
+        if (isLegacySchool) {
+          const existingNames = new Set(
+            Array.from(map.values()).map((t) => (t.fullName || '').trim().toUpperCase())
+          );
+          OFFICIAL_TEACHERS.forEach((ot) => {
+            if (!map.has(ot.id) && !existingNames.has(ot.name.trim().toUpperCase())) {
+              map.set(ot.id, {
+                teacherId: ot.id,
+                fullName: ot.name,
+                email: ot.email,
+                phone: ot.phone || '',
+                position: ot.position,
+                status: 'ACTIVE',
+                category: ot.category,
+                subRole: ot.position,
+              });
+            }
+          });
+        }
 
         if (isMounted) {
           setInternalTeachers(Array.from(map.values()));
@@ -410,7 +445,7 @@ export const SuratMasukManagerView: React.FC<SuratMasukManagerViewProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [propTeachers, activeSchoolCode]);
+  }, [propTeachers, activeSchoolCode, isLegacySchool]);
 
   // Auto-hydrate academic assignments for relief schedule routing
   useEffect(() => {

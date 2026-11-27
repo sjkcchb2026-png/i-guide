@@ -59,6 +59,8 @@ import {
 } from './AcademicBadges';
 import SchoolLogo from '../SchoolLogo';
 import { triggerSmartPrint } from '../../utils/oprPrintHelper';
+import { isPrasekolahStudentRecord } from '../../utils/prasekolahAssessmentHelper';
+import { PrasekolahAnalysisPanel } from './PrasekolahAnalysisPanel';
 import * as XLSX from 'xlsx';
 import {
   BarChart,
@@ -132,10 +134,11 @@ interface AcademicAnalysisDashboardProps {
   yearGroup?: number;
   currentUser?: any;
   schoolCode?: string;
+  initialMainMode?: MainAssessmentMode;
   onSelectStudent?: (studentId: string) => void;
 }
 
-type MainAssessmentMode = 'PBD' | 'UASA';
+export type MainAssessmentMode = 'PBD' | 'UASA' | 'PRASEKOLAH';
 type AssessmentSessionFilter = 'PENGGAL_1' | 'PENGGAL_2' | 'UASA';
 type CoreSubTab = 'PANITIA' | 'IKUT_MURID' | 'TERPERINCI';
 type YearScopeFilter = 'ALL' | 1 | 2 | 3 | 4 | 5 | 6;
@@ -308,6 +311,7 @@ export default function AcademicAnalysisDashboard({
   yearGroup: initialYearGroup = 1,
   currentUser,
   schoolCode: propSchoolCode,
+  initialMainMode = 'PBD',
   onSelectStudent,
 }: AcademicAnalysisDashboardProps) {
   const tenant = useSchoolTenant();
@@ -329,13 +333,19 @@ export default function AcademicAnalysisDashboard({
   // ============================================================================
   // NEW TOP-LEVEL DUAL MODE & SUB-TABS STATE
   // ============================================================================
-  const [mainMode, setMainMode] = useState<MainAssessmentMode>('PBD');
+  const [mainMode, setMainMode] = useState<MainAssessmentMode>(initialMainMode);
   const [sessionFilter, setSessionFilter] = useState<AssessmentSessionFilter>('PENGGAL_2');
   const [coreSubTab, setCoreSubTab] = useState<CoreSubTab>('PANITIA');
   const [yearScope, setYearScope] = useState<YearScopeFilter>('ALL');
   const [selectedInterventionRowKey, setSelectedInterventionRowKey] = useState<string>('SCHOOL_TOTAL');
   const [interventionBucketFilter, setInterventionBucketFilter] = useState<'ALL_INTERVENSI' | '1_SUBJEK' | '2_SUBJEK' | '3_PLUS_SUBJEK'>('ALL_INTERVENSI');
   const [printNotice, setPrintNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialMainMode) {
+      setMainMode(initialMainMode);
+    }
+  }, [initialMainMode]);
 
   // Sync default sessionFilter when switching between PBD and UASA
   const handleSwitchMainMode = (mode: MainAssessmentMode) => {
@@ -489,12 +499,25 @@ export default function AcademicAnalysisDashboard({
           string,
           { id: string; name: string; year: number; classCode: string }
         >();
+        const prasekolahStudentIds = new Set<string>();
+
         if (studSnap) {
           studSnap.docs.forEach((d) => {
             const data = d.data();
             if (!belongsToSchool(data, activeSchoolCode)) return;
             const sid = String(data.student_id || d.id);
-            const yr = Number(data.year || 1);
+            // STRICT ISOLATION: Exclude Prasekolah (Year 0 / PRASEKOLAH) from Elementary PBD & UASA
+            if (isPrasekolahStudentRecord(data)) {
+              prasekolahStudentIds.add(sid);
+              return;
+            }
+            const rawYr =
+              data.year !== undefined && data.year !== null ? Number(data.year) : NaN;
+            if (isNaN(rawYr) || rawYr < 1 || rawYr > 6) {
+              prasekolahStudentIds.add(sid);
+              return;
+            }
+            const yr = rawYr;
             const clsCode = normalizeClassCode(yr, data.class || data.className);
             studentsMap.set(sid, {
               id: sid,
@@ -540,8 +563,15 @@ export default function AcademicAnalysisDashboard({
             if (!belongsToSchool(data, activeSchoolCode)) return;
             const sid = String(data.student_id || '');
             const subj = String(data.subject_id || data.subject || '');
-            const yr = Number(data.year || studentsMap.get(sid)?.year || 1);
             if (!sid || !subj) return;
+            // STRICT ISOLATION: Exclude Prasekolah students & records
+            if (isPrasekolahStudentRecord(data) || prasekolahStudentIds.has(sid)) return;
+            const rawYr =
+              data.year !== undefined && data.year !== null
+                ? Number(data.year)
+                : studentsMap.get(sid)?.year ?? NaN;
+            if (isNaN(rawYr) || rawYr < 1 || rawYr > 6) return;
+            const yr = rawYr;
             const rec = ensureRecord(sid, yr, subj, data.class || data.className);
             rec.pbd = {
               tov: data.tov ?? rec.pbd.tov,
@@ -561,8 +591,15 @@ export default function AcademicAnalysisDashboard({
             if (!belongsToSchool(data, activeSchoolCode)) return;
             const sid = String(data.student_id || '');
             const subj = String(data.subject_id || data.subject || '');
-            const yr = Number(data.year || studentsMap.get(sid)?.year || 1);
             if (!sid || !subj) return;
+            // STRICT ISOLATION: Exclude Prasekolah students & records
+            if (isPrasekolahStudentRecord(data) || prasekolahStudentIds.has(sid)) return;
+            const rawYr =
+              data.year !== undefined && data.year !== null
+                ? Number(data.year)
+                : studentsMap.get(sid)?.year ?? NaN;
+            if (isNaN(rawYr) || rawYr < 1 || rawYr > 6) return;
+            const yr = rawYr;
             const rec = ensureRecord(sid, yr, subj, data.class || data.className);
             const rawM = data.marks;
             const rawG = data.grade;
@@ -609,7 +646,12 @@ export default function AcademicAnalysisDashboard({
   }, [academicYear, activeSchoolCode]);
 
   const allSourceRecords = useMemo(() => {
-    return propRecords.length > 0 ? propRecords : firestoreRecords;
+    const raw = propRecords.length > 0 ? propRecords : firestoreRecords;
+    return raw.filter((r) => {
+      if (isPrasekolahStudentRecord(r)) return false;
+      const yr = Number(r.yearLevel ?? 1);
+      return yr >= 1 && yr <= 6;
+    });
   }, [propRecords, firestoreRecords]);
 
   // ============================================================================
@@ -1584,31 +1626,35 @@ export default function AcademicAnalysisDashboard({
               </select>
             </div>
 
-            <button
-              type="button"
-              onClick={handleExportExcel}
-              className="px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wide flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-            >
-              <FileSpreadsheet size={15} />
-              <span>Eksport Excel (.xlsx)</span>
-            </button>
+            {mainMode !== 'PRASEKOLAH' && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleExportExcel}
+                  className="px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wide flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                >
+                  <FileSpreadsheet size={15} />
+                  <span>Eksport Excel (.xlsx)</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={handlePrintDialogPrestasi}
-              className="px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase tracking-wide flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-            >
-              <Printer size={15} />
-              <span>Cetak Laporan Dialog Prestasi (A4)</span>
-            </button>
+                <button
+                  type="button"
+                  onClick={handlePrintDialogPrestasi}
+                  className="px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase tracking-wide flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                >
+                  <Printer size={15} />
+                  <span>Cetak Laporan Dialog Prestasi (A4)</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
 
-        {/* Row 2: Main Mode Switcher (Analisis PBD vs Analisis UASA) + Session Filter (Penggal 1 / Penggal 2 / UASA) */}
+        {/* Row 2: Main Mode Switcher (Analisis PBD vs Analisis UASA vs Analisis Prasekolah) + Session Filter */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3">
             {/* Main Mode Toggle */}
-            <div className="inline-flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 gap-1">
+            <div className="inline-flex flex-wrap bg-slate-100 p-1.5 rounded-2xl border border-slate-200 gap-1">
               <button
                 type="button"
                 onClick={() => handleSwitchMainMode('PBD')}
@@ -1633,75 +1679,91 @@ export default function AcademicAnalysisDashboard({
                 <GraduationCap size={15} />
                 <span>Analisis UASA (Gred A – F)</span>
               </button>
+              <button
+                type="button"
+                onClick={() => handleSwitchMainMode('PRASEKOLAH')}
+                className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wide flex items-center gap-2 transition cursor-pointer ${
+                  mainMode === 'PRASEKOLAH'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Sparkles size={15} />
+                <span>Analisis Prasekolah (Inspirasi)</span>
+              </button>
             </div>
 
-            {/* Session Filter: Penggal 1 / Penggal 2 / UASA */}
-            <div className="inline-flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200 gap-1">
-              <span className="text-[10px] font-black uppercase text-slate-500 px-2.5">
-                Fasa Penilaian:
-              </span>
-              {(
-                [
-                  { id: 'PENGGAL_1', label: 'Penggal 1' },
-                  { id: 'PENGGAL_2', label: 'Penggal 2' },
-                  { id: 'UASA', label: 'UASA / Akhir Tahun' },
-                ] as { id: AssessmentSessionFilter; label: string }[]
-              ).map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => setSessionFilter(s.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
-                    sessionFilter === s.id
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
+            {/* Session Filter: Penggal 1 / Penggal 2 / UASA (for Elementary PBD & UASA) */}
+            {mainMode !== 'PRASEKOLAH' && (
+              <div className="inline-flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200 gap-1">
+                <span className="text-[10px] font-black uppercase text-slate-500 px-2.5">
+                  Fasa Penilaian:
+                </span>
+                {(
+                  [
+                    { id: 'PENGGAL_1', label: 'Penggal 1' },
+                    { id: 'PENGGAL_2', label: 'Penggal 2' },
+                    { id: 'UASA', label: 'UASA / Akhir Tahun' },
+                  ] as { id: AssessmentSessionFilter; label: string }[]
+                ).map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setSessionFilter(s.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
+                      sessionFilter === s.id
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Core Sub-Tab Switcher (Page 1: Ikut Panitia, Page 2: Ikut Murid, Page 3: Terperinci) */}
-          <div className="inline-flex flex-wrap bg-slate-100 p-1.5 rounded-2xl border border-slate-200 gap-1">
-            <button
-              type="button"
-              onClick={() => setCoreSubTab('PANITIA')}
-              className={`px-4 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer ${
-                coreSubTab === 'PANITIA'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Layers size={14} />
-              <span>1. Analisis Mata Pelajaran Ikut Panitia</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setCoreSubTab('IKUT_MURID')}
-              className={`px-4 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer ${
-                coreSubTab === 'IKUT_MURID'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Users size={14} />
-              <span>2. Analisis Penguasaan Minimum Ikut Murid</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setCoreSubTab('TERPERINCI')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer ${
-                coreSubTab === 'TERPERINCI'
-                  ? 'bg-slate-800 text-white shadow'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Eye size={14} />
-              <span>Rekod &amp; Kad Murid (RBAC)</span>
-            </button>
-          </div>
+          {mainMode !== 'PRASEKOLAH' && (
+            <div className="inline-flex flex-wrap bg-slate-100 p-1.5 rounded-2xl border border-slate-200 gap-1">
+              <button
+                type="button"
+                onClick={() => setCoreSubTab('PANITIA')}
+                className={`px-4 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer ${
+                  coreSubTab === 'PANITIA'
+                    ? 'bg-emerald-600 text-white shadow'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Layers size={14} />
+                <span>1. Analisis Mata Pelajaran Ikut Panitia</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCoreSubTab('IKUT_MURID')}
+                className={`px-4 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer ${
+                  coreSubTab === 'IKUT_MURID'
+                    ? 'bg-emerald-600 text-white shadow'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Users size={14} />
+                <span>2. Analisis Penguasaan Minimum Ikut Murid</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCoreSubTab('TERPERINCI')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 transition cursor-pointer ${
+                  coreSubTab === 'TERPERINCI'
+                    ? 'bg-slate-800 text-white shadow'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Eye size={14} />
+                <span>Rekod &amp; Kad Murid (RBAC)</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1719,9 +1781,22 @@ export default function AcademicAnalysisDashboard({
       )}
 
       {/* ====================================================================
-          PRINTABLE DIALOG PRESTASI CONTAINER (USED BY BOTH LIVE UI & A4 PRINT)
+          INDEPENDENT PRASEKOLAH INSPIRASI ANALYSIS PANEL
          ==================================================================== */}
-      <div id="dialog-prestasi-print-area" className="space-y-6">
+      {mainMode === 'PRASEKOLAH' ? (
+        <PrasekolahAnalysisPanel
+          academicYear={academicYear}
+          schoolCode={activeSchoolCode}
+          schoolName={activeSchoolName}
+          schoolLogo={activeSchoolLogo}
+          principalName={principalName}
+        />
+      ) : (
+        <>
+          {/* ====================================================================
+              PRINTABLE DIALOG PRESTASI CONTAINER (USED BY BOTH LIVE UI & A4 PRINT)
+             ==================================================================== */}
+          <div id="dialog-prestasi-print-area" className="space-y-6">
         {/* Official School Letterhead (Always visible in Print, and compact banner in UI) */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
           <div className="border-b-2 border-slate-900 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -3217,6 +3292,8 @@ export default function AcademicAnalysisDashboard({
             </div>
           )}
         </div>
+      )}
+        </>
       )}
     </div>
   );

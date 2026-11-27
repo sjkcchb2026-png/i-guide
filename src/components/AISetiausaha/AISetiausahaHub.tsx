@@ -69,6 +69,7 @@ import {
   getSkasGroup,
   resolveSkasSelection,
 } from '../../data/skasStandards';
+import { ModuleSijil } from './ModuleSijil';
 
 export interface FullMySGPortfolioItem extends MySGJawatankuasaItem {
   legacyCodes?: string[];
@@ -1931,7 +1932,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
   const effectiveSchoolLogo =
     schoolSettings?.schoolLogo || (schoolSettings as any)?.logoUrl || '';
   // Active sub-module tab
-  const [activeTab, setActiveTab] = useState<'OPR' | 'MEMO' | 'MINIT' | 'LANTIKAN'>('OPR');
+  const [activeTab, setActiveTab] = useState<'OPR' | 'MEMO' | 'MINIT' | 'LANTIKAN' | 'SIJIL'>('OPR');
 
   // Academic Session (2026 / 2027 / 2028+)
   const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('2026');
@@ -1982,9 +1983,13 @@ export const AISetiausahaHub: React.FC<Props> = ({
   }, [personnel, schoolSettings, currentUser]);
 
   // -------------------- TAB 1: OPR PINTAR SKPM STATE --------------------
+  const [linkedKawalanProgramId, setLinkedKawalanProgramId] = useState<string>('');
   const [skpmRadarFilter, setSkpmRadarFilter] = useState<string>('Semua');
   const [oprStandardGroup, setOprStandardGroup] = useState<SkasStandardGroupKey>('Std 3.1');
   const [oprSubStandardCode, setOprSubStandardCode] = useState<string>('3.1.1.1');
+  const [oprSokonganStandards, setOprSokonganStandards] = useState<
+    Array<{ standardGroup: SkasStandardGroupKey; subStandardCode: string }>
+  >([]);
   const [oprDocId, setOprDocId] = useState<string>('');
   const [oprTitle, setOprTitle] = useState<string>(
     'MESYUARAT & BENGKEL PENYELARASAN JAWATANKUASA KURIKULUM SEKOLAH (JKS)'
@@ -2652,6 +2657,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
       );
       setOprStandardGroup(autoSkas.standardGroup);
       setOprSubStandardCode(autoSkas.subStandardCode);
+      setOprSokonganStandards([]);
       setOprTitle(`PROGRAM & PENYELARASAN ${selectedPortfolio.jawatankuasaInduk.toUpperCase()}`);
       setOprPreparedBy(assignedCoordinator);
       setOprPreparedTitle(selectedPortfolio.jawatanRasmi);
@@ -2717,18 +2723,31 @@ export const AISetiausahaHub: React.FC<Props> = ({
     }
   }, [selectedPortfolio, selectedAcademicYear, currentCommitteeMembers, teacherRoster]);
 
-  // Handle external prefill from `PaparanMaklumanView` (`📩 Memo` & `📝 Minit` buttons)
+  // Handle external prefill from `PaparanMaklumanView` or `KawalanProgramView` (`📩 Memo`, `📝 Minit`, `📸 Smart OPR` buttons)
   useEffect(() => {
     if (!externalPrefill || !externalPrefill.taskItem) return;
     const task = externalPrefill.taskItem;
+    if (task.kawalanProgramId) {
+      setLinkedKawalanProgramId(String(task.kawalanProgramId));
+    }
+
     const resolved = resolveDocumentSessions({
       title: task.title,
       agendaText: task.description || task.arahanTindakan || '',
-      tarikh: task.dueDate,
+      tarikh: task.dueDate || task.tarikhMula,
       fallbackYear: selectedAcademicYear,
     });
     if (resolved.primaryYear && availableYears.includes(resolved.primaryYear)) {
       setSelectedAcademicYear(resolved.primaryYear);
+    }
+
+    // Match pillar / portfolio if provided
+    if (task.pillar && ['PENTADBIRAN', 'KURIKULUM', 'HEM', 'KOKURIKULUM'].includes(task.pillar)) {
+      setSelectedPillar(task.pillar as MySGPillar);
+      const firstPortInPillar = portfolios.find((p) => p.pillar === task.pillar);
+      if (firstPortInPillar) {
+        setSelectedKodMySG(firstPortInPillar.kodMySG);
+      }
     }
 
     const invited: InvitedCommitteeTeacher[] =
@@ -2749,17 +2768,20 @@ export const AISetiausahaHub: React.FC<Props> = ({
       : [];
 
     const syntheticMemo: AISetiausahaDocument = {
-      id: task.sourceMemoId || `makluman_ref_${task.id}`,
+      id: task.sourceMemoId || `makluman_ref_${task.id || Date.now()}`,
       docKind: 'MEMO',
       schoolCode: effectiveSchoolCode,
       academicYear: resolved.primaryYear,
       academicYears: resolved.academicYears,
       kodMySG: task.kodMySG || selectedPortfolio?.kodMySG,
       jawatankuasaInduk: task.jawatankuasaInduk || selectedPortfolio?.jawatankuasaInduk,
+      standardGroup: task.standardGroup,
+      subStandardCode: task.subStandardCode,
+      subStandardTitle: task.subStandardTitle,
       programTitle: String(task.title || 'MESYUARAT SEKOLAH').toUpperCase(),
-      tarikh: task.dueDate || new Date().toISOString().slice(0, 10),
+      tarikh: task.dueDate || task.tarikhMula || new Date().toISOString().slice(0, 10),
       masa: task.dueTime || task.masa || '2:15 petang',
-      tempat: task.location || task.venue || 'Bilik Mesyuarat',
+      tempat: task.location || task.venue || task.tempat || 'Bilik Mesyuarat',
       agendaList: cleanFokusAgendaLines(rawPrefillAgenda),
       invitedTeachers: invited,
     };
@@ -2769,7 +2791,37 @@ export const AISetiausahaHub: React.FC<Props> = ({
     } else if (externalPrefill.targetTab === 'MEMO') {
       handleLoadSavedMemo(syntheticMemo);
     } else {
+      // Prefill Smart OPR fields from Kawalan Program / Makluman
+      const resolvedSkas = resolveSkasSelection(
+        task.standardGroup,
+        task.subStandardCode,
+        task.pillar || selectedPortfolio?.pillar
+      );
+      setOprDocId('');
+      setOprStandardGroup(resolvedSkas.standardGroup);
+      setOprSubStandardCode(resolvedSkas.subStandardCode);
+      setOprTitle(String(task.title || 'LAPORAN PROGRAM SEKOLAH').toUpperCase());
+      setOprTarikh(task.dueDate || task.tarikhMula || new Date().toISOString().slice(0, 10));
+      setOprMasa(task.masa || task.dueTime || '08:00 pagi – 12:00 tengah hari');
+      setOprTempat(task.location || task.tempat || effectiveSchoolName);
+      setOprSasaran(task.sasaran || 'Semua Guru & Murid');
+      if (task.objektif || task.kpi) {
+        setOprObjektifText(
+          [task.objektif, task.kpi ? `Sasaran KPI: ${task.kpi}` : ''].filter(Boolean).join('\n')
+        );
+      }
+      if (task.strategi || task.description) {
+        setOprRawNotes(String(task.strategi || task.description || ''));
+        setOprPengisianText(String(task.strategi || task.description || ''));
+      }
+      if (task.picName) {
+        setOprPreparedBy(String(task.picName).toUpperCase());
+      }
       setActiveTab('OPR');
+      setBannerMsg({
+        type: 'info',
+        text: `Mod Smart OPR sedia untuk program "${String(task.title || '').toUpperCase()}" (${resolvedSkas.standardGroup} • ${resolvedSkas.subStandardCode}). Apabila disimpan & diarkib ke Google Drive, status PDCA program akan automatik bergerak ke "Menunggu Semakan (Check)".`,
+      });
     }
     if (onClearExternalPrefill) onClearExternalPrefill();
   }, [externalPrefill]);
@@ -2865,6 +2917,29 @@ export const AISetiausahaHub: React.FC<Props> = ({
     [oprStandardGroup, oprSubStandardCode, selectedPortfolio?.pillar]
   );
 
+  const activeOprSokonganList = useMemo(() => {
+    const seen = new Set<string>([activeOprSkas.subStandardCode]);
+    const list: ReturnType<typeof resolveSkasSelection>[] = [];
+    oprSokonganStandards.forEach((s) => {
+      const res = resolveSkasSelection(s.standardGroup, s.subStandardCode, selectedPortfolio?.pillar);
+      if (!seen.has(res.subStandardCode) && list.length < 2) {
+        seen.add(res.subStandardCode);
+        list.push(res);
+      }
+    });
+    return list;
+  }, [oprSokonganStandards, activeOprSkas.subStandardCode, selectedPortfolio?.pillar]);
+
+  const activeOprStandardsPayload = useMemo(
+    () =>
+      [activeOprSkas, ...activeOprSokonganList].map((r) => ({
+        standardGroup: r.standardGroup,
+        subStandardCode: r.subStandardCode,
+        subStandardTitle: r.subStandardTitle,
+      })),
+    [activeOprSkas, activeOprSokonganList]
+  );
+
   // All visible OPR docs across all pillars for the selected session so Radar Evidens always counts Std 1 - Std 5 accurately
   const radarOprDocs = useMemo(() => {
     const visibleOprs = rawSchoolDocs.filter(
@@ -2881,7 +2956,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
     });
   }, [rawSchoolDocs, isDocumentVisibleToUser, archiveSessionScope, selectedAcademicYear]);
 
-  // SKPM Radar counts across OPR docs + Sub-Standard resolution
+  // SKPM Radar counts across OPR docs + Multi-Standard (Utama + up to 2 Sokongan) resolution
   const skpmRadarCounts = useMemo(() => {
     const resolveDocSkas = (d: AISetiausahaDocument) =>
       resolveSkasSelection(
@@ -2890,11 +2965,27 @@ export const AISetiausahaHub: React.FC<Props> = ({
         d.pillar
       );
 
+    const resolveDocAllSkas = (d: AISetiausahaDocument) => {
+      const primary = resolveDocSkas(d);
+      const seen = new Set<string>([primary.subStandardCode]);
+      const list = [{ skas: primary, isRujukan: false }];
+      if (Array.isArray(d.standards) && d.standards.length > 0) {
+        d.standards.slice(0, 3).forEach((s, idx) => {
+          const r = resolveSkasSelection(s.standardGroup, s.subStandardCode, d.pillar);
+          if (!seen.has(r.subStandardCode)) {
+            seen.add(r.subStandardCode);
+            list.push({ skas: r, isRujukan: idx > 0 });
+          }
+        });
+      }
+      return list;
+    };
+
     const matchBucket = (d: AISetiausahaDocument, key: string): boolean => {
       if (key === 'Semua') return true;
-      const resolved = resolveDocSkas(d);
-      if (resolved.standardGroup === key) return true;
-      const combined = `${d.standardGroup || ''} ${d.subStandardCode || ''} ${d.skpmBucket || ''} ${d.secondarySkpmBucket || ''} ${(d.additionalSkpmBuckets || []).join(' ')} ${d.skpmCodeBadge || ''} ${d.skpmStandard || ''}`.toUpperCase();
+      const allSkas = resolveDocAllSkas(d);
+      if (allSkas.some((item) => item.skas.standardGroup === key)) return true;
+      const combined = `${d.standardGroup || ''} ${d.subStandardCode || ''} ${(d.standards || []).map((s) => `${s.standardGroup} ${s.subStandardCode}`).join(' ')} ${d.skpmBucket || ''} ${d.secondarySkpmBucket || ''} ${(d.additionalSkpmBuckets || []).join(' ')} ${d.skpmCodeBadge || ''} ${d.skpmStandard || ''}`.toUpperCase();
       if (key === 'Std 1') return /STD 1\b|STANDARD 1\b|\b1\.[123]/.test(combined);
       if (key === 'Std 2') return /STD 2\b|STANDARD 2\b|\b2\.[1-7]/.test(combined);
       if (key === 'Std 3.1') return /\b3\.1|KURIKULUM/.test(combined);
@@ -2909,7 +3000,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
     buckets.forEach((b) => {
       counts[b] = radarOprDocs.filter((d) => matchBucket(d, b)).length;
     });
-    return { counts, matchBucket, resolveDocSkas };
+    return { counts, matchBucket, resolveDocSkas, resolveDocAllSkas };
   }, [radarOprDocs]);
 
   const filteredOprDocs = useMemo(() => {
@@ -2926,47 +3017,59 @@ export const AISetiausahaHub: React.FC<Props> = ({
         dropdownLabel: string;
         drivePath: string;
         folderUrl: string;
-        docs: AISetiausahaDocument[];
+        docs: Array<{ doc: AISetiausahaDocument; isRujukan: boolean }>;
       }
     >();
 
     filteredOprDocs.forEach((d) => {
-      const skas = skpmRadarCounts.resolveDocSkas(d);
-      const key = skas.subStandardCode;
-      const docFolderPath =
-        d.folderPath ||
-        d.driveFolderPath ||
-        (d.driveTargetFolderPath && d.driveTargetFolderPath.length > 0
-          ? d.driveTargetFolderPath.join(' / ')
-          : skas.driveTargetFolderPath.join(' / '));
-      const docFolderUrl =
-        d.folderUrl || d.driveFolderUrl || d.fileUrl || d.driveFileUrl || '';
-      const existing = groupsMap.get(key);
-      if (existing) {
-        existing.docs.push(d);
-        if (!existing.folderUrl && docFolderUrl) {
-          existing.folderUrl = docFolderUrl;
+      const allSkasEntries = skpmRadarCounts.resolveDocAllSkas(d);
+      allSkasEntries.forEach(({ skas, isRujukan }, idx) => {
+        if (skpmRadarFilter !== 'Semua' && skas.standardGroup !== skpmRadarFilter) {
+          return;
         }
-        if ((d.folderPath || d.driveFolderPath) && existing.drivePath !== docFolderPath) {
-          existing.drivePath = docFolderPath;
+        const key = skas.subStandardCode;
+        const linkedPathForIdx =
+          Array.isArray(d.linkedPaths) && d.linkedPaths[idx] ? d.linkedPaths[idx] : '';
+        const docFolderPath =
+          linkedPathForIdx ||
+          (!isRujukan
+            ? d.folderPath ||
+              d.driveFolderPath ||
+              (d.driveTargetFolderPath && d.driveTargetFolderPath.length > 0
+                ? d.driveTargetFolderPath.join(' / ')
+                : skas.driveTargetFolderPath.join(' / '))
+            : skas.driveTargetFolderPath.join(' / '));
+        const docFolderUrl =
+          d.folderUrl || d.driveFolderUrl || d.fileUrl || d.driveFileUrl || '';
+        const existing = groupsMap.get(key);
+        if (existing) {
+          if (!existing.docs.some((entry) => entry.doc.id === d.id)) {
+            existing.docs.push({ doc: d, isRujukan });
+          }
+          if (!existing.folderUrl && docFolderUrl) {
+            existing.folderUrl = docFolderUrl;
+          }
+          if (!isRujukan && (d.folderPath || d.driveFolderPath) && existing.drivePath !== docFolderPath) {
+            existing.drivePath = docFolderPath;
+          }
+        } else {
+          groupsMap.set(key, {
+            standardGroup: skas.standardGroup,
+            subStandardCode: skas.subStandardCode,
+            subStandardTitle: skas.subStandardTitle,
+            dropdownLabel: skas.dropdownLabel,
+            drivePath: docFolderPath,
+            folderUrl: docFolderUrl,
+            docs: [{ doc: d, isRujukan }],
+          });
         }
-      } else {
-        groupsMap.set(key, {
-          standardGroup: skas.standardGroup,
-          subStandardCode: skas.subStandardCode,
-          subStandardTitle: skas.subStandardTitle,
-          dropdownLabel: skas.dropdownLabel,
-          drivePath: docFolderPath,
-          folderUrl: docFolderUrl,
-          docs: [d],
-        });
-      }
+      });
     });
 
     return Array.from(groupsMap.values()).sort((a, b) =>
       a.subStandardCode.localeCompare(b.subStandardCode, undefined, { numeric: true })
     );
-  }, [filteredOprDocs, skpmRadarCounts]);
+  }, [filteredOprDocs, skpmRadarCounts, skpmRadarFilter]);
 
   // -------------------- ACTION HANDLERS --------------------
   const handlePhotoUpload = (slotIndex: number, file?: File | null) => {
@@ -3063,6 +3166,17 @@ export const AISetiausahaHub: React.FC<Props> = ({
         resolvedSkas.standardFullTitle || d.skpmStandard || selectedPortfolio?.skpmStandardTitle || '';
       const resolvedPillar = d.pillar || selectedPortfolio?.pillar || '';
 
+      const docStandards =
+        Array.isArray(d.standards) && d.standards.length > 0
+          ? d.standards.slice(0, 3)
+          : [
+              {
+                standardGroup: resolvedSkas.standardGroup,
+                subStandardCode: resolvedSkas.subStandardCode,
+                subStandardTitle: resolvedSkas.subStandardTitle,
+              },
+            ];
+
       const fallbackHtml = buildFallbackDriveHtml({
         schoolCode: d.schoolCode || effectiveSchoolCode,
         academicYear: d.academicYear || selectedAcademicYear,
@@ -3070,6 +3184,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
         standardGroup: resolvedSkas.standardGroup,
         subStandardCode: resolvedSkas.subStandardCode,
         subStandardTitle: resolvedSkas.subStandardTitle,
+        standards: docStandards,
         driveTargetFolderPath: d.driveTargetFolderPath || resolvedSkas.driveTargetFolderPath,
         skpmBucket: resolvedBucket,
         skpmCodeBadge: resolvedCodeBadge,
@@ -3089,6 +3204,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
         standardGroup: resolvedSkas.standardGroup,
         subStandardCode: resolvedSkas.subStandardCode,
         subStandardTitle: resolvedSkas.subStandardTitle,
+        standards: docStandards,
         driveTargetFolderPath: d.driveTargetFolderPath || resolvedSkas.driveTargetFolderPath,
         skpmBucket: resolvedBucket,
         skpmCodeBadge: resolvedCodeBadge,
@@ -3133,6 +3249,10 @@ export const AISetiausahaHub: React.FC<Props> = ({
             d.driveTargetFolderPath ||
             resolvedSkas.driveTargetFolderPath
           ).join(' / ');
+        const savedLinkedPaths =
+          Array.isArray(res.linkedPaths) && res.linkedPaths.length > 0
+            ? res.linkedPaths
+            : d.linkedPaths || [savedFolderPath];
         const savedFileUrl = res.fileUrl || res.folderUrl || '';
         const savedFolderUrl = res.folderUrl || res.fileUrl || '';
         if (!String(d.id || '').startsWith('MAKLUMAN_MEMO_')) {
@@ -3143,6 +3263,8 @@ export const AISetiausahaHub: React.FC<Props> = ({
               standardGroup: resolvedSkas.standardGroup,
               subStandardCode: resolvedSkas.subStandardCode,
               subStandardTitle: resolvedSkas.subStandardTitle,
+              standards: res.standards || docStandards,
+              linkedPaths: savedLinkedPaths,
               folderPath: savedFolderPath,
               fileUrl: savedFileUrl,
               folderUrl: savedFolderUrl,
@@ -3159,6 +3281,51 @@ export const AISetiausahaHub: React.FC<Props> = ({
             { merge: true }
           );
         }
+
+        // Automatically sync Kawalan Program PDCA checklist & status -> Menunggu Semakan (Check)
+        try {
+          const targetProgId = linkedKawalanProgramId || d.sourceActivityId || '';
+          if (targetProgId && d.docKind === 'OPR') {
+            const progRef = doc(db, 'kawalan_programs', targetProgId);
+            const progSnap = await getDoc(progRef);
+            if (progSnap.exists()) {
+              const pData: any = progSnap.data();
+              const updatedChecklist = Array.isArray(pData.checklist)
+                ? pData.checklist.map((item: any) =>
+                    item.stepKey === 'OPR' || item.stepKey === 'PELAKSANAAN'
+                      ? {
+                          ...item,
+                          done: true,
+                          completedAt: nowIso,
+                          completedBy: currentUser?.name || d.preparedByName || 'Guru',
+                          evidenceUrl: savedFileUrl || savedFolderUrl || item.evidenceUrl || '',
+                          linkedDocId: d.id,
+                        }
+                      : item
+                  )
+                : [];
+              const nextStage = pData.pdcaStage === 'ACT' ? 'ACT' : 'CHECK';
+              await setDoc(
+                progRef,
+                deepSanitizeFirestore({
+                  linkedOprDocId: d.id,
+                  oprSubmitted: true,
+                  oprSubmittedAt: nowIso,
+                  driveFileUrl: savedFileUrl || pData.driveFileUrl || '',
+                  driveFolderUrl: savedFolderUrl || pData.driveFolderUrl || '',
+                  driveFolderPath: savedFolderPath || pData.driveFolderPath || '',
+                  checklist: updatedChecklist,
+                  pdcaStage: nextStage,
+                  updatedAt: nowIso,
+                }),
+                { merge: true }
+              );
+            }
+          }
+        } catch (pdcaSyncErr) {
+          console.warn('Auto-sync Kawalan Program PDCA on Drive archive:', pdcaSyncErr);
+        }
+
         await loadHubData();
         setBannerMsg({
           type: 'success',
@@ -3212,9 +3379,18 @@ export const AISetiausahaHub: React.FC<Props> = ({
       standardGroup: activeOprSkas.standardGroup,
       subStandardCode: activeOprSkas.subStandardCode,
       subStandardTitle: activeOprSkas.subStandardTitle,
+      standards: activeOprStandardsPayload,
+      secondarySkpmBucket: activeOprSokonganList[0]?.standardGroup,
+      additionalSkpmBuckets: activeOprSokonganList.map((s) => s.standardGroup),
       driveTargetFolderPath: activeOprSkas.driveTargetFolderPath,
+      linkedPaths: [activeOprSkas, ...activeOprSokonganList].map((s) =>
+        s.driveTargetFolderPath.join(' / ')
+      ),
       skpmBucket: activeOprSkas.standardGroup,
-      skpmCodeBadge: `${activeOprSkas.subStandardCode} — ${activeOprSkas.subStandardTitle}`,
+      skpmCodeBadge:
+        activeOprStandardsPayload.length > 1
+          ? activeOprStandardsPayload.map((s) => s.subStandardCode).join(' + ')
+          : `${activeOprSkas.subStandardCode} — ${activeOprSkas.subStandardTitle}`,
       skpmStandard: activeOprSkas.standardFullTitle,
       skpmAspek: `SUB-STANDARD ${activeOprSkas.subStandardCode}: ${activeOprSkas.subStandardTitle.toUpperCase()}`,
       skpmStandardKualiti: activeOprSkas.kualitiStatement,
@@ -3264,13 +3440,74 @@ export const AISetiausahaHub: React.FC<Props> = ({
       merge: true,
     });
     setOprDocId(docId);
+
+    // Immediately mark OPR completed & advance Kawalan Program PDCA to 'CHECK' (Menunggu Semakan)
+    try {
+      const nowIso = new Date().toISOString();
+      let targetProgId = linkedKawalanProgramId;
+      if (!targetProgId) {
+        // Check if any kawalan_programs in active school matches title + subStandardCode
+        const kpSnap = await getDocs(collection(db, 'kawalan_programs')).catch(() => null);
+        if (kpSnap) {
+          const cleanTitle = payload.programTitle.trim().toUpperCase();
+          const matchedProg = kpSnap.docs.find((kd) => {
+            const kData: any = kd.data();
+            return (
+              belongsToSchool(kData, effectiveSchoolCode) &&
+              (String(kData.title || '').trim().toUpperCase() === cleanTitle ||
+                kData.linkedOprDocId === docId)
+            );
+          });
+          if (matchedProg) targetProgId = matchedProg.id;
+        }
+      }
+
+      if (targetProgId) {
+        const progRef = doc(db, 'kawalan_programs', targetProgId);
+        const progSnap = await getDoc(progRef);
+        if (progSnap.exists()) {
+          const pData: any = progSnap.data();
+          const updatedChecklist = Array.isArray(pData.checklist)
+            ? pData.checklist.map((item: any) =>
+                item.stepKey === 'OPR' || item.stepKey === 'PELAKSANAAN'
+                  ? {
+                      ...item,
+                      done: true,
+                      completedAt: nowIso,
+                      completedBy: currentUser?.name || payload.preparedByName || 'Guru',
+                      linkedDocId: docId,
+                    }
+                  : item
+              )
+            : [];
+          const nextStage = pData.pdcaStage === 'ACT' ? 'ACT' : 'CHECK';
+          await setDoc(
+            progRef,
+            deepSanitizeFirestore({
+              linkedOprDocId: docId,
+              oprSubmitted: true,
+              oprSubmittedAt: nowIso,
+              driveFolderPath:
+                payload.driveFolderPath || activeOprSkas.driveTargetFolderPath.join(' / '),
+              checklist: updatedChecklist,
+              pdcaStage: nextStage,
+              updatedAt: nowIso,
+            }),
+            { merge: true }
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('Auto-advance Kawalan Program on OPR save:', err);
+    }
+
     await loadHubData();
     setBannerMsg({
       type: 'success',
-      text: `Poster OPR "${payload.programTitle}" telah disimpan ke Arkib (${activeOprSkas.standardGroup} • ${activeOprSkas.subStandardCode}). Menyegerak ke Google Drive Sekolah...`,
+      text: `Poster OPR "${payload.programTitle}" telah disimpan ke Arkib (${activeOprSkas.standardGroup} • ${activeOprSkas.subStandardCode}) & status Kawalan Program PDCA dikemas kini ke "Menunggu Semakan (Check)". Menyegerak ke Google Drive Sekolah...`,
     });
     void handleSyncSavedDocToDrive(
-      payload,
+      { ...payload, sourceActivityId: linkedKawalanProgramId || payload.sourceActivityId },
       'ai-setiausaha-opr-poster',
       `Poster OPR "${payload.programTitle}" telah disimpan (${activeOprSkas.standardGroup} • ${activeOprSkas.subStandardCode})`
     );
@@ -3292,6 +3529,19 @@ export const AISetiausahaHub: React.FC<Props> = ({
     );
     setOprStandardGroup(resolvedSkas.standardGroup);
     setOprSubStandardCode(resolvedSkas.subStandardCode);
+    if (Array.isArray(d.standards) && d.standards.length > 1) {
+      setOprSokonganStandards(
+        d.standards.slice(1, 3).map((s) => {
+          const r = resolveSkasSelection(s.standardGroup, s.subStandardCode, d.pillar);
+          return {
+            standardGroup: r.standardGroup,
+            subStandardCode: r.subStandardCode,
+          };
+        })
+      );
+    } else {
+      setOprSokonganStandards([]);
+    }
     setOprTitle(d.programTitle || '');
     setOprTarikh(d.tarikh || new Date().toISOString().slice(0, 10));
     setOprMasa(d.masa || '08:00 pagi – 12:00 tengah hari');
@@ -3587,6 +3837,44 @@ export const AISetiausahaHub: React.FC<Props> = ({
       merge: true,
     });
     setMemoDocId(docId);
+
+    // If linked to a Kawalan Program, mark Memo checklist step done & move PLAN -> DO
+    if (linkedKawalanProgramId) {
+      try {
+        const nowIso = new Date().toISOString();
+        const progRef = doc(db, 'kawalan_programs', linkedKawalanProgramId);
+        const progSnap = await getDoc(progRef);
+        if (progSnap.exists()) {
+          const pData: any = progSnap.data();
+          const updatedChecklist = Array.isArray(pData.checklist)
+            ? pData.checklist.map((item: any) =>
+                item.stepKey === 'MEMO'
+                  ? {
+                      ...item,
+                      done: true,
+                      completedAt: nowIso,
+                      completedBy: currentUser?.name || payload.preparedByName || 'Guru',
+                      linkedDocId: docId,
+                    }
+                  : item
+              )
+            : [];
+          const nextStage = pData.pdcaStage === 'PLAN' ? 'DO' : pData.pdcaStage;
+          await setDoc(
+            progRef,
+            deepSanitizeFirestore({
+              linkedMemoDocId: docId,
+              checklist: updatedChecklist,
+              pdcaStage: nextStage,
+              updatedAt: nowIso,
+            }),
+            { merge: true }
+          );
+        }
+      } catch (err) {
+        console.warn('Auto-update Kawalan Program on Memo save:', err);
+      }
+    }
 
     if (syncMaklumanAndWhatsApp) {
       const maklumanId = scopedDocId(effectiveSchoolCode, `makluman_memo_${docId}`);
@@ -3929,11 +4217,15 @@ export const AISetiausahaHub: React.FC<Props> = ({
         (a) => (a.teacherName || '').trim().toUpperCase() === targetName
       )
     );
-    const totalMata = penyelarasRoles.reduce((acc, r) => acc + (Number(r.mataBeban) || 0), 0);
+    const penyelarasMata = penyelarasRoles.reduce((acc, r) => acc + (Number(r.mataBeban) || 0), 0);
+    const ahliMata = ahliRoles.length * 1;
+    const totalMata = penyelarasMata + ahliMata;
     return {
       teacherName: targetName || 'NAMA GURU',
       penyelarasRoles,
       ahliRoles,
+      penyelarasMata,
+      ahliMata,
       totalMata,
     };
   }, [portfolios, lantikanTeacherKey]);
@@ -4203,8 +4495,8 @@ export const AISetiausahaHub: React.FC<Props> = ({
           </div>
         )}
 
-        {/* 4 Module Switcher Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* 5 Module Switcher Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           {[
             {
               id: 'OPR',
@@ -4233,6 +4525,13 @@ export const AISetiausahaHub: React.FC<Props> = ({
               subtitle: 'Lantikan Bersepadu Guru + Keratan Akuan Penerimaan',
               icon: Award,
               accent: 'from-purple-600/25 to-fuchsia-900/20 border-purple-500/70 text-purple-300',
+            },
+            {
+              id: 'SIJIL',
+              title: '5. PENJANA SIJIL RASMI',
+              subtitle: '6 Templat Vektor HD + 4 Jenis Sijil & Cetakan Pukal A4',
+              icon: Sparkles,
+              accent: 'from-rose-600/25 to-amber-900/20 border-amber-500/70 text-amber-300',
             },
           ].map((card) => {
             const Icon = card.icon;
@@ -4297,6 +4596,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
       {/* ====================================================================
           2. SHARED 2-LEVEL STRUCTURED SELECTOR (TERAS MySG -> JAWATANKUASA / UNIT)
          ==================================================================== */}
+      {activeTab !== 'SIJIL' && (
       <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="text-[11px] font-black uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
@@ -4447,6 +4747,26 @@ export const AISetiausahaHub: React.FC<Props> = ({
           </>
         )}
       </div>
+      )}
+
+      {/* ====================================================================
+          TAB 5 — 5. PENJANA SIJIL RASMI (6 TEMPLAT VEKTOR HD + CETAKAN PUKAL)
+         ==================================================================== */}
+      {activeTab === 'SIJIL' && (
+        <ModuleSijil
+          currentUser={currentUser}
+          schoolSettings={schoolSettings}
+          personnel={personnel}
+          effectiveSchoolCode={effectiveSchoolCode}
+          effectiveSchoolName={effectiveSchoolName}
+          effectiveSchoolLogo={effectiveSchoolLogo}
+          selectedAcademicYear={selectedAcademicYear}
+          principalName={principalName}
+          onArchiveSuccess={() => {
+            void loadHubData();
+          }}
+        />
+      )}
 
       {/* ====================================================================
           3. TAB 1 — 1. OPR PINTAR SKPM (EXACT SKPM KUALITI@SEKOLAH POSTER)
@@ -4520,7 +4840,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     </div>
 
                     <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                      {grp.docs.map((d, i) => {
+                      {grp.docs.map(({ doc: d, isRujukan }, i) => {
                         const driveUrl =
                           d.fileUrl || d.driveFileUrl || d.folderUrl || d.driveFolderUrl;
                         const docFolderPath =
@@ -4539,11 +4859,19 @@ export const AISetiausahaHub: React.FC<Props> = ({
                               onClick={() => handleLoadSavedOPR(d)}
                               className="text-left cursor-pointer"
                             >
-                              <div className="text-[11px] font-bold truncate max-w-[230px]">
-                                {d.programTitle}
+                              <div className="text-[11px] font-bold truncate max-w-[230px] flex items-center gap-1.5">
+                                {isRujukan && (
+                                  <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[8.5px] font-black shrink-0">
+                                    [RUJUKAN]
+                                  </span>
+                                )}
+                                <span className="truncate">{d.programTitle}</span>
                               </div>
                               <div className="text-[9.5px] text-teal-400 font-mono">
                                 {d.tarikh} &bull; {grp.subStandardCode}
+                                {Array.isArray(d.standards) && d.standards.length > 1
+                                  ? ` (${d.standards.map((s) => s.subStandardCode).join(' + ')})`
+                                  : ''}
                               </div>
                               {docFolderPath && (
                                 <div
@@ -4593,6 +4921,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                   onClick={() => {
                     setOprDocId('');
                     setOprPhotos(['', '', '']);
+                    setOprSokonganStandards([]);
                   }}
                   className="text-[11px] font-bold text-teal-300 hover:text-teal-200 flex items-center gap-1 cursor-pointer"
                 >
@@ -4602,22 +4931,27 @@ export const AISetiausahaHub: React.FC<Props> = ({
               </div>
 
               <div className="space-y-3">
-                {/* 2-LEVEL CASCADING SKAS STANDARD & SUB-STANDARD DROPDOWNS + EVIDENS REFERENCE BAR */}
+                {/* 2-LEVEL CASCADING SKAS STANDARD & SUB-STANDARD DROPDOWNS (SKAS v3.0 — UP TO 3 STANDARDS) + EVIDENS REFERENCE BAR */}
                 <div className="p-3.5 rounded-2xl bg-slate-950 border border-indigo-500/40 space-y-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[10px] font-black uppercase tracking-wider text-indigo-300 flex items-center gap-1.5">
                       <Layers className="w-3.5 h-3.5 text-amber-400" />
-                      <span>PEMETAAN STANDARD &amp; SUB-STANDARD SKAS 2026 (GOOGLE DRIVE)</span>
+                      <span>PEMETAAN STANDARD SKAS v3.0 (MAKSIMUM 3 STANDARD GOOGLE DRIVE)</span>
                     </span>
                     <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[9.5px] font-black font-mono">
-                      {activeOprSkas.standardGroup} &bull; {activeOprSkas.subStandardCode}
+                      {activeOprStandardsPayload.map((s) => s.subStandardCode).join(' + ')}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-2">
+                  {/* Primary Standard (Standard 1 — Utama) */}
+                  <div className="grid grid-cols-1 gap-2 p-2.5 rounded-xl bg-slate-900/70 border border-teal-500/30">
+                    <div className="text-[10px] font-black uppercase text-teal-300 flex items-center justify-between">
+                      <span>1. Standard Utama (Folder Penuh PDF + Foto di Google Drive)</span>
+                      <span className="font-mono text-[9.5px] text-amber-300">UTAMA</span>
+                    </div>
                     <div>
                       <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
-                        1. Standard Utama (Std 1 – Std 5)
+                        Standard Utama (Std 1 – Std 5)
                       </label>
                       <select
                         value={oprStandardGroup}
@@ -4627,7 +4961,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                           const grpObj = getSkasGroup(nextGrp);
                           setOprSubStandardCode(grpObj.defaultSubStandardCode);
                         }}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-white"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-white"
                       >
                         {SKAS_STANDARDS_DICTIONARY.map((g) => (
                           <option key={g.standardGroup} value={g.standardGroup}>
@@ -4639,12 +4973,12 @@ export const AISetiausahaHub: React.FC<Props> = ({
 
                     <div>
                       <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">
-                        2. Sub-Standard / TUMS (Klasifikasi Folder Google Drive)
+                        Sub-Standard / TUMS Utama
                       </label>
                       <select
                         value={activeOprSkas.subStandardCode}
                         onChange={(e) => setOprSubStandardCode(e.target.value)}
-                        className="w-full bg-slate-900 border border-teal-500/50 rounded-xl px-3 py-2 text-xs font-bold text-teal-200"
+                        className="w-full bg-slate-950 border border-teal-500/50 rounded-xl px-3 py-2 text-xs font-bold text-teal-200"
                       >
                         {getSkasGroup(oprStandardGroup).subStandards.map((sub) => (
                           <option key={sub.code} value={sub.code}>
@@ -4653,6 +4987,107 @@ export const AISetiausahaHub: React.FC<Props> = ({
                         ))}
                       </select>
                     </div>
+                  </div>
+
+                  {/* Optional Secondary Standards (Standard 2 & Standard 3 — Sokongan / Rujukan Shortcut) */}
+                  <div className="space-y-2">
+                    {oprSokonganStandards.map((sok, idx) => {
+                      const resolvedSok = resolveSkasSelection(
+                        sok.standardGroup,
+                        sok.subStandardCode,
+                        selectedPortfolio?.pillar
+                      );
+                      return (
+                        <div
+                          key={idx}
+                          className="p-2.5 rounded-xl bg-slate-900/60 border border-amber-500/30 space-y-2"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-black uppercase text-amber-300">
+                              {idx + 2}. Standard Sokongan #{idx + 1} (Auto-Shortcut [RUJUKAN] di Google Drive)
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setOprSokonganStandards((prev) => prev.filter((_, i) => i !== idx))
+                              }
+                              className="text-[10px] font-bold text-rose-400 hover:text-rose-300 flex items-center gap-1 cursor-pointer"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Padam</span>
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-1 gap-1.5">
+                            <select
+                              value={resolvedSok.standardGroup}
+                              onChange={(e) => {
+                                const nextGrp = e.target.value as SkasStandardGroupKey;
+                                const grpObj = getSkasGroup(nextGrp);
+                                setOprSokonganStandards((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx
+                                      ? {
+                                          standardGroup: nextGrp,
+                                          subStandardCode: grpObj.defaultSubStandardCode,
+                                        }
+                                      : item
+                                  )
+                                );
+                              }}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-white"
+                            >
+                              {SKAS_STANDARDS_DICTIONARY.map((g) => (
+                                <option key={g.standardGroup} value={g.standardGroup}>
+                                  {g.dropdownGroupLabel}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={resolvedSok.subStandardCode}
+                              onChange={(e) => {
+                                const nextCode = e.target.value;
+                                setOprSokonganStandards((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx ? { ...item, subStandardCode: nextCode } : item
+                                  )
+                                );
+                              }}
+                              className="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-amber-200"
+                            >
+                              {getSkasGroup(resolvedSok.standardGroup).subStandards.map((sub) => (
+                                <option key={sub.code} value={sub.code}>
+                                  {sub.dropdownLabel}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {oprSokonganStandards.length < 2 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const defaultNextGroup: SkasStandardGroupKey =
+                            oprStandardGroup === 'Std 5' ? 'Std 2' : 'Std 5';
+                          const grpObj = getSkasGroup(defaultNextGroup);
+                          setOprSokonganStandards((prev) => [
+                            ...prev,
+                            {
+                              standardGroup: defaultNextGroup,
+                              subStandardCode: grpObj.defaultSubStandardCode,
+                            },
+                          ]);
+                        }}
+                        className="w-full py-1.5 px-3 rounded-xl border border-dashed border-amber-500/40 hover:border-amber-400 bg-amber-500/5 hover:bg-amber-500/10 text-amber-300 text-[10.5px] font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>
+                          Tambah Standard Sokongan ({oprSokonganStandards.length + 1}/2) — Jana Shortcut [RUJUKAN] Drive
+                        </span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Light Evidens Reference Bar */}
@@ -4668,6 +5103,14 @@ export const AISetiausahaHub: React.FC<Props> = ({
                         <li key={idx}>{ev}</li>
                       ))}
                     </ul>
+                    {activeOprSokonganList.length > 0 && (
+                      <div className="pt-1 mt-1 border-t border-indigo-500/30 text-[9.5px] text-amber-200 font-mono">
+                        🔗 Shortcut [RUJUKAN] Drive:{' '}
+                        {activeOprSokonganList
+                          .map((s) => `${s.subStandardCode} (${s.standardFolderName})`)
+                          .join(' | ')}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -4960,11 +5403,14 @@ export const AISetiausahaHub: React.FC<Props> = ({
                   <div className="flex items-center justify-between gap-4 border-b border-teal-700/70 pb-1.5 mb-1.5">
                     <span className="text-[11px] font-black uppercase tracking-widest text-[#FDE047]">
                       SKPM KUALITI@SEKOLAH {selectedAcademicYear} &bull; {activeOprSkas.standardGroup}
+                      {activeOprSokonganList.length > 0
+                        ? ` + ${activeOprSokonganList.map((s) => s.standardGroup).join(' + ')}`
+                        : ''}
                     </span>
                     <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-teal-100">
                       <span>{selectedPortfolio.kodMySG}</span>
                       <span className="px-2 py-0.5 rounded bg-teal-900/90 text-[#FDE047] border border-[#D4AF37]/60">
-                        SUB-STANDARD {activeOprSkas.subStandardCode}
+                        SUB-STANDARD {activeOprStandardsPayload.map((s) => s.subStandardCode).join(' + ')}
                       </span>
                     </div>
                   </div>
@@ -4974,6 +5420,15 @@ export const AISetiausahaHub: React.FC<Props> = ({
                     </div>
                     <div className="text-[10px] font-extrabold uppercase tracking-wide text-teal-100 leading-tight">
                       ASPEK / TUMS {activeOprSkas.subStandardCode}: {activeOprSkas.subStandardTitle.toUpperCase()}
+                      {activeOprSokonganList.length > 0 && (
+                        <span className="text-amber-300">
+                          {' '}
+                          &bull; SOKONGAN:{' '}
+                          {activeOprSokonganList
+                            .map((s) => `${s.subStandardCode} (${s.standardGroup})`)
+                            .join(', ')}
+                        </span>
+                      )}
                     </div>
                     <p className="text-[10px] italic text-[#FDE047] leading-snug pt-0.5">
                       Standard Kualiti: &ldquo;{activeOprSkas.kualitiStatement}&rdquo;
@@ -5101,10 +5556,18 @@ export const AISetiausahaHub: React.FC<Props> = ({
 
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 text-[9.5px] grid grid-cols-2 gap-1.5">
                       <div className="col-span-2 border-b border-slate-200 pb-1">
-                        <strong>Standard SKAS:</strong> {activeOprSkas.standardGroup} &bull;{' '}
+                        <strong>Standard SKAS (Utama):</strong> {activeOprSkas.standardGroup} &bull;{' '}
                         <strong>{activeOprSkas.subStandardCode}</strong> &mdash;{' '}
                         {activeOprSkas.subStandardTitle}
                       </div>
+                      {activeOprSokonganList.length > 0 && (
+                        <div className="col-span-2 border-b border-slate-200 pb-1 text-teal-800">
+                          <strong>Standard Sokongan (Rujukan Silang):</strong>{' '}
+                          {activeOprSokonganList
+                            .map((s) => `${s.standardGroup} (${s.subStandardCode} — ${s.subStandardTitle})`)
+                            .join(' • ')}
+                        </div>
+                      )}
                       <div>
                         <strong>Tarikh:</strong> {oprTarikh}
                       </div>
@@ -6772,8 +7235,13 @@ export const AISetiausahaHub: React.FC<Props> = ({
               <div className="space-y-3">
                 {/* Table A: Penyelaras Utama */}
                 <div>
-                  <div className="font-black uppercase bg-slate-100 border border-black px-2.5 py-1 text-[11px]">
-                    A. LANTIKAN PENYELARAS / SETIAUSAHA / KETUA PANITIA (JUMLAH BEBAN: {selectedTeacherLantikanSummary.totalMata} MATA)
+                  <div className="font-black uppercase bg-slate-100 border border-black px-2.5 py-1 text-[11px] flex items-center justify-between">
+                    <span>
+                      A. LANTIKAN PENYELARAS / SETIAUSAHA / KETUA PANITIA ({selectedTeacherLantikanSummary.penyelarasMata} MATA)
+                    </span>
+                    <span>
+                      JUMLAH KESELURUHAN (PENYELARAS + AJK): {selectedTeacherLantikanSummary.totalMata} MATA
+                    </span>
                   </div>
                   {selectedTeacherLantikanSummary.penyelarasRoles.length > 0 ? (
                     <table className="w-full border-collapse border border-black text-[11px]">
@@ -6820,7 +7288,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                 {/* Table B: Ahli Jawatankuasa (AJK) */}
                 <div>
                   <div className="font-black uppercase bg-slate-100 border border-black px-2.5 py-1 text-[11px]">
-                    B. LANTIKAN AHLI JAWATANKUASA (AJK) ({selectedTeacherLantikanSummary.ahliRoles.length} JAWATANKUASA &bull; 0 MATA BEBAN)
+                    B. LANTIKAN AHLI JAWATANKUASA (AJK) ({selectedTeacherLantikanSummary.ahliRoles.length} JAWATANKUASA &bull; 1 MATA / AJK = {selectedTeacherLantikanSummary.ahliMata} MATA BEBAN)
                   </div>
                   {selectedTeacherLantikanSummary.ahliRoles.length > 0 ? (
                     <table className="w-full border-collapse border border-black text-[11px]">
@@ -6847,7 +7315,7 @@ export const AISetiausahaHub: React.FC<Props> = ({
                               {r.jawatankuasaInduk}
                             </td>
                             <td className="border border-black px-2 py-1">
-                              Ahli Jawatankuasa (AJK) &bull; {r.skpmCodeDisplay}
+                              Ahli Jawatankuasa (AJK &bull; 1m) &bull; {r.skpmCodeDisplay}
                             </td>
                           </tr>
                         ))}

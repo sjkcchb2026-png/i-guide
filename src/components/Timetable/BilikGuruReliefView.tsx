@@ -16,6 +16,10 @@ import {
   MessageSquare,
   Copy,
   Check,
+  CloudUpload,
+  ShieldCheck,
+  Users,
+  Ban,
 } from 'lucide-react';
 import {
   collection,
@@ -43,6 +47,7 @@ import {
   detectAbsentTeachersForDate,
   generateAutoReliefPlan,
   buildFullDayWhatsAppReliefText,
+  isPrincipalTeacherEntry,
 } from '../../utils/autoReliefEngine';
 import {
   PrasekolahTimetableDoc,
@@ -50,6 +55,8 @@ import {
 } from '../../utils/prasekolahTimetable';
 import { exportMasterTimetableToExcel } from '../../utils/timetableExport';
 import { DEFAULT_SCHOOL_CODE, belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
+import { syncDocumentToSchoolDrive } from '../../utils/schoolDriveArchive';
+import { buildPrintableHtmlDocument } from '../../utils/oprPrintHelper';
 
 interface BilikGuruReliefViewProps {
   schedule: ScheduleGrid;
@@ -115,10 +122,18 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
   // Manual toggle overrides & saved plan state
   const [manualAddedAbsentCodes, setManualAddedAbsentCodes] = useState<string[]>([]);
   const [manualExcludedAbsentCodes, setManualExcludedAbsentCodes] = useState<string[]>([]);
+  const [manualAbsentReasons, setManualAbsentReasons] = useState<Record<string, string>>({});
   const [manualSubstituteOverrides, setManualSubstituteOverrides] = useState<Record<string, string>>({});
   const [repaymentDateOverrides, setRepaymentDateOverrides] = useState<Record<string, string>>({});
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [savedPlanTimestamp, setSavedPlanTimestamp] = useState<string | null>(null);
+  const [isArchivingDrive, setIsArchivingDrive] = useState(false);
+  const [driveArchiveFeedback, setDriveArchiveFeedback] = useState<{
+    ok: boolean;
+    message: string;
+    fileUrl?: string;
+    folderUrl?: string;
+  } | null>(null);
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
   const [copiedWhatsApp, setCopiedWhatsApp] = useState(false);
 
@@ -303,9 +318,11 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
     }
     setManualAddedAbsentCodes([]);
     setManualExcludedAbsentCodes([]);
+    setManualAbsentReasons({});
     setManualSubstituteOverrides({});
     setRepaymentDateOverrides({});
     setSavedPlanTimestamp(null);
+    setDriveArchiveFeedback(null);
 
     const unsubPlan = onSnapshot(
       doc(db, 'daily_relief_plans', scopedDocId(activeSchoolCode, reliefDate)),
@@ -317,6 +334,9 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
           }
           if (data.repaymentDateOverrides && typeof data.repaymentDateOverrides === 'object') {
             setRepaymentDateOverrides(data.repaymentDateOverrides as Record<string, string>);
+          }
+          if (data.manualAbsentReasons && typeof data.manualAbsentReasons === 'object') {
+            setManualAbsentReasons(data.manualAbsentReasons as Record<string, string>);
           }
           if (Array.isArray(data.manualAddedAbsentCodes)) {
             setManualAddedAbsentCodes(data.manualAddedAbsentCodes as string[]);
@@ -355,7 +375,30 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
     return Array.from(set);
   }, [autoDetectedTeachers, manualAddedAbsentCodes, manualExcludedAbsentCodes]);
 
-  // Run the Auto-Relief Engine (with Priority 1 Same-Class Lesson Swap & Isolated Prasekolah Relief)
+  // Enrich auto-detected teachers with manual reason selection (Cuti / Kursus / Urusan Rasmi)
+  const enrichedDetectedAbsentTeachers = useMemo(() => {
+    const map = new Map(autoDetectedTeachers.map((d) => [d.teacherCode, { ...d }]));
+    effectiveAbsentCodes.forEach((code) => {
+      const customReason = manualAbsentReasons[code];
+      const existing = map.get(code);
+      if (existing) {
+        if (customReason) {
+          existing.reasonSummary = customReason;
+        }
+      } else {
+        const tEntry = uniqueTeacherMapping.list.find((t) => t.code === code);
+        map.set(code, {
+          teacherCode: code,
+          teacherName: tEntry?.name || code,
+          reasonSummary: customReason || 'Cuti / Kursus / Urusan Rasmi',
+          sources: ['KEHADIRAN_STAF'],
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [autoDetectedTeachers, effectiveAbsentCodes, manualAbsentReasons, uniqueTeacherMapping.list]);
+
+  // Run the Auto-Relief Engine (SKAS 3.1.3.1 Smart Relief Engine)
   const reliefPlan = useMemo(() => {
     return generateAutoReliefPlan({
       schedule,
@@ -365,7 +408,7 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
       absentTeacherCodes: effectiveAbsentCodes,
       teacherMapping,
       staffDirectory,
-      detectedAbsentTeachers: autoDetectedTeachers,
+      detectedAbsentTeachers: enrichedDetectedAbsentTeachers,
       manualOverrides: manualSubstituteOverrides,
       repaymentDateOverrides,
       prasekolahTimetable: effectivePrasekolahTimetable,
@@ -382,7 +425,7 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
     effectiveAbsentCodes,
     teacherMapping,
     staffDirectory,
-    autoDetectedTeachers,
+    enrichedDetectedAbsentTeachers,
     manualSubstituteOverrides,
     repaymentDateOverrides,
     effectivePrasekolahTimetable,
@@ -434,6 +477,13 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
     }));
   };
 
+  const handleChangeAbsentReason = (teacherCode: string, reason: string) => {
+    setManualAbsentReasons((prev) => ({
+      ...prev,
+      [teacherCode]: reason,
+    }));
+  };
+
   const handleSaveDailyReliefPlan = async () => {
     if (!reliefDate) return;
     setIsSavingPlan(true);
@@ -449,6 +499,7 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
           effectiveAbsentCodes,
           manualAddedAbsentCodes,
           manualExcludedAbsentCodes,
+          manualAbsentReasons,
           manualSubstituteOverrides,
           repaymentDateOverrides,
           slots: reliefPlan.slots.map((s) => ({
@@ -473,6 +524,9 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
             repaymentSlotLabel: s.repaymentSlotLabel || '',
             repaymentTimeLabel: s.repaymentTimeLabel || '',
             repaymentSubjectCode: s.repaymentSubjectCode || '',
+            mergedWithClassLabel: s.mergedWithClassLabel || '',
+            mergedWithTeacherCode: s.mergedWithTeacherCode || '',
+            isPrincipalFallbackUsed: Boolean(s.isPrincipalFallbackUsed),
             periodLength: s.periodLength,
           })),
           updatedAt: nowIso,
@@ -484,6 +538,192 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
       console.error('Failed to save daily relief plan:', err);
     } finally {
       setIsSavingPlan(false);
+    }
+  };
+
+  const buildA4ReliefSlipHtmlForDrive = (): string => {
+    const absentSummary =
+      reliefPlan.absentTeachers.length > 0
+        ? reliefPlan.absentTeachers
+            .map((a) => `${a.teacherCode} (${a.teacherName} — ${a.reasonSummary})`)
+            .join(', ')
+        : 'Tiada Guru Tidak Hadir';
+
+    const rowsHtml = reliefPlan.slots
+      .map((s, idx) => {
+        const modeDesc =
+          s.reliefMode === 'TIADA_GANTI'
+            ? 'TIADA GANTI (PM / PK / PSV / MZ / Klinik)'
+            : s.reliefMode === 'GABUNG_KELAS_PJ'
+            ? `GABUNG KELAS PJ (${s.mergedWithClassLabel ? `Bersama ${s.mergedWithClassLabel}` : 'Aktiviti PJ Gabungan'})`
+            : s.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA'
+            ? `Tukar Waktu Kelas Sama (Ajar ${s.substituteTeachingSubjectCode || s.subjectCode})`
+            : s.isPrincipalFallbackUsed
+            ? 'Ganti Guru Besar (Semua Guru Lapang ≥ 9 Waktu)'
+            : s.reliefModeLabel;
+
+        const subDisplay =
+          s.reliefMode === 'TIADA_GANTI'
+            ? 'TIADA GANTI'
+            : s.reliefMode === 'GABUNG_KELAS_PJ'
+            ? `GABUNG KELAS PJ${s.mergedWithClassLabel ? ` (${s.mergedWithClassLabel})` : ''}`
+            : `${s.assignedSubstituteCode} (${s.assignedSubstituteName || s.assignedSubstituteCode})`;
+
+        return `
+          <tr>
+            <td style="border:1px solid #0f172a;padding:6px;text-align:center;font-weight:bold;">${idx + 1}</td>
+            <td style="border:1px solid #0f172a;padding:6px;text-align:center;font-weight:bold;">${s.timeLabel}</td>
+            <td style="border:1px solid #0f172a;padding:6px;text-align:center;font-weight:bold;">${s.classLabel} (${s.slotLabel})</td>
+            <td style="border:1px solid #0f172a;padding:6px;text-align:center;"><strong>${s.subjectCode}</strong> — ${s.subjectName}</td>
+            <td style="border:1px solid #0f172a;padding:6px;text-align:center;">${s.absentTeacherCodes.join(', ')}</td>
+            <td style="border:1px solid #0f172a;padding:6px;text-align:center;font-weight:bold;">${subDisplay}</td>
+            <td style="border:1px solid #0f172a;padding:6px;text-align:center;font-size:10px;">${modeDesc}</td>
+            <td style="border:1px solid #0f172a;padding:6px;"></td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    const bodyHtml = `
+      <div style="font-family:Arial,sans-serif;padding:18px;color:#0f172a;">
+        <div style="text-align:center;border-bottom:2px solid #0f172a;padding-bottom:10px;margin-bottom:14px;">
+          <div style="font-size:11px;font-weight:bold;color:#0f766e;">KEMENTERIAN PENDIDIKAN MALAYSIA • SKAS 3.1.3.1 PENGURUSAN MASA INSTRUKSIONAL (MMI)</div>
+          <h1 style="font-size:16px;margin:4px 0;text-transform:uppercase;">${schoolName} (${activeSchoolCode})</h1>
+          <h2 style="font-size:13px;margin:2px 0;text-transform:uppercase;">JADUAL GURU GANTI & SLIP RELIEF HARIAN (SESI ${academicYear})</h2>
+          <div style="font-size:11px;margin-top:4px;">
+            <strong>TARIKH:</strong> ${reliefDate} &nbsp;|&nbsp; <strong>HARI:</strong> ${selectedDay}
+          </div>
+          <div style="font-size:11px;margin-top:3px;">
+            <strong>GURU TIDAK HADIR:</strong> ${absentSummary}
+          </div>
+          <div style="font-size:10px;color:#334155;margin-top:4px;">
+            Waktu Rasmi: W1–W5 (07:10–09:40) • Rehat (09:40–10:10) • W6–W10 (10:10–12:40) • W11 Klinik (12:40–13:10)
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px;">
+          <thead>
+            <tr style="background:#e2e8f0;">
+              <th style="border:1px solid #0f172a;padding:6px;">Bil</th>
+              <th style="border:1px solid #0f172a;padding:6px;">Masa</th>
+              <th style="border:1px solid #0f172a;padding:6px;">Kelas & Waktu</th>
+              <th style="border:1px solid #0f172a;padding:6px;">Subjek</th>
+              <th style="border:1px solid #0f172a;padding:6px;">Guru Tidak Hadir</th>
+              <th style="border:1px solid #0f172a;padding:6px;">Guru Ganti / Tindakan</th>
+              <th style="border:1px solid #0f172a;padding:6px;">Catatan MMI (SKAS 3.1.3.1)</th>
+              <th style="border:1px solid #0f172a;padding:6px;width:75px;">Tandatangan</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              rowsHtml ||
+              `<tr><td colspan="8" style="border:1px solid #0f172a;padding:12px;text-align:center;">Semua guru hadir pada ${reliefDate} (${selectedDay}). Tiada jadual ganti diperlukan.</td></tr>`
+            }
+          </tbody>
+        </table>
+        <div style="display:flex;justify-content:space-between;margin-top:28px;font-size:11px;">
+          <div>
+            <div>Disediakan oleh:</div>
+            <div style="margin-top:36px;font-weight:bold;">_______________________________</div>
+            <div>Penolong Kanan Pentadbiran (GPK 1)</div>
+          </div>
+          <div>
+            <div>Disahkan oleh:</div>
+            <div style="margin-top:36px;font-weight:bold;">_______________________________</div>
+            <div>Guru Besar ${schoolName}</div>
+          </div>
+        </div>
+      </div>
+    `;
+    return buildPrintableHtmlDocument(
+      bodyHtml,
+      `Jadual_Guru_Ganti_${reliefDate}_${selectedDay}`,
+      'portrait',
+      false
+    );
+  };
+
+  const handleArchiveReliefToGoogleDrive = async (alsoPrint: boolean) => {
+    if (alsoPrint) {
+      window.print();
+    }
+    setIsArchivingDrive(true);
+    setDriveArchiveFeedback(null);
+    try {
+      await handleSaveDailyReliefPlan();
+      const htmlContent = buildA4ReliefSlipHtmlForDrive();
+      const programTitle = `Jadual Guru Ganti & Slip Relief (${reliefDate} - ${selectedDay})`;
+
+      const res = await syncDocumentToSchoolDrive({
+        schoolCode: activeSchoolCode,
+        academicYear,
+        docKind: 'JADUAL_GANTI',
+        standardGroup: 'Std 3.1',
+        subStandardCode: '3.1.3.1',
+        subStandardTitle: '3.1.3.1 - Pengurusan Masa Instruksional (MMI)',
+        standards: [
+          {
+            standardGroup: 'Std 3.1',
+            subStandardCode: '3.1.3.1',
+            subStandardTitle: '3.1.3.1 - Pengurusan Masa Instruksional (MMI)',
+          },
+        ],
+        skpmBucket: 'Std 3.1',
+        skpmCodeBadge: '3.1.3.1',
+        skpmStandard: 'Standard 3.1: Pengurusan Kurikulum',
+        pillar: 'KURIKULUM',
+        programTitle,
+        tarikh: reliefDate,
+        htmlContent,
+        pengisianAktiviti: reliefPlan.slots.map(
+          (s) =>
+            `${s.timeLabel} | ${s.classLabel} (${s.slotLabel}) | ${s.subjectCode} | Tidak Hadir: ${s.absentTeacherCodes.join(', ')} -> ${s.assignedSubstituteCode} (${s.reliefModeLabel})`
+        ),
+      });
+
+      // Also record in ai_setiausaha_docs so Radar Evidens SKAS 3.1.3.1 registers this MMI evidence
+      const archiveDocId = scopedDocId(activeSchoolCode, `relief_mmi_${reliefDate}`);
+      await setDoc(
+        doc(db, 'ai_setiausaha_docs', archiveDocId),
+        {
+          id: archiveDocId,
+          schoolCode: activeSchoolCode,
+          academicYear,
+          type: 'OPR',
+          docKind: 'JADUAL_GANTI',
+          pillar: 'KURIKULUM',
+          standardGroup: 'Std 3.1',
+          subStandardCode: '3.1.3.1',
+          subStandardTitle: '3.1.3.1 - Pengurusan Masa Instruksional (MMI)',
+          skpmBucket: 'Std 3.1',
+          skpmCodeBadge: '3.1.3.1',
+          skpmStandard: 'Standard 3.1: Pengurusan Kurikulum',
+          title: programTitle,
+          perkara: programTitle,
+          tarikh: reliefDate,
+          driveSynced: res.success,
+          driveFileUrl: res.fileUrl || '',
+          driveFolderUrl: res.folderUrl || '',
+          driveFolderPath: 'Standard 3.1 - Pengurusan Kurikulum / 3.1.3.1 - Pengurusan Masa Instruksional (MMI)',
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+
+      setDriveArchiveFeedback({
+        ok: res.success,
+        message: res.success
+          ? 'Berjaya diarkibkan ke Google Drive Sekolah (Std 3.1 → 3.1.3.1 Pengurusan Masa Instruksional)!'
+          : res.message || res.error || 'Gagal mengarkibkan ke Google Drive.',
+        fileUrl: res.fileUrl,
+        folderUrl: res.folderUrl,
+      });
+    } catch (err: any) {
+      setDriveArchiveFeedback({
+        ok: false,
+        message: err?.message || 'Gagal mengarkibkan Jadual Guru Ganti ke Google Drive.',
+      });
+    } finally {
+      setIsArchivingDrive(false);
     }
   };
 
@@ -935,23 +1175,40 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
             <div className="flex items-center gap-2 flex-wrap">
               <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
                 <Sparkles className="w-3 h-3" />
-                Auto-Sync Kehadiran Staf
+                SKAS 3.1.3.1 · Penjana Slip Relief Pintar (MMI)
               </span>
               <span className="px-2.5 py-0.5 rounded-md bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[10px] font-bold flex items-center gap-1">
-                <ArrowLeftRight className="w-3 h-3" />
-                Keutamaan 1: Tukar Waktu Kelas Sama & Tarikh Pulang Balik
+                Subjek Teras: BC · BM · BI · SN · AM · MT · RBT · SEJ
               </span>
-              <span className="px-2.5 py-0.5 rounded-md bg-teal-500/15 border border-teal-500/30 text-teal-300 text-[10px] font-bold flex items-center gap-1">
-                <Baby className="w-3 h-3" />
-                Prasekolah: Ganti Sehala (Tiada Pulang Balik)
+              <span className="px-2.5 py-0.5 rounded-md bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 text-[10px] font-bold flex items-center gap-1">
+                <Users className="w-3 h-3" />
+                PJ: Auto Gabung Kelas PJ
+              </span>
+              <span className="px-2.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-bold flex items-center gap-1">
+                <ShieldCheck className="w-3 h-3" />
+                Guru Besar Dikecualikan (&lt; 9 Waktu)
               </span>
             </div>
             <h3 className="text-base font-black text-white tracking-tight mt-1">
-              Jadual Guru Ganti Automatik (Bilik Guru & Relief Harian)
+              Jadual Waktu & Guru Ganti Pintar (SKAS 3.1.3.1 — Pengurusan Masa Instruksional)
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Mengutamakan <strong>Tukar Waktu Kelas Sama (2-Hala)</strong> beserta <strong>Tarikh Pulang Balik</strong> bagi kelas Tahun 1–6, dan <strong>Ganti Sehala (Tidak Perlu Pulang Balik)</strong> bagi Prasekolah & ganti biasa.
+              Tapisan automatik 7/8 subjek teras, <strong>PM/PK/PSV/MZ/Klinik → Tiada Ganti</strong>, <strong>PJ → Gabung Kelas PJ</strong>, pengimbangan beban waktu terendah (keutamaan guru subjek sama) & perlindungan pengecualian <strong>Guru Besar</strong> (hanya masuk jika semua guru lapang mencapai ≥ 9 waktu).
             </p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-slate-300">
+              <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
+                Waktu 1–5: <strong className="text-indigo-300">07:10–09:40</strong>
+              </span>
+              <span className="px-2 py-0.5 rounded bg-amber-950/40 border border-amber-700/40 text-amber-300">
+                Rehat: <strong>09:40–10:10</strong>
+              </span>
+              <span className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
+                Waktu 6–10: <strong className="text-indigo-300">10:10–12:40</strong>
+              </span>
+              <span className="px-2 py-0.5 rounded bg-teal-950/40 border border-teal-700/40 text-teal-300">
+                Waktu 11 (Klinik): <strong>12:40–13:10</strong>
+              </span>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -1001,7 +1258,7 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                   displayMode: 'CODE',
                 })
               }
-              className="px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+              className="px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span>Eksport Excel</span>
@@ -1010,13 +1267,68 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
             <button
               type="button"
               onClick={() => window.print()}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center gap-1.5 border border-slate-700 transition-all cursor-pointer"
+              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center gap-1.5 border border-slate-700 transition-all cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Cetak A4</span>
+              <span>Cetak Slip A4</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isArchivingDrive}
+              onClick={() => handleArchiveReliefToGoogleDrive(true)}
+              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-teal-600 hover:from-indigo-500 hover:to-teal-500 disabled:opacity-50 text-white text-xs font-black flex items-center gap-1.5 shadow-lg shadow-indigo-600/25 transition-all cursor-pointer"
+            >
+              <CloudUpload className="w-3.5 h-3.5" />
+              <span>
+                {isArchivingDrive
+                  ? 'Mengarkib ke Drive...'
+                  : 'Cetak & Arkib Drive (Std 3.1 → 3.1.3.1)'}
+              </span>
             </button>
           </div>
         </div>
+
+        {driveArchiveFeedback && (
+          <div
+            className={`p-3 rounded-xl border text-xs font-bold flex flex-wrap items-center justify-between gap-2 ${
+              driveArchiveFeedback.ok
+                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200'
+                : 'bg-rose-950/60 border-rose-500/40 text-rose-200'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {driveArchiveFeedback.ok ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+              )}
+              <span>{driveArchiveFeedback.message}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {driveArchiveFeedback.fileUrl && (
+                <a
+                  href={driveArchiveFeedback.fileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 hover:bg-emerald-500/30 text-[11px]"
+                >
+                  Buka Fail PDF Drive
+                </a>
+              )}
+              {driveArchiveFeedback.folderUrl && (
+                <a
+                  href={driveArchiveFeedback.folderUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1 rounded-lg bg-teal-500/20 border border-teal-400/40 text-teal-200 hover:bg-teal-500/30 text-[11px]"
+                >
+                  Folder SKAS 3.1.3.1
+                </a>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Auto-Detected Absent Teachers & Manual Toggles */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
@@ -1093,27 +1405,38 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
               })}
             </div>
 
-            {/* Active Absence Details Banner */}
+            {/* Active Absence Details Banner with Reason Selector (Cuti / Kursus / Urusan Rasmi) */}
             {reliefPlan.absentTeachers.length > 0 ? (
-              <div className="bg-rose-950/30 border border-rose-500/30 rounded-xl p-3 space-y-1.5">
-                <div className="text-[11px] font-black uppercase tracking-wider text-rose-300 flex items-center gap-1.5">
-                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
-                  <span>Senarai Guru Tidak Hadir ({reliefPlan.absentTeachers.length} Orang):</span>
+              <div className="bg-rose-950/30 border border-rose-500/30 rounded-xl p-3 space-y-2">
+                <div className="text-[11px] font-black uppercase tracking-wider text-rose-300 flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Senarai Guru Tidak Hadir ({reliefPlan.absentTeachers.length} Orang):</span>
+                  </div>
+                  <span className="text-[10px] font-normal text-rose-200/80">
+                    Pilih Sebab: Cuti / Kursus / Urusan Rasmi
+                  </span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {reliefPlan.absentTeachers.map((at, idx) => (
                     <div
                       key={`${at.teacherCode}_${idx}`}
-                      className="flex items-center justify-between bg-slate-950/70 border border-rose-500/20 rounded-lg px-2.5 py-1.5 text-xs"
+                      className="flex items-center justify-between gap-2 bg-slate-950/70 border border-rose-500/20 rounded-lg px-2.5 py-1.5 text-xs"
                     >
-                      <div>
+                      <div className="min-w-0">
                         <span className="font-black text-rose-300">{at.teacherCode}</span>
-                        <span className="text-slate-300 ml-1.5 font-semibold">{at.teacherName}</span>
-                        <div className="text-[10px] text-slate-400">{at.reasonSummary}</div>
+                        <span className="text-slate-300 ml-1.5 font-semibold truncate">{at.teacherName}</span>
+                        <div className="text-[10px] text-slate-400 truncate">{at.reasonSummary}</div>
                       </div>
-                      <span className="px-2 py-0.5 rounded bg-rose-500/20 border border-rose-500/30 text-rose-300 text-[9px] font-bold">
-                        {at.sources.join(' + ')}
-                      </span>
+                      <select
+                        value={manualAbsentReasons[at.teacherCode] || at.reasonSummary || 'Cuti'}
+                        onChange={(e) => handleChangeAbsentReason(at.teacherCode, e.target.value)}
+                        className="bg-slate-900 border border-rose-500/40 rounded-md px-2 py-1 text-[10px] font-bold text-rose-200 focus:outline-none shrink-0"
+                      >
+                        <option value="Cuti">Cuti (CRK / Cuti Sakit)</option>
+                        <option value="Kursus">Kursus / Bengkel</option>
+                        <option value="Urusan Rasmi">Urusan Rasmi Luar</option>
+                      </select>
                     </div>
                   ))}
                 </div>
@@ -1122,7 +1445,7 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
               <div className="bg-emerald-950/20 border border-emerald-500/20 rounded-xl p-3 flex items-center gap-2.5 text-xs text-emerald-300">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span>
-                  Semua guru hadir pada <strong>{reliefDate}</strong> ({selectedDay}). Anda juga boleh klik mana-mana kod guru di atas untuk simulasi / jadual ganti manual.
+                  Semua guru hadir pada <strong>{reliefDate}</strong> ({selectedDay}). Klik mana-mana kod guru di atas untuk memilih guru tidak hadir (Cuti / Kursus / Urusan Rasmi) dan menjana slip relief automatik.
                 </span>
               </div>
             )}
@@ -1134,12 +1457,15 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
               <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">
                 Bebanan Waktu Hari {selectedDay} (Asal → Selepas Ganti)
               </span>
-              <span className="text-[10px] font-bold text-indigo-400">Had Maksimum: ≤ 8 Waktu</span>
+              <span className="text-[10px] font-bold text-amber-300">
+                GB Dikecualikan (&lt; 9w) · Relief Benar 5w Berturut
+              </span>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto pr-1">
               {uniqueTeacherMapping.list.map((t, idx) => {
                 const isAbsent = effectiveAbsentCodes.includes(t.code);
+                const isGB = isPrincipalTeacherEntry(t);
                 const base = reliefPlan.teacherBaseDayLoads[t.code] || 0;
                 const proj = reliefPlan.teacherProjectedDayLoads[t.code] || 0;
                 const delta = Math.round((proj - base) * 10) / 10;
@@ -1147,15 +1473,29 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                 return (
                   <div
                     key={`${t.id || t.code}_load_${idx}`}
+                    title={
+                      isGB
+                        ? 'Guru Besar: Dikecualikan daripada relief melainkan semua guru lapang mencapai ≥ 9 waktu'
+                        : `${t.name}: Asal ${base}w → Selepas Ganti ${proj}w`
+                    }
                     className={`px-2.5 py-1.5 rounded-lg border text-xs flex items-center justify-between ${
                       isAbsent
                         ? 'bg-rose-950/30 border-rose-500/30 text-rose-400 line-through opacity-60'
+                        : isGB
+                        ? 'bg-amber-950/30 border-amber-500/40 text-amber-200'
                         : delta > 0
                         ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
                         : 'bg-slate-900 border-slate-800 text-slate-300'
                     }`}
                   >
-                    <span className="font-black">{t.code}</span>
+                    <span className="font-black flex items-center gap-1">
+                      <span>{t.code}</span>
+                      {isGB && (
+                        <span className="text-[8px] px-1 py-0.2 rounded bg-amber-500/25 text-amber-300 font-black">
+                          GB
+                        </span>
+                      )}
+                    </span>
                     <span className="font-mono text-[11px]">
                       {base}
                       {delta > 0 ? (
@@ -1172,41 +1512,55 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
             {reliefPlan.slots.length > 0 && (
               <div className="pt-2 border-t border-slate-800 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-2 py-0.5 rounded bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 font-bold">
-                      🔄 Tukar Waktu: {reliefPlan.summary.sameClassSwapCount}
-                    </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold">
-                      ✅ Ganti Biasa: {reliefPlan.summary.standardOneWayCount}
+                      ✅ Ganti Teras: {reliefPlan.summary.standardOneWayCount + reliefPlan.summary.sameClassSwapCount}
                     </span>
-                    {reliefPlan.summary.prasekolahReliefCount > 0 && (
-                      <span className="px-2 py-0.5 rounded bg-teal-500/20 border border-teal-500/40 text-teal-300 font-bold">
-                        🧸 Prasekolah: {reliefPlan.summary.prasekolahReliefCount}
+                    <span className="px-2 py-0.5 rounded bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 font-bold">
+                      ⚽ Gabung PJ: {reliefPlan.summary.gabungKelasPjCount}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-bold">
+                      🚫 Tiada Ganti: {reliefPlan.summary.tiadaGantiCount}
+                    </span>
+                    {reliefPlan.summary.principalFallbackCount > 0 && (
+                      <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold">
+                        👑 Ganti GB (≥9w): {reliefPlan.summary.principalFallbackCount}
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <button
                     type="button"
                     onClick={() => setShowWhatsAppModal(true)}
                     className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
                   >
                     <MessageSquare className="w-3.5 h-3.5" />
-                    <span>WhatsApp Slip & Pulang Balik</span>
+                    <span>WhatsApp Slip Relief</span>
                   </button>
 
                   {isAdmin && (
-                    <button
-                      type="button"
-                      onClick={handleSaveDailyReliefPlan}
-                      disabled={isSavingPlan}
-                      className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow"
-                    >
-                      <Save className="w-3.5 h-3.5" />
-                      <span>{isSavingPlan ? 'Menyimpan...' : 'Simpan Pelan Relief'}</span>
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleSaveDailyReliefPlan}
+                        disabled={isSavingPlan}
+                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        <span>{isSavingPlan ? 'Menyimpan...' : 'Simpan Pelan'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleArchiveReliefToGoogleDrive(false)}
+                        disabled={isArchivingDrive}
+                        className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow"
+                      >
+                        <CloudUpload className="w-3.5 h-3.5" />
+                        <span>{isArchivingDrive ? 'Arkib...' : 'Arkib Drive 3.1.3.1'}</span>
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -1256,17 +1610,23 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                     );
                     const isSwap = slot.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA';
                     const isPra = slot.reliefMode === 'GANTI_PRASEKOLAH';
+                    const isTiadaGanti = slot.reliefMode === 'TIADA_GANTI';
+                    const isGabungPj = slot.reliefMode === 'GABUNG_KELAS_PJ';
 
                     return (
                       <tr
                         key={slot.slotKey}
                         className={
-                          isPra
+                          isTiadaGanti
+                            ? 'bg-slate-950/60 opacity-85 hover:bg-slate-900/60'
+                            : isGabungPj
+                            ? 'bg-cyan-950/25 hover:bg-cyan-950/35'
+                            : isPra
                             ? 'bg-teal-950/20 hover:bg-teal-950/30'
                             : isSwap
                             ? 'bg-indigo-950/20 hover:bg-indigo-950/30'
-                            : slot.isPKAR || slot.isYear1ShiftedMorning || slot.isMembaca
-                            ? 'bg-amber-950/15 hover:bg-amber-950/25'
+                            : slot.isPrincipalFallbackUsed
+                            ? 'bg-amber-950/25 hover:bg-amber-950/35'
                             : 'bg-slate-900/50 hover:bg-slate-800/40'
                         }
                       >
@@ -1292,11 +1652,6 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                             <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-bold text-[10px]">
                               {slot.slotLabel}
                             </span>
-                            {slot.isPKAR && (
-                              <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-black text-[9px]">
-                                PKAR 15m
-                              </span>
-                            )}
                           </div>
                           {isPra && slot.ppmName && (
                             <div className="text-[10px] text-teal-400/90 mt-0.5">
@@ -1327,7 +1682,29 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
 
                         {/* Mod Ganti & Subjek Diajar Hari Ini */}
                         <td className="py-2.5 px-3">
-                          {isSwap ? (
+                          {isTiadaGanti ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 border border-slate-600 text-slate-300 text-[10px] font-black uppercase tracking-wide">
+                                <Ban className="w-3 h-3 text-slate-400" />
+                                TIADA GANTI
+                              </span>
+                              <div className="text-[10px] text-slate-400">
+                                Tapisan Subjek ({slot.subjectCode}) · PM/PK/PSV/MZ/Klinik tiada ganti
+                              </div>
+                            </div>
+                          ) : isGabungPj ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 text-[10px] font-black uppercase tracking-wide">
+                                <Users className="w-3 h-3 text-cyan-300" />
+                                GABUNG KELAS PJ
+                              </span>
+                              <div className="text-[11px] text-cyan-200 font-semibold">
+                                {slot.mergedWithClassLabel
+                                  ? `Gabung dengan ${slot.mergedWithClassLabel}${slot.mergedWithTeacherCode ? ` (Guru PJ: ${slot.mergedWithTeacherCode})` : ''}`
+                                  : 'Gabung Kelas PJ (Tidak menggunakan guru lapang Bilik Guru)'}
+                              </div>
+                            </div>
+                          ) : isSwap ? (
                             <div className="space-y-1">
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-[10px] font-black uppercase tracking-wide">
                                 <ArrowLeftRight className="w-3 h-3 text-indigo-300" />
@@ -1348,19 +1725,29 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                             <div className="space-y-1">
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-500/20 border border-teal-400/40 text-teal-200 text-[10px] font-black uppercase tracking-wide">
                                 <Baby className="w-3 h-3 text-teal-300" />
-                                Ganti Prasekolah (Tidak Perlu Pulang Balik)
+                                Ganti Prasekolah
                               </span>
                               <div className="text-[10px] text-slate-400">
                                 Ganti Sehala · Kawal Selia Prasekolah bersama PPM
                               </div>
                             </div>
+                          ) : slot.isPrincipalFallbackUsed ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-200 text-[10px] font-black uppercase tracking-wide">
+                                <ShieldCheck className="w-3 h-3 text-amber-300" />
+                                Ganti Guru Besar (Semua Guru ≥ 9 Waktu)
+                              </span>
+                              <div className="text-[10px] text-amber-300/90">
+                                Semua guru lapang telah mencapai ≥ 9 waktu hari ini
+                              </div>
+                            </div>
                           ) : (
                             <div className="space-y-1">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-bold">
-                                Ganti Biasa (Tidak Perlu Pulang Balik)
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold">
+                                Ganti Subjek Teras ({slot.subjectCode})
                               </span>
                               <div className="text-[10px] text-slate-400">
-                                Ganti Sehala · Tiada guru kelas sama yang lapang
+                                Diagih ikut jumlah waktu harian paling sedikit
                               </div>
                             </div>
                           )}
@@ -1390,66 +1777,81 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                                 Waktu Pulang:{' '}
                                 <strong>
                                   {slot.repaymentSlotLabel} ({slot.repaymentTimeLabel})
-                                </strong>{' '}
-                                →{' '}
-                                <strong className="text-white">
-                                  {slot.absentTeacherCodes[0]}
-                                </strong>{' '}
-                                masuk ajar{' '}
-                                <strong className="text-amber-300">
-                                  {slot.repaymentSubjectCode || slot.subjectCode}
                                 </strong>
                               </div>
                             </div>
+                          ) : isTiadaGanti ? (
+                            <span className="text-[11px] font-bold text-slate-500">
+                              Tiada Ganti
+                            </span>
+                          ) : isGabungPj ? (
+                            <span className="text-[11px] font-bold text-cyan-300">
+                              Gabung Kelas PJ
+                            </span>
                           ) : (
                             <span className="text-[11px] font-semibold text-slate-500 italic">
-                              Tidak Perlu Pulang Balik
+                              Ganti Sehala
                             </span>
                           )}
                         </td>
 
                         {/* Substitute Teacher Selector */}
                         <td className="py-2.5 px-3">
-                          {slot.recommendedCandidates.length > 0 ? (
-                            <div className="space-y-1">
-                              <select
-                                value={slot.assignedSubstituteCode}
-                                onChange={(e) =>
-                                  handleSelectSubstitute(slot.slotKey, e.target.value)
-                                }
-                                className="bg-slate-950 border border-emerald-500/40 rounded-lg px-2.5 py-1.5 text-xs font-bold text-emerald-300 focus:outline-none focus:border-emerald-400 w-full max-w-xs"
-                              >
-                                {slot.recommendedCandidates.map((cand, idx) => {
-                                  const modeTag =
-                                    cand.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA' &&
-                                    cand.repaymentInfo
-                                      ? `🔄 TUKAR WAKTU (Ajar ${cand.repaymentInfo.substituteOriginalSubjectCode} · Pulang ${cand.repaymentInfo.repaymentDate})`
-                                      : slot.isPrasekolah
-                                      ? '🧸 Ganti Prasekolah (Tiada Pulang Balik)'
-                                      : 'Ganti Biasa (Tiada Pulang Balik)';
-                                  return (
-                                    <option key={`${cand.code}_${idx}`} value={cand.code}>
-                                      {idx === 0 ? '★ ' : ''}
-                                      {cand.code} — {cand.name} [{modeTag}] (Asal: {cand.baseDayLoad}w →{' '}
-                                      {cand.projectedDayLoad}w)
-                                    </option>
-                                  );
-                                })}
-                              </select>
-                              {chosenCand && (
-                                <div className="text-[10px] text-slate-400">
-                                  Beban Hari Ini: <strong>{chosenCand.baseDayLoad}w</strong> →{' '}
+                          <div className="space-y-1">
+                            <select
+                              value={slot.assignedSubstituteCode}
+                              onChange={(e) =>
+                                handleSelectSubstitute(slot.slotKey, e.target.value)
+                              }
+                              className={`bg-slate-950 border rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none w-full max-w-xs ${
+                                isTiadaGanti
+                                  ? 'border-slate-700 text-slate-300'
+                                  : isGabungPj
+                                  ? 'border-cyan-500/50 text-cyan-300'
+                                  : 'border-emerald-500/40 text-emerald-300'
+                              }`}
+                            >
+                              <option value="TIADA_GANTI">
+                                🚫 TIADA GANTI (PM / PK / PSV / MZ / Klinik)
+                              </option>
+                              {(slot.subjectCode.toUpperCase() === 'PJ' ||
+                                slot.subjectCode.toUpperCase() === 'PJK' ||
+                                isGabungPj) && (
+                                <option value="GABUNG_KELAS_PJ">
+                                  ⚽ GABUNG KELAS PJ{slot.mergedWithClassLabel ? ` (Bersama ${slot.mergedWithClassLabel})` : ''}
+                                </option>
+                              )}
+                              {slot.recommendedCandidates.map((cand, idx) => {
+                                const subjTag = cand.isSameSubjectTeacher ? ' [Subjek Sama]' : '';
+                                const gbTag = cand.isPrincipal
+                                  ? ' [Guru Besar - Pengecualian <9w]'
+                                  : '';
+                                return (
+                                  <option key={`${cand.code}_${idx}`} value={cand.code}>
+                                    {idx === 0 && !isTiadaGanti && !isGabungPj ? '★ ' : ''}
+                                    {cand.code} — {cand.name}
+                                    {subjTag}
+                                    {gbTag} (Hari Ini: {cand.baseDayLoad}w → {cand.projectedDayLoad}w)
+                                  </option>
+                                );
+                              })}
+                            </select>
+                            {chosenCand && !isTiadaGanti && !isGabungPj && (
+                              <div className="text-[10px] text-slate-400 flex items-center gap-1.5 flex-wrap">
+                                <span>
+                                  Jumlah Waktu Hari Ini: <strong>{chosenCand.baseDayLoad}w</strong> →{' '}
                                   <strong className="text-emerald-400">
                                     {chosenCand.projectedDayLoad}w
                                   </strong>
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-rose-400 font-bold text-xs">
-                              Tiada guru lapang pada {slot.timeLabel}
-                            </span>
-                          )}
+                                </span>
+                                {chosenCand.isSameSubjectTeacher && (
+                                  <span className="px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-bold text-[9px]">
+                                    Guru Subjek {slot.subjectCode}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1567,8 +1969,13 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                     </td>
                     <td className="border border-black p-1 text-center font-bold">
                       <div>
-                        {s.assignedSubstituteCode} (
-                        {teacherNameMap.get(s.assignedSubstituteCode) || s.assignedSubstituteCode})
+                        {s.reliefMode === 'TIADA_GANTI'
+                          ? 'TIADA GANTI'
+                          : s.reliefMode === 'GABUNG_KELAS_PJ'
+                          ? `GABUNG KELAS PJ${s.mergedWithClassLabel ? ` (${s.mergedWithClassLabel})` : ''}`
+                          : `${s.assignedSubstituteCode} (${
+                              teacherNameMap.get(s.assignedSubstituteCode) || s.assignedSubstituteCode
+                            })`}
                       </div>
                       <div className="text-[9px] font-normal">
                         {s.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA'
@@ -1578,8 +1985,12 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                     </td>
                     <td className="border border-black p-1 text-center">
                       {s.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA' && s.repaymentDate
-                        ? `${s.repaymentDate} (${s.repaymentDay}) · ${s.repaymentSlotLabel} (${s.repaymentTimeLabel}) — ${s.absentTeacherCodes[0]} ajar ${s.repaymentSubjectCode || s.subjectCode}`
-                        : 'Tidak Perlu Pulang Balik'}
+                        ? `${s.repaymentDate} (${s.repaymentDay}) · ${s.repaymentSlotLabel} (${s.repaymentTimeLabel})`
+                        : s.reliefMode === 'TIADA_GANTI'
+                        ? 'Tiada Ganti (PM/PK/PSV/MZ/Klinik)'
+                        : s.reliefMode === 'GABUNG_KELAS_PJ'
+                        ? `Gabung Kelas PJ${s.mergedWithClassLabel ? ` Bersama ${s.mergedWithClassLabel}` : ''}`
+                        : 'Ganti Sehala'}
                     </td>
                     <td className="border border-black p-1"></td>
                   </tr>
@@ -1741,12 +2152,20 @@ export const BilikGuruReliefView: React.FC<BilikGuruReliefViewProps> = ({
                             {hasAbsentTeacher && reliefItem && (
                               <div
                                 className={`mt-1 px-1.5 py-0.5 rounded text-white font-black text-[9px] shadow print:bg-white print:text-black print:border print:border-black ${
-                                  reliefItem.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA'
+                                  reliefItem.reliefMode === 'TIADA_GANTI'
+                                    ? 'bg-slate-700 text-slate-200'
+                                    : reliefItem.reliefMode === 'GABUNG_KELAS_PJ'
+                                    ? 'bg-cyan-600'
+                                    : reliefItem.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA'
                                     ? 'bg-indigo-600'
                                     : 'bg-emerald-600'
                                 }`}
                               >
-                                {reliefItem.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA'
+                                {reliefItem.reliefMode === 'TIADA_GANTI'
+                                  ? 'TIADA GANTI'
+                                  : reliefItem.reliefMode === 'GABUNG_KELAS_PJ'
+                                  ? `GABUNG PJ${reliefItem.mergedWithClassLabel ? ` (${reliefItem.mergedWithClassLabel.replace('Tahun ', 'T')})` : ''}`
+                                  : reliefItem.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA'
                                   ? `TUKAR: ${reliefItem.assignedSubstituteCode || '?'} (${reliefItem.substituteTeachingSubjectCode})`
                                   : `GANTI: ${reliefItem.assignedSubstituteCode || 'TIADA'}`}
                               </div>

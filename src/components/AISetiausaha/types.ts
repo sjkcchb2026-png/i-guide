@@ -1,4 +1,4 @@
-export type SetiausahaDocKind = 'OPR' | 'MEMO' | 'MINIT' | 'SURAT_LANTIKAN';
+export type SetiausahaDocKind = 'OPR' | 'MEMO' | 'MINIT' | 'SURAT_LANTIKAN' | 'SIJIL';
 
 export interface InvitedCommitteeTeacher {
   teacherId: string;
@@ -46,7 +46,13 @@ export interface AISetiausahaDocument {
   standardGroup?: string;
   subStandardCode?: string;
   subStandardTitle?: string;
+  standards?: Array<{
+    standardGroup: string;
+    subStandardCode: string;
+    subStandardTitle: string;
+  }>;
   driveTargetFolderPath?: string[];
+  linkedPaths?: string[];
   programTitle: string;
   rujKami?: string;
   tarikh: string;

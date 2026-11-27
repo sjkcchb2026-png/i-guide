@@ -297,6 +297,39 @@ export default function KokoSmartOPRManager({
         act.reflection ? `Refleksi: ${act.reflection}` : '',
       ].filter(Boolean);
 
+      const kokoStandardsList: Array<{
+        standardGroup: string;
+        subStandardCode: string;
+        subStandardTitle: string;
+      }> = Array.isArray(act.standards) && act.standards.length > 0
+        ? act.standards.slice(0, 3)
+        : (() => {
+            const list = [
+              {
+                standardGroup: resolvedSkas.standardGroup,
+                subStandardCode: resolvedSkas.subStandardCode,
+                subStandardTitle: resolvedSkas.subStandardTitle,
+              },
+            ];
+            if ((act.skpmStandard5Code || act.jenis === 'pertandingan') && resolvedSkas.subStandardCode !== '5.2') {
+              const std5 = resolveSkasSelection('Std 5', '5.2', 'KOKURIKULUM');
+              list.push({
+                standardGroup: std5.standardGroup,
+                subStandardCode: std5.subStandardCode,
+                subStandardTitle: std5.subStandardTitle,
+              });
+            }
+            if (act.skpmAspek271Linked && resolvedSkas.subStandardCode !== '2.7.1') {
+              const std271 = resolveSkasSelection('Std 2', '2.7.1', 'PENTADBIRAN');
+              list.push({
+                standardGroup: std271.standardGroup,
+                subStandardCode: std271.subStandardCode,
+                subStandardTitle: std271.subStandardTitle,
+              });
+            }
+            return list.slice(0, 3);
+          })();
+
       const fallbackHtml = buildFallbackDriveHtml({
         schoolCode: activeSchoolCode,
         academicYear: act.academicYear || '2026',
@@ -304,12 +337,16 @@ export default function KokoSmartOPRManager({
         standardGroup: resolvedSkas.standardGroup,
         subStandardCode: resolvedSkas.subStandardCode,
         subStandardTitle: resolvedSkas.subStandardTitle,
+        standards: kokoStandardsList,
         driveTargetFolderPath:
           act.driveTargetFolderPath && act.driveTargetFolderPath.length > 0
             ? act.driveTargetFolderPath
             : resolvedSkas.driveTargetFolderPath,
         skpmBucket: resolvedSkas.standardGroup,
-        skpmCodeBadge: `${resolvedSkas.subStandardCode} — ${resolvedSkas.subStandardTitle}`,
+        skpmCodeBadge:
+          kokoStandardsList.length > 1
+            ? kokoStandardsList.map((s) => s.subStandardCode).join(' + ')
+            : `${resolvedSkas.subStandardCode} — ${resolvedSkas.subStandardTitle}`,
         skpmStandard: resolvedSkas.standardFullTitle,
         pillar: 'KOKURIKULUM',
         programTitle: act.programName,
@@ -326,12 +363,16 @@ export default function KokoSmartOPRManager({
         standardGroup: resolvedSkas.standardGroup,
         subStandardCode: resolvedSkas.subStandardCode,
         subStandardTitle: resolvedSkas.subStandardTitle,
+        standards: kokoStandardsList,
         driveTargetFolderPath:
           act.driveTargetFolderPath && act.driveTargetFolderPath.length > 0
             ? act.driveTargetFolderPath
             : resolvedSkas.driveTargetFolderPath,
         skpmBucket: resolvedSkas.standardGroup,
-        skpmCodeBadge: `${resolvedSkas.subStandardCode} — ${resolvedSkas.subStandardTitle}`,
+        skpmCodeBadge:
+          kokoStandardsList.length > 1
+            ? kokoStandardsList.map((s) => s.subStandardCode).join(' + ')
+            : `${resolvedSkas.subStandardCode} — ${resolvedSkas.subStandardTitle}`,
         skpmStandard: resolvedSkas.standardFullTitle,
         skpmAspek: `SUB-STANDARD ${resolvedSkas.subStandardCode}: ${resolvedSkas.subStandardTitle.toUpperCase()}`,
         skpmStandardKualiti: resolvedSkas.kualitiStatement || skpm.kualitiStatement,
@@ -393,10 +434,16 @@ export default function KokoSmartOPRManager({
           ).join(' / ');
         const savedFileUrl = res.fileUrl || res.folderUrl || '';
         const savedFolderUrl = res.folderUrl || res.fileUrl || '';
+        const savedLinkedPaths =
+          Array.isArray(res.linkedPaths) && res.linkedPaths.length > 0
+            ? res.linkedPaths
+            : [savedFolderPath];
         const drivePatch = deepSanitizeFirestore({
           standardGroup: resolvedSkas.standardGroup,
           subStandardCode: resolvedSkas.subStandardCode,
           subStandardTitle: resolvedSkas.subStandardTitle,
+          standards: res.standards || kokoStandardsList,
+          linkedPaths: savedLinkedPaths,
           folderUrl: savedFolderUrl,
           fileUrl: savedFileUrl,
           folderPath: savedFolderPath,
@@ -1173,6 +1220,34 @@ export default function KokoSmartOPRManager({
       impact.trim() ||
       'Meningkatkan kemahiran kepimpinan, keyakinan diri, dan nilai kerjasama murid.';
 
+    const savedKokoStandards: Array<{
+      standardGroup: string;
+      subStandardCode: string;
+      subStandardTitle: string;
+    }> = [
+      {
+        standardGroup: skpm.standardGroup,
+        subStandardCode: skpm.subStandardCode,
+        subStandardTitle: skpm.subStandardTitle,
+      },
+    ];
+    if ((skpm.standard5Code || jenis === 'pertandingan') && skpm.subStandardCode !== '5.2') {
+      const std5 = resolveSkasSelection('Std 5', '5.2', 'KOKURIKULUM');
+      savedKokoStandards.push({
+        standardGroup: std5.standardGroup,
+        subStandardCode: std5.subStandardCode,
+        subStandardTitle: std5.subStandardTitle,
+      });
+    }
+    if (linked271 && skpm.subStandardCode !== '2.7.1') {
+      const std271 = resolveSkasSelection('Std 2', '2.7.1', 'PENTADBIRAN');
+      savedKokoStandards.push({
+        standardGroup: std271.standardGroup,
+        subStandardCode: std271.subStandardCode,
+        subStandardTitle: std271.subStandardTitle,
+      });
+    }
+
     const payload = deepSanitizeFirestore({
       schoolCode: activeSchoolCode,
       status: targetStatus,
@@ -1193,6 +1268,7 @@ export default function KokoSmartOPRManager({
       standardGroup: skpm.standardGroup,
       subStandardCode: skpm.subStandardCode,
       subStandardTitle: skpm.subStandardTitle,
+      standards: savedKokoStandards.slice(0, 3),
       driveTargetFolderPath: skpm.driveTargetFolderPath,
       skpmStandardCode: skpm.subStandardCode,
       skpmStandardTitle: skpm.standardTitle,
@@ -1348,6 +1424,7 @@ export default function KokoSmartOPRManager({
           standardGroup: skpm.standardGroup,
           subStandardCode: skpm.subStandardCode,
           subStandardTitle: skpm.subStandardTitle,
+          standards: savedKokoStandards.slice(0, 3),
           driveTargetFolderPath: skpm.driveTargetFolderPath,
           skpmBucket: skpm.standardGroup,
           secondarySkpmBucket:

@@ -22,6 +22,11 @@ import {
   getDesignatedPemulihanTeacherCode,
   resolveCellPemulihanTeacher,
 } from '../../utils/lampiranData';
+import {
+  downloadStandardBellExcelTemplate,
+  importTimetableFromExcelFile,
+  validateScheduleConsecutiveAndFatigue,
+} from '../../utils/timetableExcelAndValidator';
 import { 
   Sparkles, 
   AlertTriangle, 
@@ -36,12 +41,17 @@ import {
   Inbox,
   ArrowDownToLine,
   GripVertical,
-  Users
+  Users,
+  FileSpreadsheet,
+  Upload,
+  Download,
+  Flame
 } from 'lucide-react';
 
 interface JKeyinGridProps {
   schedule: ScheduleGrid;
   onUpdateSchedule: (newSchedule: ScheduleGrid) => void;
+  onUpdateClassTeachers?: (nextTeachers: Record<number, string>) => void;
   onAutoSchedule: () => void;
   clashes: TimetableClash[];
   matrixData: SubjectAllocationRow[];
@@ -49,12 +59,15 @@ interface JKeyinGridProps {
   displayMode: 'NUMBER' | 'CODE';
   classTeachers: Record<number, string>;
   academicYear: string;
+  schoolName?: string;
+  schoolCode?: string;
   onYearChange?: (year: string) => void;
 }
 
 export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
   schedule,
   onUpdateSchedule,
+  onUpdateClassTeachers,
   onAutoSchedule,
   clashes,
   matrixData,
@@ -62,11 +75,19 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
   displayMode,
   classTeachers,
   academicYear,
+  schoolName = 'SJK (C) CHUNG HUA BALINGIAN',
+  schoolCode = 'YCC3404',
   onYearChange,
 }) => {
   const [selectedGrade, setSelectedGrade] = useState<number | 'ALL'>('ALL');
   const [activeDayFilter, setActiveDayFilter] = useState<DayOfWeek | 'ALL'>('ALL');
   const [isScheduling, setIsScheduling] = useState(false);
+  const [isImportingExcel, setIsImportingExcel] = useState(false);
+  const [excelImportMessage, setExcelImportMessage] = useState<{
+    type: 'SUCCESS' | 'ERROR';
+    text: string;
+  } | null>(null);
+  const excelInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const [editingCell, setEditingCell] = useState<{
     grade: number;
@@ -113,6 +134,55 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     () => auditScheduleWorkload(schedule, teacherCodesList, academicYear, guruPemulihanCode),
     [schedule, teacherCodesList, academicYear, guruPemulihanCode]
   );
+
+  const consecutiveFatigueAudit = useMemo(
+    () => validateScheduleConsecutiveAndFatigue(schedule, academicYear, teacherMapping.list),
+    [schedule, academicYear, teacherMapping.list]
+  );
+
+  const handleExcelFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsImportingExcel(true);
+    setExcelImportMessage(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      const res = await importTimetableFromExcelFile({
+        fileBuffer: buffer,
+        academicYear,
+        currentSchedule: schedule,
+        currentClassTeachers: classTeachers,
+        matrixData,
+        teacherList: teacherMapping.list,
+      });
+      autoPairPKARInGrid(res.schedule, academicYear);
+      if (onUpdateClassTeachers) {
+        onUpdateClassTeachers(res.classTeachers);
+      }
+      onUpdateSchedule(res.schedule);
+      if (res.importedCellsCount > 0) {
+        setExcelImportMessage({
+          type: 'SUCCESS',
+          text: `Berjaya mengimport ${res.importedCellsCount} petak jadual waktu daripada "${file.name}" (${res.detectedDays.join(', ')}).`,
+        });
+      } else {
+        setExcelImportMessage({
+          type: 'ERROR',
+          text: res.warnings[0] || 'Tiada data jadual dikesan dalam fail Excel tersebut.',
+        });
+      }
+    } catch (err: any) {
+      setExcelImportMessage({
+        type: 'ERROR',
+        text: `Gagal membaca fail Excel: ${err?.message || 'Format fail tidak sah'}`,
+      });
+    } finally {
+      setIsImportingExcel(false);
+      if (excelInputRef.current) {
+        excelInputRef.current.value = '';
+      }
+    }
+  };
 
   const unscheduledCards = useMemo(
     () => computeUnscheduledLessons(matrixData, schedule, academicYear),
@@ -734,47 +804,47 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
   const getMasterSlotLabel = (slotKey: string, day?: DayOfWeek) => {
     switch (slotKey) {
       case 'MEMBACA':
-        return { title: dynamicMembacaTitle, sub: '07:15 - 07:30 (T1)' };
+        return { title: dynamicMembacaTitle, sub: '07:10 - 07:25 (T1)' };
       case 'W1':
-        return { title: 'W1', sub: '07:15 - 07:45\n(T1: 07:30 - 08:00)' };
+        return { title: 'W1', sub: '07:10 - 07:40' };
       case 'W2':
-        return { title: 'W2', sub: '07:45 - 08:15\n(T1: 08:00 - 08:30)' };
+        return { title: 'W2', sub: '07:40 - 08:10' };
       case 'W3':
-        return { title: 'W3', sub: '08:15 - 08:45\n(T1: 08:30 - 09:00)' };
+        return { title: 'W3', sub: '08:10 - 08:40' };
       case 'W4':
-        return { title: 'W4', sub: '08:45 - 09:15\n(T1: 09:00 - 09:30)' };
+        return { title: 'W4', sub: '08:40 - 09:10' };
       case 'W5':
-        return { title: 'W5', sub: '09:15 - 09:45 (T2–6)' };
+        return { title: 'W5', sub: '09:10 - 09:40' };
       case 'PKAR':
-        return { title: 'PKAR', sub: '09:30 - 09:45 (T1)' };
+        return { title: 'PKAR', sub: '09:25 - 09:40 (T1)' };
       case 'REHAT':
-        return { title: 'REHAT', sub: '09:45 - 10:15' };
+        return { title: 'REHAT', sub: '09:40 - 10:10' };
       case 'W6':
-        return { title: 'W6 (T1:W5)', sub: '10:15 - 10:45' };
+        return { title: 'W6 (T1:W5)', sub: '10:10 - 10:40' };
       case 'W7':
-        return { title: 'W7 (T1:W6)', sub: '10:45 - 11:15' };
+        return { title: 'W7 (T1:W6)', sub: '10:40 - 11:10' };
       case 'W8':
         return {
           title: 'W8 (T1:W7)',
-          sub: day === 'JUMAAT' ? '11:15 - 11:45\nT2–3: TASMIK' : '11:15 - 11:45',
+          sub: day === 'JUMAAT' ? '11:10 - 11:40\nT2–3: TASMIK' : '11:10 - 11:40',
         };
       case 'W9':
         return {
           title: 'W9 (T1:W8)',
-          sub: day === 'JUMAAT' ? '11:45 - 12:15\nT1/T4–6: TASMIK' : '11:45 - 12:15',
+          sub: day === 'JUMAAT' ? '11:40 - 12:10\nT1/T4–6: TASMIK' : '11:40 - 12:10',
         };
       case 'W10':
-        return { title: 'W10 (T1:W9)', sub: '12:15 - 12:45' };
+        return { title: 'W10 (T1:W9)', sub: '12:10 - 12:40' };
       case 'W11':
         return {
-          title: 'W11 (T1:W10)',
+          title: 'W11 Klinik',
           sub:
             day === 'RABU' || day === 'KHAMIS'
-              ? '12:45 - 13:15\nTASMIK'
-              : '12:45 - 13:15',
+              ? '12:40 - 13:10\nKlinik / TASMIK'
+              : '12:40 - 13:10\nKlinik',
         };
       case 'TASMIK':
-        return { title: 'TASMIK', sub: '13:15 - 13:45' };
+        return { title: 'TASMIK', sub: '13:10 - 13:40' };
       default:
         return { title: slotKey, sub: '' };
     }
@@ -787,7 +857,7 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
     if (slotKey === 'W1' || slotKey === 'W2' || slotKey === 'W3' || slotKey === 'W4') return slotKey;
     if (slotKey === 'W5') return grade === 1 ? null : 'W5';
 
-    // Post-recess columns (10:15 onwards)
+    // Post-recess columns (10:10 onwards)
     if (slotKey === 'W6') return grade === 1 ? 'W5' : 'W6';
     if (slotKey === 'W7') return grade === 1 ? 'W6' : 'W7';
     if (slotKey === 'W8') {
@@ -822,35 +892,77 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
       {/* Control Banner */}
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-500/20 text-blue-300 border border-blue-500/30">
               {selectedGrade === 'ALL' ? 'Jadual Induk T1–T6' : `Jadual Kelas Tahun ${selectedGrade}`}
             </span>
-            <span className="text-xs text-slate-400">JKEYIN Grid Penjadualan Sekolah</span>
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              SKAS 3.1.3.1 · Waktu 1–5 (07:10–09:40) · Rehat (09:40–10:10) · Waktu 6–10 (10:10–12:40) · W11 Klinik (12:40–13:10)
+            </span>
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-white mt-1 flex items-center gap-2">
             {selectedGrade === 'ALL'
-              ? 'Jadual Induk Keseluruhan (Tahun 1 – Tahun 6)'
+              ? 'Jadual Waktu Induk & Pengesanan Konflik (Tahun 1 – Tahun 6)'
               : `Penyuntingan Jadual Kelas (Tahun ${selectedGrade})`}
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
             {selectedGrade === 'ALL' ? (
               <>
-                Paparan matriks penjadualan serentak untuk semua kelas mengikut hari ·{' '}
+                Menyokong Import Excel Jadual Sekolah (.xlsx), pelarasan manual seret &amp; lepas, serta pengesah blok SN/AM, BC &amp; Amaran 5 Waktu Berturut-turut ·{' '}
                 <strong className="text-emerald-400">Sesi Akademik {academicYear}</strong>
               </>
             ) : (
               <>
                 Guru Kelas: <strong className="text-white">{classTeachers[selectedGrade] || 'Belum Ditetapkan'}</strong> ·{' '}
                 Format Kurikulum: <strong className={isKP(selectedGrade) ? 'text-emerald-400' : 'text-amber-300'}>
-                  {isKP(selectedGrade) ? 'KP2027 (Dual-Bell 07:30)' : 'KSSR SEMAKAN (Dual-Bell 07:15)'}
+                  {isKP(selectedGrade) ? 'KP2027' : 'KSSR SEMAKAN'}
                 </strong>
               </>
             )}
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Hidden File Input for Excel Import */}
+          <input
+            ref={excelInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleExcelFileUpload}
+            className="hidden"
+          />
+
+          {/* One-Click Import Excel Timetable */}
+          <button
+            type="button"
+            disabled={isImportingExcel}
+            onClick={() => excelInputRef.current?.click()}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-black uppercase tracking-wider transition shadow-md shadow-emerald-600/30 cursor-pointer"
+            title="Import Jadual Waktu Induk Sekolah daripada fail Excel (.xlsx)"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>{isImportingExcel ? 'Mengimport...' : 'Import Excel Jadual'}</span>
+          </button>
+
+          {/* Download Standard Bell Excel Template */}
+          <button
+            type="button"
+            onClick={() =>
+              downloadStandardBellExcelTemplate({
+                schedule,
+                academicYear,
+                schoolName,
+                schoolCode,
+                classTeachers,
+              })
+            }
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
+            title="Muat turun Templat Excel Jadual Waktu (Waktu 1–5 07:10–09:40, Rehat 09:40–10:10, Waktu 6–10 10:10–12:40, W11 Klinik 12:40–13:10)"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Templat Excel</span>
+          </button>
+
           {/* Academic Year Selector */}
           <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-2xl border border-slate-800">
             <Calendar className="w-3.5 h-3.5 text-blue-400" />
@@ -908,6 +1020,138 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
             <span>{isScheduling ? 'Menjana Jadual...' : 'Jana Jadual Automatik'}</span>
           </button>
         </div>
+      </div>
+
+      {/* Excel Import Feedback Banner */}
+      {excelImportMessage && (
+        <div
+          className={`rounded-2xl p-3.5 border text-xs flex items-center justify-between gap-3 ${
+            excelImportMessage.type === 'SUCCESS'
+              ? 'bg-emerald-950/70 border-emerald-500/50 text-emerald-200'
+              : 'bg-rose-950/80 border-rose-500/60 text-rose-200'
+          }`}
+        >
+          <div className="flex items-center gap-2 font-bold">
+            {excelImportMessage.type === 'SUCCESS' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            )}
+            <span>{excelImportMessage.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setExcelImportMessage(null)}
+            className="text-slate-400 hover:text-white cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* SKAS 3.1.3.1 CONSECUTIVE LESSON & ANTI-FATIGUE VALIDATOR PANEL            */}
+      {/* ========================================================================= */}
+      <div className="bg-slate-900/95 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-indigo-400" />
+            <span className="text-xs font-black uppercase tracking-wider text-white">
+              Pengesah Blok Waktu Berturutan &amp; Anti-Kelesuan Guru (SKAS 3.1.3.1)
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+            {/* 1. Science (SN / AM) 2+3 & No Rehat Split */}
+            <span
+              className={`px-2.5 py-1 rounded-lg border flex items-center gap-1.5 ${
+                consecutiveFatigueAudit.isSnAmCompliant
+                  ? 'bg-emerald-950/60 border-emerald-600/50 text-emerald-300'
+                  : 'bg-rose-950/70 border-rose-600/60 text-rose-300'
+              }`}
+            >
+              {consecutiveFatigueAudit.isSnAmCompliant ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+              )}
+              <span>
+                Sains (SN / AM 2+3 Tanpa Rentas Rehat):{' '}
+                {consecutiveFatigueAudit.isSnAmCompliant
+                  ? 'Patuh'
+                  : `${consecutiveFatigueAudit.snAmIssues.length} Isu`}
+              </span>
+            </span>
+
+            {/* 2. Bahasa Cina (BC) 3-Period Contiguity */}
+            <span
+              className={`px-2.5 py-1 rounded-lg border flex items-center gap-1.5 ${
+                consecutiveFatigueAudit.isBcCompliant
+                  ? 'bg-emerald-950/60 border-emerald-600/50 text-emerald-300'
+                  : 'bg-rose-950/70 border-rose-600/60 text-rose-300'
+              }`}
+            >
+              {consecutiveFatigueAudit.isBcCompliant ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+              )}
+              <span>
+                Bahasa Cina (BC 3 Waktu Berturutan):{' '}
+                {consecutiveFatigueAudit.isBcCompliant
+                  ? 'Patuh'
+                  : `${consecutiveFatigueAudit.bcIssues.length} Isu`}
+              </span>
+            </span>
+
+            {/* 3. Consecutive 5 Periods Warning (W1-W5 or W6-W10) */}
+            <span
+              className={`px-2.5 py-1 rounded-lg border flex items-center gap-1.5 ${
+                consecutiveFatigueAudit.isFatigueFree
+                  ? 'bg-emerald-950/60 border-emerald-600/50 text-emerald-300'
+                  : 'bg-amber-950/80 border-amber-500/70 text-amber-300'
+              }`}
+            >
+              {consecutiveFatigueAudit.isFatigueFree ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <Flame className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+              )}
+              <span>
+                Amaran 5 Waktu Berturut-turut (W1–W5 / W6–W10):{' '}
+                {consecutiveFatigueAudit.isFatigueFree
+                  ? 'Tiada (0 Guru)'
+                  : `${consecutiveFatigueAudit.consecutiveFiveWarnings.length} Sesi Dikesan`}
+              </span>
+            </span>
+          </div>
+        </div>
+
+        {consecutiveFatigueAudit.allIssues.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+            {consecutiveFatigueAudit.allIssues.map((issue) => (
+              <div
+                key={issue.id}
+                className={`p-2.5 rounded-xl border text-xs flex items-start gap-2 ${
+                  issue.type === 'CONSECUTIVE_5_FATIGUE'
+                    ? 'bg-amber-950/40 border-amber-500/50 text-amber-200'
+                    : issue.severity === 'ERROR'
+                    ? 'bg-rose-950/50 border-rose-500/50 text-rose-200'
+                    : 'bg-slate-950/80 border-slate-700 text-slate-300'
+                }`}
+              >
+                {issue.type === 'CONSECUTIVE_5_FATIGUE' ? (
+                  <Flame className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <div className="font-black text-[11px]">{issue.title}</div>
+                  <div className="text-[11px] opacity-90 mt-0.5 leading-snug">{issue.message}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Clashes Warning Notice */}
@@ -1359,6 +1603,10 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                 (c.gradeA === grade && c.day === day && c.slotA === targetSlotId) ||
                                 (c.gradeB === grade && c.day === day && c.slotB === targetSlotId)
                             );
+                            const isConsecutiveFiveFatigue =
+                              consecutiveFatigueAudit.consecutiveFiveCellKeys.has(
+                                `${grade}_${day}_${targetSlotId}`
+                              );
 
                             const teacherLabel = getTeacherLabel(cell?.teacherCode);
 
@@ -1366,7 +1614,13 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                               <td
                                 key={slotKey}
                                 draggable={isCellDraggable}
-                                title={isRadarHighlight && !radar?.valid ? radar?.clashLabel || radar?.reason : undefined}
+                                title={
+                                  isRadarHighlight && !radar?.valid
+                                    ? radar?.clashLabel || radar?.reason
+                                    : isConsecutiveFiveFatigue
+                                    ? 'Amaran Anti-Kelesuan: Guru mengajar 5 waktu berturut-turut (W1–W5 atau W6–W10)'
+                                    : undefined
+                                }
                                 onDragStart={(e) => {
                                   if (!isCellDraggable || !cell) return;
                                   setDragSource({ grade, day, slotId: targetSlotId });
@@ -1414,6 +1668,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                       : 'bg-rose-950/75 ring-1 ring-rose-500/90'
                                     : hasClash
                                     ? 'bg-rose-950/70 ring-2 ring-rose-500'
+                                    : isConsecutiveFiveFatigue
+                                    ? 'bg-amber-950/60 ring-1 ring-amber-400/80 hover:bg-amber-900/50'
                                     : cell
                                     ? targetSlotId === 'PKAR'
                                       ? 'bg-emerald-950/40 hover:bg-emerald-900/50'
@@ -1436,9 +1692,16 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                     </div>
                                     {cell.subjectCode !== 'PN' && (
                                       <div className={`text-[10px] font-bold leading-tight break-words ${
-                                        cell.isAutoPKAR ? 'text-emerald-300' : 'text-blue-300'
+                                        cell.isAutoPKAR ? 'text-emerald-300' : isConsecutiveFiveFatigue ? 'text-amber-300' : 'text-blue-300'
                                       }`}>
                                         {teacherLabel}
+                                      </div>
+                                    )}
+                                    {isConsecutiveFiveFatigue && (
+                                      <div>
+                                        <span className="inline-block px-1 py-0.2 rounded text-[7px] font-black uppercase tracking-tight bg-amber-500/30 border border-amber-400/60 text-amber-200">
+                                          5w Berturut
+                                        </span>
                                       </div>
                                     )}
                                     {cell.isPemulihan && (() => {
@@ -1583,6 +1846,10 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                           (c.gradeA === selectedGrade && c.day === day && c.slotA === slot.slotId) ||
                           (c.gradeB === selectedGrade && c.day === day && c.slotB === slot.slotId)
                       );
+                      const isConsecutiveFiveFatigue =
+                        consecutiveFatigueAudit.consecutiveFiveCellKeys.has(
+                          `${selectedGrade}_${day}_${slot.slotId}`
+                        );
 
                       const teacherLabel = getTeacherLabel(cell?.teacherCode);
 
@@ -1590,7 +1857,13 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                         <td
                           key={headerSlot.slotId}
                           draggable={isCellDraggable}
-                          title={isRadarHighlight && !radar?.valid ? radar?.clashLabel || radar?.reason : undefined}
+                          title={
+                            isRadarHighlight && !radar?.valid
+                              ? radar?.clashLabel || radar?.reason
+                              : isConsecutiveFiveFatigue
+                              ? 'Amaran Anti-Kelesuan: Guru mengajar 5 waktu berturut-turut (W1–W5 atau W6–W10)'
+                              : undefined
+                          }
                           onDragStart={(e) => {
                             if (!isCellDraggable || !cell) return;
                             setDragSource({ grade: selectedGrade, day, slotId: slot.slotId });
@@ -1638,6 +1911,8 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                 : 'bg-rose-950/75 ring-1 ring-rose-500/90'
                               : hasClash
                               ? 'bg-rose-950/70 ring-2 ring-rose-500'
+                              : isConsecutiveFiveFatigue
+                              ? 'bg-amber-950/60 ring-1 ring-amber-400/80 hover:bg-amber-900/50'
                               : cell
                               ? isLocked
                                 ? 'bg-blue-950/50'
@@ -1657,8 +1932,17 @@ export const JKeyinGrid: React.FC<JKeyinGridProps> = ({
                                 )}
                               </div>
                               {cell.subjectCode !== 'PN' && (
-                                <div className="text-[10px] font-bold text-blue-300 leading-tight break-words">
+                                <div className={`text-[10px] font-bold leading-tight break-words ${
+                                  isConsecutiveFiveFatigue ? 'text-amber-300' : 'text-blue-300'
+                                }`}>
                                   {teacherLabel}
+                                </div>
+                              )}
+                              {isConsecutiveFiveFatigue && (
+                                <div>
+                                  <span className="inline-block px-1 py-0.2 rounded text-[7px] font-black uppercase tracking-tight bg-amber-500/30 border border-amber-400/60 text-amber-200">
+                                    5w Berturut
+                                  </span>
                                 </div>
                               )}
                               {cell.isPemulihan && (() => {

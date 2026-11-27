@@ -542,12 +542,82 @@
         "academicYear": { "type": "string", "maxLength": 20 }
       },
       "required": ["meetingNumber", "groupId", "category", "date"]
+    },
+    "PrasekolahAssessment": {
+      "title": "PrasekolahAssessment",
+      "description": "Independent Prasekolah Inspirasi assessment record isolated from Elementary PBD/UASA.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "term": { "type": "string", "enum": ["Penggal 1", "Penggal 2"] },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentName": { "type": "string", "maxLength": 150 },
+        "noKp": { "type": "string", "maxLength": 30 },
+        "age": { "type": "number" },
+        "kedudukan": { "type": "number" },
+        "jumlahMurid": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["academicYear", "term", "studentId", "studentName", "age"]
+    },
+    "KawalanProgram": {
+      "title": "KawalanProgram",
+      "description": "School-wide program registration and PDCA lifecycle supervision record (PInTaS, OPPM, Checklist, Smart OPR & SLA tracking).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "title": { "type": "string", "maxLength": 300 },
+        "mode": { "type": "string", "enum": ["STRATEGIK", "PANTAS"] },
+        "domain": { "type": "string", "enum": ["PENTADBIRAN", "KURIKULUM", "HEM", "KOKURIKULUM", "PIBK_3K"] },
+        "pdcaStage": { "type": "string", "enum": ["PLAN", "DO", "CHECK", "ACT"] },
+        "standardGroup": { "type": "string", "maxLength": 30 },
+        "subStandardCode": { "type": "string", "maxLength": 30 },
+        "subStandardTitle": { "type": "string", "maxLength": 300 },
+        "tarikhProgram": { "type": "string", "maxLength": 30 },
+        "picId": { "type": "string", "maxLength": 128 },
+        "picName": { "type": "string", "maxLength": 150 },
+        "kpi": { "type": "string", "maxLength": 500 },
+        "oprCompleted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "mode", "domain", "pdcaStage", "tarikhProgram", "picName"]
+    },
+    "SchoolSopTemplate": {
+      "title": "SchoolSopTemplate",
+      "description": "Standard Operating Procedure (SOP) templates for school programs and PDCA Act standardization.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "schoolCode": { "type": "string", "maxLength": 30 },
+        "code": { "type": "string", "maxLength": 50 },
+        "title": { "type": "string", "maxLength": 300 },
+        "domain": { "type": "string", "enum": ["PENTADBIRAN", "KURIKULUM", "HEM", "KOKURIKULUM", "PIBK_3K"] },
+        "standardGroup": { "type": "string", "maxLength": 30 },
+        "subStandardCode": { "type": "string", "maxLength": 30 },
+        "subStandardTitle": { "type": "string", "maxLength": 300 },
+        "defaultKpi": { "type": "string", "maxLength": 500 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "domain", "subStandardCode"]
     }
   },
   "firestore": {
     "/schools/{schoolCode}": {
       "schema": { "$ref": "#/entities/School" },
       "description": "Multi-tenant school profiles, branding, and authorized administrators."
+    },
+    "/kawalan_programs/{programId}": {
+      "schema": { "$ref": "#/entities/KawalanProgram" },
+      "description": "School-wide program registration and PDCA lifecycle supervision records."
+    },
+    "/school_sop_templates/{sopId}": {
+      "schema": { "$ref": "#/entities/SchoolSopTemplate" },
+      "description": "Universal and school-standardized SOP templates for fast program registration."
     },
     "/makluman_tasks/{taskId}": {
       "schema": { "$ref": "#/entities/MaklumanTask" },
@@ -632,6 +702,10 @@
     "/uasa_results/{resultId}": {
       "schema": { "$ref": "#/entities/UasaResult" },
       "description": "UASA assessment marks."
+    },
+    "/prasekolah_assessments/{assessmentId}": {
+      "schema": { "$ref": "#/entities/PrasekolahAssessment" },
+      "description": "Independent Prasekolah Inspirasi assessment records isolated from PBD/UASA."
     },
     "/koko_memberships/{memberId}": {
       "schema": { "$ref": "#/entities/KokoMembership" },

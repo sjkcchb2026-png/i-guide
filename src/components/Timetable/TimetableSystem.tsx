@@ -926,8 +926,11 @@ export const TimetableSystem: React.FC<TimetableSystemProps> = ({
             teacherMapping={teacherMapping}
             displayMode={displayMode}
             classTeachers={classTeachers}
+            onUpdateClassTeachers={setClassTeachers}
             academicYear={selectedYear}
             onYearChange={(newYear) => setSelectedYear(newYear)}
+            schoolName={activeSchoolName}
+            schoolCode={activeSchoolCode}
           />
         )}
 

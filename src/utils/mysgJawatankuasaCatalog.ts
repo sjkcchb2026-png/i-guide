@@ -523,11 +523,12 @@ export function computeTeacherWorkloadRadar(
       entry.positions.push(item);
     }
 
-    // 2. Ahli Jawatankuasa (AJK) — strictly 0 Mata Beban
+    // 2. Ahli Jawatankuasa (AJK) — 1 Mata Beban per committee
     if (Array.isArray(item.ahliList)) {
       item.ahliList.forEach((ahli) => {
         const ahliEntry = findOrCreateEntry(ahli.teacherId, ahli.teacherName);
         if (ahliEntry) {
+          ahliEntry.totalMata += 1;
           ahliEntry.ahliCount += 1;
           ahliEntry.ahliPositions.push(item);
         }

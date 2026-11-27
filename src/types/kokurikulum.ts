@@ -126,7 +126,13 @@ export interface KokoActivity {
   standardGroup?: string;
   subStandardCode?: string;
   subStandardTitle?: string;
+  standards?: Array<{
+    standardGroup: string;
+    subStandardCode: string;
+    subStandardTitle: string;
+  }>;
   driveTargetFolderPath?: string[];
+  linkedPaths?: string[];
   skpmStandardCode?: string;
   skpmStandardTitle?: string;
   skpmAspekTitle?: string;

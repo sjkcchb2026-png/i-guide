@@ -53,7 +53,13 @@ export interface AcademicOPRRecord {
   standardGroup?: string;
   subStandardCode?: string;
   subStandardTitle?: string;
+  standards?: Array<{
+    standardGroup: string;
+    subStandardCode: string;
+    subStandardTitle: string;
+  }>;
   driveTargetFolderPath?: string[];
+  linkedPaths?: string[];
   folderUrl?: string;
   fileUrl?: string;
   folderPath?: string;
@@ -141,6 +147,9 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
   const [bidang, setBidang] = useState<string>('Kurikulum');
   const [standardGroup, setStandardGroup] = useState<SkasStandardGroupKey>('Std 3.1');
   const [subStandardCode, setSubStandardCode] = useState<string>('3.1.2.1');
+  const [sokonganStandards, setSokonganStandards] = useState<
+    Array<{ standardGroup: SkasStandardGroupKey; subStandardCode: string }>
+  >([]);
   const [programName, setProgramName] = useState<string>('');
   const [tarikh, setTarikh] = useState<string>(new Date().toISOString().slice(0, 10));
   const [hari, setHari] = useState<string>('Isnin');
@@ -159,6 +168,29 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
   const activeSkas = useMemo(
     () => resolveSkasSelection(standardGroup, subStandardCode, 'KURIKULUM'),
     [standardGroup, subStandardCode]
+  );
+
+  const activeSokonganList = useMemo(() => {
+    const seen = new Set<string>([activeSkas.subStandardCode]);
+    const list: ReturnType<typeof resolveSkasSelection>[] = [];
+    sokonganStandards.forEach((s) => {
+      const res = resolveSkasSelection(s.standardGroup, s.subStandardCode, 'KURIKULUM');
+      if (!seen.has(res.subStandardCode) && list.length < 2) {
+        seen.add(res.subStandardCode);
+        list.push(res);
+      }
+    });
+    return list;
+  }, [sokonganStandards, activeSkas.subStandardCode]);
+
+  const activeStandardsPayload = useMemo(
+    () =>
+      [activeSkas, ...activeSokonganList].map((r) => ({
+        standardGroup: r.standardGroup,
+        subStandardCode: r.subStandardCode,
+        subStandardTitle: r.subStandardTitle,
+      })),
+    [activeSkas, activeSokonganList]
   );
 
   // 1. 读取 Firestore 中的学术 OPR 记录
@@ -207,6 +239,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
     setBidang(type === 'PLC' ? 'Kurikulum / PLC' : 'Kurikulum');
     setStandardGroup('Std 3.1');
     setSubStandardCode(type === 'PLC' ? '3.1.2.2' : '3.1.2.1');
+    setSokonganStandards([]);
     setProgramName('');
     setTarikh(new Date().toISOString().slice(0, 10));
     setHari('Isnin');
@@ -235,6 +268,19 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
     );
     setStandardGroup(resolved.standardGroup);
     setSubStandardCode(resolved.subStandardCode);
+    if (Array.isArray(rec.standards) && rec.standards.length > 1) {
+      setSokonganStandards(
+        rec.standards.slice(1, 3).map((s) => {
+          const r = resolveSkasSelection(s.standardGroup, s.subStandardCode, 'KURIKULUM');
+          return {
+            standardGroup: r.standardGroup,
+            subStandardCode: r.subStandardCode,
+          };
+        })
+      );
+    } else {
+      setSokonganStandards([]);
+    }
     setProgramName(rec.programName);
     setTarikh(rec.tarikh);
     setHari(rec.hari);
@@ -296,7 +342,11 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
         standardGroup: activeSkas.standardGroup,
         subStandardCode: activeSkas.subStandardCode,
         subStandardTitle: activeSkas.subStandardTitle,
+        standards: activeStandardsPayload,
         driveTargetFolderPath: activeSkas.driveTargetFolderPath,
+        linkedPaths: [activeSkas, ...activeSokonganList].map((s) =>
+          s.driveTargetFolderPath.join(' / ')
+        ),
         programName: programName.trim(),
         tarikh,
         hari,
@@ -356,9 +406,18 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
         standardGroup: activeSkas.standardGroup,
         subStandardCode: activeSkas.subStandardCode,
         subStandardTitle: activeSkas.subStandardTitle,
+        standards: activeStandardsPayload,
+        secondarySkpmBucket: activeSokonganList[0]?.standardGroup,
+        additionalSkpmBuckets: activeSokonganList.map((s) => s.standardGroup),
         driveTargetFolderPath: activeSkas.driveTargetFolderPath,
+        linkedPaths: [activeSkas, ...activeSokonganList].map((s) =>
+          s.driveTargetFolderPath.join(' / ')
+        ),
         skpmBucket: activeSkas.standardGroup,
-        skpmCodeBadge: `${activeSkas.subStandardCode} — ${activeSkas.subStandardTitle}`,
+        skpmCodeBadge:
+          activeStandardsPayload.length > 1
+            ? activeStandardsPayload.map((s) => s.subStandardCode).join(' + ')
+            : `${activeSkas.subStandardCode} — ${activeSkas.subStandardTitle}`,
         skpmStandard: activeSkas.standardFullTitle,
         skpmAspek: `SUB-STANDARD ${activeSkas.subStandardCode}: ${activeSkas.subStandardTitle.toUpperCase()}`,
         skpmStandardKualiti: activeSkas.kualitiStatement,
@@ -383,7 +442,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
         merge: true,
       }).catch(() => null);
 
-      // Background sync to School Google Drive with exact 3-level folder path
+      // Background sync to School Google Drive with exact 3-level folder path + up to 2 Sokongan shortcuts
       void (async () => {
         try {
           const fallbackHtml = buildFallbackDriveHtml({
@@ -393,9 +452,13 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
             standardGroup: activeSkas.standardGroup,
             subStandardCode: activeSkas.subStandardCode,
             subStandardTitle: activeSkas.subStandardTitle,
+            standards: activeStandardsPayload,
             driveTargetFolderPath: activeSkas.driveTargetFolderPath,
             skpmBucket: activeSkas.standardGroup,
-            skpmCodeBadge: `${activeSkas.subStandardCode} — ${activeSkas.subStandardTitle}`,
+            skpmCodeBadge:
+              activeStandardsPayload.length > 1
+                ? activeStandardsPayload.map((s) => s.subStandardCode).join(' + ')
+                : `${activeSkas.subStandardCode} — ${activeSkas.subStandardTitle}`,
             skpmStandard: activeSkas.standardFullTitle,
             pillar: 'KURIKULUM',
             programTitle: payload.programName,
@@ -411,9 +474,13 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
             standardGroup: activeSkas.standardGroup,
             subStandardCode: activeSkas.subStandardCode,
             subStandardTitle: activeSkas.subStandardTitle,
+            standards: activeStandardsPayload,
             driveTargetFolderPath: activeSkas.driveTargetFolderPath,
             skpmBucket: activeSkas.standardGroup,
-            skpmCodeBadge: `${activeSkas.subStandardCode} — ${activeSkas.subStandardTitle}`,
+            skpmCodeBadge:
+              activeStandardsPayload.length > 1
+                ? activeStandardsPayload.map((s) => s.subStandardCode).join(' + ')
+                : `${activeSkas.subStandardCode} — ${activeSkas.subStandardTitle}`,
             skpmStandard: activeSkas.standardFullTitle,
             skpmAspek: `SUB-STANDARD ${activeSkas.subStandardCode}: ${activeSkas.subStandardTitle.toUpperCase()}`,
             skpmStandardKualiti: activeSkas.kualitiStatement,
@@ -437,12 +504,18 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
           if (res.success) {
             const savedFolderPath =
               res.folderPath || activeSkas.driveTargetFolderPath.join(' / ');
+            const savedLinkedPaths =
+              Array.isArray(res.linkedPaths) && res.linkedPaths.length > 0
+                ? res.linkedPaths
+                : [savedFolderPath];
             const savedFileUrl = res.fileUrl || res.folderUrl || '';
             const savedFolderUrl = res.folderUrl || res.fileUrl || '';
             const drivePatch = deepSanitizeFirestore({
               standardGroup: activeSkas.standardGroup,
               subStandardCode: activeSkas.subStandardCode,
               subStandardTitle: activeSkas.subStandardTitle,
+              standards: res.standards || activeStandardsPayload,
+              linkedPaths: savedLinkedPaths,
               folderUrl: savedFolderUrl,
               fileUrl: savedFileUrl,
               folderPath: savedFolderPath,
@@ -829,10 +902,10 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
             <div className="p-4 rounded-2xl bg-slate-950 border border-indigo-500/40 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-black uppercase tracking-wider text-indigo-300">
-                  Pemetaan Standard &amp; Sub-Standard SKPM Kualiti@Sekolah (SKAS 2026 &amp; Google Drive)
+                  Pemetaan Standard SKAS v3.0 (Maksimum 3 Standard Google Drive — 1 Utama + 2 Sokongan)
                 </span>
                 <span className="px-2.5 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-mono text-[10px] font-black">
-                  📁 {activeSkas.driveTargetFolderPath.join(' / ')}
+                  📁 {activeStandardsPayload.map((s) => s.subStandardCode).join(' + ')}
                 </span>
               </div>
 
@@ -861,7 +934,7 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
 
                 <div className="lg:col-span-7">
                   <label className="block text-slate-300 font-bold mb-1">
-                    2. Sub-Standard / TUMS (Format: [Kod] — [Nama BM]（[中文说明]）):
+                    2. Sub-Standard / TUMS Utama (Format: [Kod] — [Nama BM]（[中文说明]）):
                   </label>
                   <select
                     value={activeSkas.subStandardCode}
@@ -875,6 +948,107 @@ export const AcademicOPRManager: React.FC<Props> = ({ currentUser, schoolSetting
                     ))}
                   </select>
                 </div>
+              </div>
+
+              {/* Optional Standard Sokongan #1 & #2 */}
+              <div className="space-y-2">
+                {sokonganStandards.map((sok, idx) => {
+                  const resolvedSok = resolveSkasSelection(
+                    sok.standardGroup,
+                    sok.subStandardCode,
+                    'KURIKULUM'
+                  );
+                  return (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-xl bg-slate-900/70 border border-amber-500/30 space-y-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-black uppercase text-amber-300">
+                          {idx + 2}. Standard Sokongan #{idx + 1} (Auto-Shortcut [RUJUKAN] di Google Drive)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSokonganStandards((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                          className="text-xs font-bold text-rose-400 hover:text-rose-300 cursor-pointer"
+                        >
+                          Padam
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-2">
+                        <div className="lg:col-span-5">
+                          <select
+                            value={resolvedSok.standardGroup}
+                            onChange={(e) => {
+                              const nextGrp = e.target.value as SkasStandardGroupKey;
+                              const grpObj = getSkasGroup(nextGrp);
+                              setSokonganStandards((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx
+                                    ? {
+                                        standardGroup: nextGrp,
+                                        subStandardCode: grpObj.defaultSubStandardCode,
+                                      }
+                                    : item
+                                )
+                              );
+                            }}
+                            className="w-full py-1.5 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs font-bold outline-none"
+                          >
+                            {SKAS_STANDARDS_DICTIONARY.map((g) => (
+                              <option key={g.standardGroup} value={g.standardGroup}>
+                                {g.dropdownGroupLabel}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="lg:col-span-7">
+                          <select
+                            value={resolvedSok.subStandardCode}
+                            onChange={(e) => {
+                              const nextCode = e.target.value;
+                              setSokonganStandards((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, subStandardCode: nextCode } : item
+                                )
+                              );
+                            }}
+                            className="w-full py-1.5 px-3 rounded-xl bg-slate-950 border border-amber-500/40 text-amber-200 text-xs font-bold outline-none"
+                          >
+                            {getSkasGroup(resolvedSok.standardGroup).subStandards.map((sub) => (
+                              <option key={sub.code} value={sub.code}>
+                                {sub.dropdownLabel}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {sokonganStandards.length < 2 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const defaultNextGroup: SkasStandardGroupKey =
+                        standardGroup === 'Std 5' ? 'Std 4' : 'Std 5';
+                      const grpObj = getSkasGroup(defaultNextGroup);
+                      setSokonganStandards((prev) => [
+                        ...prev,
+                        {
+                          standardGroup: defaultNextGroup,
+                          subStandardCode: grpObj.defaultSubStandardCode,
+                        },
+                      ]);
+                    }}
+                    className="w-full py-1.5 px-3 rounded-xl border border-dashed border-amber-500/40 hover:border-amber-400 bg-amber-500/5 hover:bg-amber-500/10 text-amber-300 text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  >
+                    + Tambah Standard Sokongan ({sokonganStandards.length + 1}/2) — Jana Shortcut [RUJUKAN] Drive
+                  </button>
+                )}
               </div>
 
               {/* Light Suggested Evidens Reference Bar */}

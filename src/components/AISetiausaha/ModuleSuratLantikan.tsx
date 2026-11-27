@@ -305,7 +305,7 @@ export const ModuleSuratLantikan: React.FC<Props> = ({
             {/* Section B: Ahli Jawatankuasa (AJK) */}
             <div className="space-y-1.5 pt-2">
               <div className="font-bold text-xs uppercase bg-slate-100 px-3 py-1.5 border border-black">
-                B. AHLI JAWATANKUASA (AJK) ({currentTeacherRadar.ahliPositions.length} JAWATANKUASA · 0 MATA BEBAN)
+                B. AHLI JAWATANKUASA (AJK) ({currentTeacherRadar.ahliPositions.length} JAWATANKUASA · {currentTeacherRadar.ahliPositions.length} MATA BEBAN)
               </div>
               {currentTeacherRadar.ahliPositions.length > 0 ? (
                 <table className="w-full border-collapse border border-black text-xs">
@@ -326,7 +326,7 @@ export const ModuleSuratLantikan: React.FC<Props> = ({
                           {pos.jawatankuasaInduk}
                         </td>
                         <td className="border border-black px-2 py-1">
-                          Ahli Jawatankuasa (AJK)
+                          Ahli Jawatankuasa (AJK · 1m)
                         </td>
                       </tr>
                     ))}

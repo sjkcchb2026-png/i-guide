@@ -407,7 +407,7 @@ export const MySGJawatankuasaTab: React.FC<Props> = ({
           );
         }
 
-        // 2B: Ahli Jawatankuasa (AJK) — 0 Mata Beban, role: 'COMMITTEE_MEMBER'
+        // 2B: Ahli Jawatankuasa (AJK) — 1 Mata Beban, role: 'COMMITTEE_MEMBER'
         if (Array.isArray(it.ahliList)) {
           it.ahliList.forEach((ahli) => {
             if (!ahli.teacherId && !ahli.teacherName) return;
@@ -433,7 +433,7 @@ export const MySGJawatankuasaTab: React.FC<Props> = ({
                 jawatanRasmi: `Ahli Jawatankuasa (${it.jawatankuasaInduk})`,
                 role: 'COMMITTEE_MEMBER',
                 raciRole: 'C',
-                mataBeban: 0,
+                mataBeban: 1,
                 tahapBeban: 'RINGAN',
                 effectiveDate: `${ay.slice(0, 4)}-01-01`,
                 status: 'ACTIVE',
@@ -670,7 +670,7 @@ export const MySGJawatankuasaTab: React.FC<Props> = ({
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               <strong>Penyelaras / Setiausaha / Ketua:</strong> Berat = 3m · Sederhana = 2m · Ringan = 1m (Sasaran Ideal: 10–12 Mata / Guru) ·{' '}
-              <strong>Ahli Jawatankuasa (AJK):</strong> 0 Mata Beban (Tidak menambah beban Penyelaras, tetapi tertera dalam Surat Lantikan &amp; Memo Mesyuarat).
+              <strong>Ahli Jawatankuasa (AJK):</strong> 1 Mata Beban setiap jawatankuasa (Tertera dalam Surat Lantikan &amp; Memo Mesyuarat).
             </p>
           </div>
 
@@ -738,7 +738,7 @@ export const MySGJawatankuasaTab: React.FC<Props> = ({
               Penyelaras Dilantik: {totalPenyelarasAssigned} / {items.length}
             </span>
             <span className="px-2.5 py-1 rounded-lg bg-teal-50 text-teal-800 border border-teal-200">
-              Jumlah Keahlian AJK (0 Mata): {totalAhliAssigned}
+              Jumlah Keahlian AJK (1 Mata / AJK): {totalAhliAssigned}
             </span>
           </div>
         </div>
@@ -778,7 +778,7 @@ export const MySGJawatankuasaTab: React.FC<Props> = ({
           <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
             <Award className="w-4 h-4 text-indigo-600" />
             <span>
-              Radar Mata Beban Penyelaras Guru (Sesi {effectiveSession}) — AJK Dikira 0 Mata
+              Radar Mata Beban Guru (Sesi {effectiveSession}) — Penyelaras + AJK (1 Mata / AJK)
             </span>
           </h4>
           <span className="text-[11px] font-bold text-slate-500">
@@ -807,7 +807,7 @@ export const MySGJawatankuasaTab: React.FC<Props> = ({
                     {r.positionCount} Penyelaras (B:{r.beratCount} S:{r.sederhanaCount} R:{r.ringanCount})
                   </div>
                   <div className="text-[10px] text-teal-700 font-bold">
-                    + {r.ahliCount || 0} Ahli Jawatankuasa (0m)
+                    + {r.ahliCount || 0} Ahli Jawatankuasa ({r.ahliCount || 0}m)
                   </div>
                 </div>
                 <span
@@ -920,13 +920,13 @@ export const MySGJawatankuasaTab: React.FC<Props> = ({
                         </select>
                       </div>
 
-                      {/* 2. Ahli Jawatankuasa (AJK) Multi-Select Chips & Button (0 Mata Beban) */}
+                      {/* 2. Ahli Jawatankuasa (AJK) Multi-Select Chips & Button (1 Mata Beban) */}
                       <div className="pt-1 border-t border-slate-100">
                         <div className="flex items-center justify-between gap-2 mb-1.5">
                           <span className="text-[10px] font-black uppercase text-teal-700 flex items-center gap-1">
                             <Users className="w-3 h-3" />
                             <span>
-                              2. Ahli Jawatankuasa / AJK ({ahliList.length} Guru · 0 Mata Beban)
+                              2. Ahli Jawatankuasa / AJK ({ahliList.length} Guru · 1 Mata Beban)
                             </span>
                           </span>
                           <button
@@ -1051,7 +1051,7 @@ export const MySGJawatankuasaTab: React.FC<Props> = ({
             <div className="bg-slate-900 text-white p-5 flex items-start justify-between gap-3">
               <div>
                 <div className="text-[10px] font-black uppercase tracking-wider text-teal-400">
-                  Pilih Ahli Jawatankuasa (AJK · 0 Mata Beban) — Sesi {effectiveSession}
+                  Pilih Ahli Jawatankuasa (AJK · 1 Mata Beban) — Sesi {effectiveSession}
                 </div>
                 <h4 className="text-base font-black mt-0.5">
                   {activeModalItem.jawatankuasaInduk}

@@ -11,6 +11,12 @@ export const DEFAULT_SCHOOL_DRIVE_SECRET_TOKEN = 'YCC3404_SKPM_2026_SECURE';
 
 export const DEFAULT_SCHOOL_DRIVE_ACCOUNT_EMAIL = 'ycc3404@moe.edu.my';
 
+export interface SkasStandardItem {
+  standardGroup: string;
+  subStandardCode: string;
+  subStandardTitle: string;
+}
+
 export interface SyncSchoolDriveParams {
   schoolCode?: string;
   schoolName?: string;
@@ -21,7 +27,10 @@ export interface SyncSchoolDriveParams {
   standardGroup?: string;
   subStandardCode?: string;
   subStandardTitle?: string;
+  /** Up to 3 SKAS Standards (1st = Utama, 2nd & 3rd = Sokongan / Rujukan shortcut in Google Drive) */
+  standards?: SkasStandardItem[];
   driveTargetFolderPath?: string[];
+  linkedPaths?: string[];
   skpmBucket?: string;
   skpmCodeBadge?: string;
   skpmStandard?: string;
@@ -55,10 +64,89 @@ export interface SyncSchoolDriveResult {
   folderUrl?: string;
   fileUrl?: string;
   folderPath?: string;
+  linkedPaths?: string[];
+  standards?: SkasStandardItem[];
   targetFolderName?: string;
   driveTargetFolderPath?: string[];
   message?: string;
   error?: string;
+}
+
+/**
+ * Normalize and deduplicate up to 3 SKAS Standards (1 Utama + up to 2 Sokongan)
+ */
+export function resolveSkasStandardsList(params: {
+  standards?: SkasStandardItem[];
+  standardGroup?: string;
+  subStandardCode?: string;
+  subStandardTitle?: string;
+  skpmBucket?: string;
+  skpmCodeBadge?: string;
+  skpmAspek?: string;
+  skpmStandard?: string;
+  pillar?: string;
+  isSuratLantikan?: boolean;
+}): {
+  primary: ReturnType<typeof resolveSkasSelection>;
+  resolvedList: ReturnType<typeof resolveSkasSelection>[];
+  standardsPayload: SkasStandardItem[];
+} {
+  const rawItems: Array<{ standardGroup?: string; subStandardCode?: string }> = [];
+
+  if (Array.isArray(params.standards) && params.standards.length > 0) {
+    params.standards.forEach((s) => {
+      if (s && (s.subStandardCode || s.standardGroup)) {
+        rawItems.push({
+          standardGroup: s.standardGroup,
+          subStandardCode: s.subStandardCode,
+        });
+      }
+    });
+  }
+
+  if (rawItems.length === 0) {
+    rawItems.push({
+      standardGroup:
+        params.standardGroup || (params.isSuratLantikan ? 'Std 2' : params.skpmBucket),
+      subStandardCode:
+        params.subStandardCode ||
+        (params.isSuratLantikan
+          ? '2.1.1'
+          : params.skpmCodeBadge || params.skpmAspek || params.skpmStandard),
+    });
+  }
+
+  const seenCodes = new Set<string>();
+  const resolvedList: ReturnType<typeof resolveSkasSelection>[] = [];
+
+  for (const item of rawItems) {
+    const resolved = resolveSkasSelection(
+      item.standardGroup,
+      item.subStandardCode,
+      params.pillar
+    );
+    if (!seenCodes.has(resolved.subStandardCode)) {
+      seenCodes.add(resolved.subStandardCode);
+      resolvedList.push(resolved);
+    }
+    if (resolvedList.length >= 3) break;
+  }
+
+  const primary =
+    resolvedList[0] ||
+    resolveSkasSelection(params.standardGroup, params.subStandardCode, params.pillar);
+
+  const standardsPayload: SkasStandardItem[] = resolvedList.map((r) => ({
+    standardGroup: r.standardGroup,
+    subStandardCode: r.subStandardCode,
+    subStandardTitle: r.subStandardTitle,
+  }));
+
+  return {
+    primary,
+    resolvedList,
+    standardsPayload,
+  };
 }
 
 const escapeHtml = (str?: string | null): string =>
@@ -145,16 +233,25 @@ export function resolveTargetDriveFolderName(params: {
     return 'Standard 2 - Pengurusan Organisasi';
   }
 
-  // 6. Matches Std 4 / Std 5 -> 'Standard 4 & 5 - PdPc & Pencapaian Sekolah'
+  // 6. Matches Std 4 -> 'Standard 4 - Pembelajaran dan Pemudahcaraan (PdPc)'
   if (
-    /\bSTD[\s_]*[45]\b/.test(combined) ||
-    /\bSTANDARD[\s_]*[45]\b/.test(combined) ||
-    /\b[45]\.[1-9](\.\d+)*\b/.test(combined) ||
-    combined.includes('PDPC') ||
+    /\bSTD[\s_]*4\b/.test(combined) ||
+    /\bSTANDARD[\s_]*4\b/.test(combined) ||
+    /\b4\.[1-9](\.\d+)*\b/.test(combined) ||
+    combined.includes('PDPC')
+  ) {
+    return 'Standard 4 - Pembelajaran dan Pemudahcaraan (PdPc)';
+  }
+
+  // 7. Matches Std 5 -> 'Standard 5 - Kemenjadian Murid'
+  if (
+    /\bSTD[\s_]*5\b/.test(combined) ||
+    /\bSTANDARD[\s_]*5\b/.test(combined) ||
+    /\b5\.[1-9](\.\d+)*\b/.test(combined) ||
     combined.includes('PENCAPAIAN') ||
     combined.includes('KEMENJADIAN')
   ) {
-    return 'Standard 4 & 5 - PdPc & Pencapaian Sekolah';
+    return 'Standard 5 - Kemenjadian Murid';
   }
 
   return 'Standard 3.1 - Pengurusan Kurikulum';
@@ -177,6 +274,10 @@ export function resolveCanonicalSkpmBucket(targetFolderName: string, explicitBuc
       return 'Std 1';
     case 'Standard 2 - Pengurusan Organisasi':
       return 'Std 2';
+    case 'Standard 4 - Pembelajaran dan Pemudahcaraan (PdPc)':
+      return 'Std 4';
+    case 'Standard 5 - Kemenjadian Murid':
+      return 'Std 5';
     case 'Standard 4 & 5 - PdPc & Pencapaian Sekolah':
       return 'Std 4 & 5';
     default:
@@ -228,14 +329,27 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
     (schoolCode === 'YCC3404' ? 'SJK (C) CHUNG HUA BALINGIAN' : `SEKOLAH ${schoolCode}`)
   ).toUpperCase();
   const academicYear = params.academicYear || '2026';
-  const resolvedSkas = resolveSkasSelection(
-    params.standardGroup || params.skpmBucket,
-    params.subStandardCode || params.skpmCodeBadge,
-    params.pillar
-  );
+
+  const { primary: resolvedSkas, resolvedList: resolvedSkasList } = resolveSkasStandardsList({
+    standards: params.standards,
+    standardGroup: params.standardGroup,
+    subStandardCode: params.subStandardCode,
+    subStandardTitle: params.subStandardTitle,
+    skpmBucket: params.skpmBucket,
+    skpmCodeBadge: params.skpmCodeBadge,
+    skpmAspek: params.skpmAspek,
+    skpmStandard: params.skpmStandard,
+    pillar: params.pillar,
+  });
+
+  const secondarySkasList = resolvedSkasList.slice(1);
+  const allCodesBadge = resolvedSkasList.map((r) => r.subStandardCode).join(' + ');
+
   const skpmBadge =
     params.skpmCodeBadge ||
-    `${resolvedSkas.standardGroup.toUpperCase()} • ASPEK ${resolvedSkas.subStandardCode}`;
+    (secondarySkasList.length > 0
+      ? `SKAS: ${allCodesBadge}`
+      : `${resolvedSkas.standardGroup.toUpperCase()} • ASPEK ${resolvedSkas.subStandardCode}`);
   const skpmStandard =
     params.skpmStandard ||
     resolvedSkas.standardFullTitle ||
@@ -305,6 +419,20 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
   const preparedByTitle =
     params.preparedByTitle || params.jawatankuasaInduk || 'Penyelaras Program';
 
+  const sokonganHtml =
+    secondarySkasList.length > 0
+      ? `<tr>
+          <td colspan="2" style="padding:2px 0 3px 0;border-bottom:1px dashed #cbd5e1;color:#0f766e;">
+            <strong>Standard Sokongan (Rujukan Silang):</strong> ${secondarySkasList
+              .map(
+                (s) =>
+                  `${escapeHtml(s.standardGroup)} (${escapeHtml(s.subStandardCode)} &mdash; ${escapeHtml(s.subStandardTitle)})`
+              )
+              .join(' &bull; ')}
+          </td>
+        </tr>`
+      : '';
+
   return `<!DOCTYPE html>
 <html lang="ms">
 <head>
@@ -333,7 +461,11 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
       <table style="width:100%;border-collapse:collapse;border-bottom:1px solid #115e59;padding-bottom:4px;margin-bottom:4px;">
         <tr>
           <td style="font-size:10px;font-weight:900;letter-spacing:1px;color:#FDE047;text-transform:uppercase;padding-bottom:4px;">
-            SKPM KUALITI@SEKOLAH ${escapeHtml(academicYear)} &bull; ${escapeHtml(resolvedSkas.standardGroup)} (${escapeHtml(resolvedSkas.subStandardCode)})
+            SKPM KUALITI@SEKOLAH ${escapeHtml(academicYear)} &bull; ${escapeHtml(resolvedSkas.standardGroup)} (${escapeHtml(resolvedSkas.subStandardCode)})${
+              secondarySkasList.length > 0
+                ? ` + ${escapeHtml(secondarySkasList.map((s) => s.subStandardCode).join(' + '))}`
+                : ''
+            }
           </td>
           <td style="text-align:right;font-size:9.5px;font-weight:bold;color:#ccfbf1;text-transform:uppercase;padding-bottom:4px;">
             ${params.kodMySG ? `<span>${escapeHtml(params.kodMySG)} &bull; </span>` : ''}
@@ -347,7 +479,13 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
         ${escapeHtml(skpmStandard)}
       </div>
       <div style="font-size:9.5px;font-weight:bold;text-transform:uppercase;color:#ccfbf1;line-height:1.25;margin-top:1px;">
-        ${escapeHtml(skpmAspek)}
+        ${escapeHtml(skpmAspek)}${
+          secondarySkasList.length > 0
+            ? ` &bull; SOKONGAN: ${escapeHtml(
+                secondarySkasList.map((s) => `${s.subStandardCode} (${s.standardGroup})`).join(', ')
+              )}`
+            : ''
+        }
       </div>
       <div style="font-size:9.5px;font-style:italic;color:#FDE047;line-height:1.25;margin-top:2px;">
         Standard Kualiti: &ldquo;${escapeHtml(skpmKualiti)}&rdquo;
@@ -427,9 +565,10 @@ export function buildSinglePageOprDriveHtml(params: SyncSchoolDriveParams & {
             <table style="width:100%;border-collapse:collapse;">
               <tr>
                 <td colspan="2" style="padding:1.5px 0 3px 0;border-bottom:1px dashed #cbd5e1;">
-                  <strong>Standard SKAS:</strong> ${escapeHtml(resolvedSkas.standardGroup)} &bull; <strong>${escapeHtml(resolvedSkas.subStandardCode)}</strong> &mdash; ${escapeHtml(resolvedSkas.subStandardTitle)}
+                  <strong>Standard SKAS (Utama):</strong> ${escapeHtml(resolvedSkas.standardGroup)} &bull; <strong>${escapeHtml(resolvedSkas.subStandardCode)}</strong> &mdash; ${escapeHtml(resolvedSkas.subStandardTitle)}
                 </td>
               </tr>
+              ${sokonganHtml}
               <tr>
                 <td style="width:50%;padding:2.5px 4px 1.5px 0;">
                   <strong>Tarikh:</strong> ${escapeHtml(params.tarikh)}
@@ -481,6 +620,7 @@ export function buildFallbackDriveHtml(params: {
   standardGroup?: string;
   subStandardCode?: string;
   subStandardTitle?: string;
+  standards?: SkasStandardItem[];
   driveTargetFolderPath?: string[];
   skpmBucket?: string;
   skpmCodeBadge?: string;
@@ -547,20 +687,35 @@ export async function syncDocumentToSchoolDrive(
 
     const isSuratLantikan = String(params.docKind || '').toUpperCase() === 'SURAT_LANTIKAN';
 
-    const resolvedSkas = resolveSkasSelection(
-      params.standardGroup || (isSuratLantikan ? 'Std 2' : params.skpmBucket),
-      params.subStandardCode ||
-        (isSuratLantikan
-          ? '2.1.1'
-          : params.skpmCodeBadge || params.skpmAspek || params.skpmStandard),
-      params.pillar
-    );
+    const {
+      primary: resolvedSkas,
+      resolvedList: resolvedSkasList,
+      standardsPayload,
+    } = resolveSkasStandardsList({
+      standards: params.standards,
+      standardGroup: params.standardGroup,
+      subStandardCode: params.subStandardCode,
+      subStandardTitle: params.subStandardTitle,
+      skpmBucket: params.skpmBucket,
+      skpmCodeBadge: params.skpmCodeBadge,
+      skpmAspek: params.skpmAspek,
+      skpmStandard: params.skpmStandard,
+      pillar: params.pillar,
+      isSuratLantikan,
+    });
 
-    const isOpr = String(params.docKind || '').toUpperCase() === 'OPR';
+    const docKindUpper = String(params.docKind || '').toUpperCase();
+    const isOpr = docKindUpper === 'OPR';
+    const isSkasCategorizedDoc =
+      isOpr ||
+      docKindUpper === 'SIJIL' ||
+      docKindUpper === 'JADUAL_GANTI' ||
+      docKindUpper === 'SLIP_RELIEF' ||
+      docKindUpper === 'RELIEF_MMI';
 
     const targetFolderName =
       params.targetFolderName?.trim() ||
-      (isOpr
+      (isSkasCategorizedDoc
         ? resolvedSkas.standardFolderName
         : resolveTargetDriveFolderName({
             docKind: params.docKind,
@@ -570,7 +725,7 @@ export async function syncDocumentToSchoolDrive(
             pillar: params.pillar,
           }));
 
-    const resolvedSkpmBucket = isOpr
+    const resolvedSkpmBucket = isSkasCategorizedDoc
       ? resolvedSkas.standardGroup
       : resolveCanonicalSkpmBucket(targetFolderName, params.standardGroup || params.skpmBucket);
 
@@ -588,6 +743,7 @@ export async function syncDocumentToSchoolDrive(
         standardGroup: resolvedSkas.standardGroup,
         subStandardCode: resolvedSkas.subStandardCode,
         subStandardTitle: resolvedSkas.subStandardTitle,
+        standards: standardsPayload,
         driveTargetFolderPath,
         skpmBucket: resolvedSkpmBucket,
       });
@@ -613,6 +769,7 @@ export async function syncDocumentToSchoolDrive(
           standardGroup: resolvedSkas.standardGroup,
           subStandardCode: resolvedSkas.subStandardCode,
           subStandardTitle: resolvedSkas.subStandardTitle,
+          standards: standardsPayload,
           driveTargetFolderPath,
           skpmBucket: resolvedSkpmBucket,
           skpmCodeBadge: params.skpmCodeBadge,
@@ -624,6 +781,8 @@ export async function syncDocumentToSchoolDrive(
       }
     }
 
+    const defaultLinkedPaths = resolvedSkasList.map((r) => r.driveTargetFolderPath.join(' / '));
+
     const payload = {
       token: secretToken,
       schoolCode: params.schoolCode || 'YCC3404',
@@ -632,14 +791,17 @@ export async function syncDocumentToSchoolDrive(
       targetFolderName,
       subFolderName: resolvedSkas.subStandardFolderName,
       driveTargetFolderPath,
-      // Uniform SKAS 3-field contract for all document kinds (OPR, MEMO, MINIT, SURAT_LANTIKAN)
+      // Uniform SKAS v3.0 multi-standard contract (up to 3 standards: Utama + 2 Sokongan)
+      standards: standardsPayload,
       standardGroup: resolvedSkas.standardGroup,
       subStandardCode: resolvedSkas.subStandardCode,
       subStandardTitle: resolvedSkas.subStandardTitle,
       skpmBucket: resolvedSkpmBucket,
       skpmCodeBadge:
         params.skpmCodeBadge ||
-        `${resolvedSkas.subStandardCode} — ${resolvedSkas.subStandardTitle}`,
+        (standardsPayload.length > 1
+          ? standardsPayload.map((s) => s.subStandardCode).join(' + ')
+          : `${resolvedSkas.subStandardCode} — ${resolvedSkas.subStandardTitle}`),
       skpmStandard: params.skpmStandard || resolvedSkas.standardFullTitle || targetFolderName,
       pillar: params.pillar || '',
       programTitle: params.programTitle || 'DOKUMEN RASMI SEKOLAH',
@@ -674,22 +836,29 @@ export async function syncDocumentToSchoolDrive(
         const returnedFolderUrl = parsed.folderUrl || parsed.url || '';
         const returnedFileUrl =
           parsed.fileUrl || parsed.pdfUrl || parsed.docUrl || returnedFolderUrl || '';
+        const returnedLinkedPaths: string[] =
+          Array.isArray(parsed.linkedPaths) && parsed.linkedPaths.length > 0
+            ? parsed.linkedPaths
+            : defaultLinkedPaths;
         return {
           success: true,
           folderUrl: returnedFolderUrl,
           fileUrl: returnedFileUrl,
           folderPath: returnedFolderPath,
+          linkedPaths: returnedLinkedPaths,
+          standards: standardsPayload,
           targetFolderName,
           driveTargetFolderPath,
           message:
             parsed.message ||
-            `Berjaya disegerakkan ke Google Drive Rasmi Sekolah (${returnedFolderPath}).`,
+            `Berjaya disegerakkan ke Google Drive Rasmi Sekolah (${returnedLinkedPaths.join(' | ')}).`,
         };
       }
       return {
         success: false,
         targetFolderName,
         driveTargetFolderPath,
+        standards: standardsPayload,
         error: parsed.error || parsed.message || 'Gagal menyegerakkan dokumen ke Google Drive Sekolah.',
       };
     }
@@ -698,9 +867,11 @@ export async function syncDocumentToSchoolDrive(
       return {
         success: true,
         folderPath: formattedFolderPath,
+        linkedPaths: defaultLinkedPaths,
+        standards: standardsPayload,
         targetFolderName,
         driveTargetFolderPath,
-        message: `Permintaan dihantar ke Google Drive Rasmi Sekolah (${formattedFolderPath}).`,
+        message: `Permintaan dihantar ke Google Drive Rasmi Sekolah (${defaultLinkedPaths.join(' | ')}).`,
       };
     }
 
@@ -708,6 +879,7 @@ export async function syncDocumentToSchoolDrive(
       success: false,
       targetFolderName,
       driveTargetFolderPath,
+      standards: standardsPayload,
       error: `Ralat sambungan Drive (${response.status})`,
     };
   } catch (err: any) {
@@ -731,6 +903,13 @@ export async function testSchoolDriveConnection(options?: {
     standardGroup: 'Std 1',
     subStandardCode: '1.1.1',
     subStandardTitle: 'PGB menetapkan hala tuju sekolah secara terancang',
+    standards: [
+      {
+        standardGroup: 'Std 1',
+        subStandardCode: '1.1.1',
+        subStandardTitle: 'PGB menetapkan hala tuju sekolah secara terancang',
+      },
+    ],
     skpmBucket: 'Std 1',
     skpmCodeBadge: '1.1.1 — PGB menetapkan hala tuju sekolah secara terancang',
     skpmStandard: 'STANDARD 1: KEPEMIMPINAN',

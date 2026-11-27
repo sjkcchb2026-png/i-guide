@@ -345,7 +345,83 @@ export function buildTeacherIdentifierIndex(
 export type ReliefAssignmentMode =
   | 'TUKAR_WAKTU_KELAS_SAMA'
   | 'GANTI_BIASA'
-  | 'GANTI_PRASEKOLAH';
+  | 'GANTI_PRASEKOLAH'
+  | 'GABUNG_KELAS_PJ'
+  | 'TIADA_GANTI';
+
+/**
+ * SKAS 3.1.3.1 Relief Subject Filtering Rules:
+ * - Only BC, BM, BI, SN, AM, MT, RBT, SEJ receive relief teacher assignments
+ * - PJ uses automatic class merging (GABUNG KELAS PJ) when another class has PJ in the same period
+ * - PM, PK, PSV, MZ, Klinik (and KLIBM, KLIBI, KLIBC, KLIMT) are automatically marked as "Tiada Ganti"
+ */
+export const RELIEF_ELIGIBLE_CORE_SUBJECTS = new Set([
+  'BC',
+  'BM',
+  'BI',
+  'SN',
+  'AM',
+  'MT',
+  'RBT',
+  'SEJ',
+]);
+
+export const NO_RELIEF_AUTO_SUBJECTS = new Set([
+  'PM',
+  'PAI',
+  'PM/PAI',
+  'PK',
+  'PSV',
+  'MZ',
+  'KLINIK',
+  'KLIBM',
+  'KLIBI',
+  'KLIBC',
+  'KLIMT',
+  'TASMIK',
+  'MEMBACA',
+  'PKAR',
+]);
+
+export function classifySubjectReliefPolicy(
+  subjectCode: string,
+  slotId?: string
+): 'CORE_RELIEF' | 'PJ_MERGE' | 'TIADA_GANTI' {
+  const upperSubj = (subjectCode || '').trim().toUpperCase();
+  const upperSlot = (slotId || '').trim().toUpperCase();
+
+  // Waktu 11 Klinik (12:40-13:10) or any KLINIK subject -> Tiada Ganti
+  if (
+    upperSlot === 'W11' ||
+    upperSubj === 'KLINIK' ||
+    upperSubj.startsWith('KLI') ||
+    NO_RELIEF_AUTO_SUBJECTS.has(upperSubj)
+  ) {
+    return 'TIADA_GANTI';
+  }
+  if (upperSubj === 'PJ') {
+    return 'PJ_MERGE';
+  }
+  if (RELIEF_ELIGIBLE_CORE_SUBJECTS.has(upperSubj)) {
+    return 'CORE_RELIEF';
+  }
+  return 'CORE_RELIEF';
+}
+
+export function isPrincipalTeacherEntry(
+  teacher: TeacherDirectoryEntry | StaffDirectoryRecord
+): boolean {
+  const code = (teacher.code || '').trim().toUpperCase();
+  const name = ((teacher as any).name || (teacher as any).fullName || '').trim().toUpperCase();
+  const pos = ((teacher as any).position || '').trim().toUpperCase();
+  const role = ((teacher as any).role || (teacher as any).category || '').trim().toUpperCase();
+
+  if (code === 'TYM' || code === 'GB') return true;
+  if (pos === 'GB' || pos === 'GURU BESAR' || pos === 'PRINCIPAL') return true;
+  if (role === 'PRINCIPAL' || role === 'GURU_BESAR' || role === 'GURU BESAR') return true;
+  if (name.includes('TEO YANG MING') || name.includes('GURU BESAR')) return true;
+  return false;
+}
 
 export interface AbsenceSyncSourceRecord {
   id?: string;
@@ -394,6 +470,8 @@ export interface ReliefCandidateOption {
   projectedDayLoad: number;
   assignedReliefCount: number;
   isWithinEightPeriodCap: boolean;
+  isPrincipal?: boolean;
+  isSameSubjectTeacher?: boolean;
   isSameClassTeacher?: boolean;
   sameClassSubjects?: string[];
   reliefMode?: ReliefAssignmentMode;
@@ -407,7 +485,7 @@ export interface AutoReliefSlotItem {
   day: DayOfWeek;
   slotId: string;
   slotLabel: string;
-  timeLabel: string; // e.g. '07:30-08:00'
+  timeLabel: string; // e.g. '07:10-07:40'
   startMinutes: number;
   endMinutes: number;
   periodLength: number;
@@ -427,6 +505,10 @@ export interface AutoReliefSlotItem {
   reliefMode: ReliefAssignmentMode;
   reliefModeLabel: string;
   requiresRepayment: boolean;
+  mergedWithClassLabel?: string; // e.g. 'Tahun 2' for GABUNG KELAS PJ
+  mergedWithTeacherCode?: string;
+  mergedWithTeacherName?: string;
+  isPrincipalFallbackUsed?: boolean;
   substituteTeachingSubjectCode?: string; // On absentDate, Teacher B teaches Teacher B's subject (for Tukar Waktu)
   substituteTeachingSubjectName?: string;
   repaymentDate?: string; // 'YYYY-MM-DD'
@@ -456,6 +538,9 @@ export interface AutoReliefPlan {
     sameClassSwapCount: number;
     standardOneWayCount: number;
     prasekolahReliefCount: number;
+    gabungKelasPjCount: number;
+    tiadaGantiCount: number;
+    principalFallbackCount: number;
   };
 }
 
@@ -1442,16 +1527,79 @@ export function generateAutoReliefPlan(params: {
     return undefined;
   };
 
+  // Build map of subjects taught by each teacher across the school (for same-subject priority tie-breaking)
+  const subjectsByTeacher = new Map<string, Set<string>>();
+  [1, 2, 3, 4, 5, 6].forEach((g) => {
+    const classMap = teachersByGrade[g];
+    if (!classMap) return;
+    classMap.forEach((subjSet, tCode) => {
+      if (!subjectsByTeacher.has(tCode)) {
+        subjectsByTeacher.set(tCode, new Set());
+      }
+      subjSet.forEach((s) => subjectsByTeacher.get(tCode)!.add(s.toUpperCase()));
+    });
+  });
+
+  /**
+   * Finds another mainstream class (Tahun 1..6) having PJ at the exact same slot or overlapping clock interval
+   * whose PJ teacher is present today, to create a `GABUNG KELAS PJ` assignment without occupying a free teacher.
+   */
+  const findPartnerClassForPjMerge = (lesson: RawFlaggedLesson): {
+    partnerGrade: number;
+    partnerClassLabel: string;
+    partnerTeacherCode: string;
+    partnerTeacherName: string;
+  } | null => {
+    for (const otherGrade of [1, 2, 3, 4, 5, 6]) {
+      if (otherGrade === lesson.grade) continue;
+      const otherSlots = getGradeDaySlots(otherGrade, day, academicYear);
+      for (const gs of otherSlots) {
+        if (gs.isRecess) continue;
+        const sameSlotId = gs.slotId.toUpperCase() === lesson.slotId.toUpperCase();
+        const timeOverlaps = checkIntervalOverlap(
+          lesson.startMinutes,
+          lesson.endMinutes,
+          gs.startMinutes,
+          gs.endMinutes
+        );
+        if (!sameSlotId && !timeOverlaps) continue;
+
+        const cell = schedule[otherGrade]?.[day]?.[gs.slotId];
+        if (!cell || (cell.subjectCode || '').trim().toUpperCase() !== 'PJ') continue;
+
+        const tCodes = extractCellCanonicalTeachers(cell);
+        const presentTeacher = tCodes.find((tc) => !absentSet.has(tc.toUpperCase()));
+        const partnerCode = presentTeacher || tCodes[0] || '';
+        const partnerName = partnerCode ? teacherNameMap.get(partnerCode) || partnerCode : 'Guru PJ';
+        return {
+          partnerGrade: otherGrade,
+          partnerClassLabel: `Tahun ${otherGrade}`,
+          partnerTeacherCode: partnerCode,
+          partnerTeacherName: partnerName,
+        };
+      }
+    }
+    return null;
+  };
+
   const resultSlots: AutoReliefSlotItem[] = flaggedLessons.map((lesson) => {
     const primaryAbsentCode = lesson.absentCodes[0] || '';
     const primaryAbsentName = teacherNameMap.get(primaryAbsentCode) || primaryAbsentCode;
+    const upperSubj = (lesson.subjectCode || '').trim().toUpperCase();
+
+    const policy = lesson.isPrasekolah
+      ? 'CORE_RELIEF'
+      : classifySubjectReliefPolicy(upperSubj, lesson.slotId);
+
     const isSwappableMainstreamLesson =
       !lesson.isPrasekolah &&
       !lesson.isPKAR &&
       !lesson.isMembaca &&
+      policy === 'CORE_RELIEF' &&
       lesson.grade >= 1 &&
       lesson.grade <= 6 &&
-      lesson.slotId !== 'TASMIK';
+      lesson.slotId !== 'TASMIK' &&
+      lesson.slotId !== 'W11';
 
     const classTeachersMap = teachersByGrade[lesson.grade] || new Map<string, Set<string>>();
     const customRepayDate = repaymentDateOverrides[lesson.slotKey];
@@ -1473,13 +1621,25 @@ export function generateAutoReliefPlan(params: {
       return true;
     };
 
-    const freeCandidates: ReliefCandidateOption[] = teacherMapping.list
+    // Build all free candidates (including Guru Besar so manual override dropdown or >= 9 fallback can use them)
+    const allFreeCandidates: ReliefCandidateOption[] = teacherMapping.list
       .filter((t) => isTeacherFreeAtSlot(t.code))
       .map((t) => {
         const base = Math.round((baseLoadsByTeacher[t.code] || 0) * 10) / 10;
         const relBefore = Math.round((extraReliefLoad[t.code] || 0) * 10) / 10;
-        const projected = Math.round((base + relBefore + lesson.periodLength) * 10) / 10;
+        const currentTotal = Math.round((base + relBefore) * 10) / 10;
+        const projected = Math.round((currentTotal + lesson.periodLength) * 10) / 10;
+        // Relief engine allows consecutive 5 periods and up to 9-10 periods when needed
         const withinCap = projected <= 8.0 + 1e-6;
+        const isPrincipal = isPrincipalTeacherEntry(t);
+
+        const teacherSubjects = subjectsByTeacher.get(t.code);
+        const isSameSubjectTeacher = Boolean(
+          teacherSubjects &&
+            (teacherSubjects.has(upperSubj) ||
+              (upperSubj === 'SN' && teacherSubjects.has('AM')) ||
+              (upperSubj === 'AM' && teacherSubjects.has('SN')))
+        );
 
         const sameClassSubjSet = classTeachersMap.get(t.code);
         const isSameClassTeacher =
@@ -1488,7 +1648,7 @@ export function generateAutoReliefPlan(params: {
           !lesson.absentCodes.some((ac) => ac.toUpperCase() === t.code.toUpperCase());
 
         let repaymentInfo: RepaymentReturnSlotInfo | undefined;
-        if (isSameClassTeacher && withinCap && primaryAbsentCode) {
+        if (isSameClassTeacher && withinCap && primaryAbsentCode && !isPrincipal) {
           repaymentInfo = findRepaymentSlotForSwap({
             grade: lesson.grade,
             absentCode: primaryAbsentCode,
@@ -1515,45 +1675,241 @@ export function generateAutoReliefPlan(params: {
           projectedDayLoad: projected,
           assignedReliefCount: extraReliefCount[t.code] || 0,
           isWithinEightPeriodCap: withinCap,
+          isPrincipal,
+          isSameSubjectTeacher,
           isSameClassTeacher,
           sameClassSubjects: sameClassSubjSet ? Array.from(sameClassSubjSet) : [],
           reliefMode: candidateMode,
           repaymentInfo,
         };
-      })
-      .sort((a, b) => {
-        // 1. Prefer staying within <= 8.0 daily cap
-        if (a.isWithinEightPeriodCap !== b.isWithinEightPeriodCap) {
-          return a.isWithinEightPeriodCap ? -1 : 1;
-        }
-        // 2. PRIORITY 1: For mainstream classes, prioritize Same-Class Lesson Swap (TUKAR_WAKTU_KELAS_SAMA)
-        const aIsSwap = a.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA';
-        const bIsSwap = b.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA';
-        if (aIsSwap !== bIsSwap) {
-          return aIsSwap ? -1 : 1;
-        }
-        // If both are Same-Class Swap candidates, prefer earliest repaymentDate, then lightest daily load
-        if (aIsSwap && bIsSwap && a.repaymentInfo && b.repaymentInfo) {
-          if (a.repaymentInfo.repaymentDate !== b.repaymentInfo.repaymentDate) {
-            return a.repaymentInfo.repaymentDate.localeCompare(b.repaymentInfo.repaymentDate);
-          }
-        }
-        // 3. Lightest current daily workload (base + relief so far) ascending
-        const aCurrent = a.baseDayLoad + a.assignedReliefLoadBefore;
-        const bCurrent = b.baseDayLoad + b.assignedReliefLoadBefore;
-        if (Math.abs(aCurrent - bCurrent) > 1e-6) {
-          return aCurrent - bCurrent;
-        }
-        // 4. Fewest relief periods assigned today ascending
-        if (a.assignedReliefCount !== b.assignedReliefCount) {
-          return a.assignedReliefCount - b.assignedReliefCount;
-        }
-        // 5. Deterministic tie-break by roster number
-        return a.num - b.num;
       });
 
-    const recommendedCode = freeCandidates[0]?.code || '';
+    // Check Guru Besar (Principal) Exemption & >= 9 Periods Fallback Rule:
+    // Exclude Guru Besar by default; ONLY unlock Guru Besar when ALL available non-principal teachers at this slot
+    // have a current daily total load (baseDayLoad + assignedReliefLoadBefore) >= 9 periods (9 or 10 periods),
+    // or when no other non-principal teacher is free.
+    const nonPrincipalCandidates = allFreeCandidates.filter((c) => !c.isPrincipal);
+    const allNonPrincipalsAtLeastNine =
+      nonPrincipalCandidates.length === 0 ||
+      nonPrincipalCandidates.every(
+        (c) => c.baseDayLoad + c.assignedReliefLoadBefore >= 9.0 - 1e-6
+      );
+
+    const freeCandidates = [...allFreeCandidates].sort((a, b) => {
+      // 1. Guru Besar exemption protection: unless all non-principal free teachers are >= 9 periods today, put Guru Besar last
+      if (!allNonPrincipalsAtLeastNine && Boolean(a.isPrincipal) !== Boolean(b.isPrincipal)) {
+        return a.isPrincipal ? 1 : -1;
+      }
+
+      // 2. Lowest real-time daily total periods (baseDayLoad + assignedReliefLoadBefore) ascending
+      const aCurrent = a.baseDayLoad + a.assignedReliefLoadBefore;
+      const bCurrent = b.baseDayLoad + b.assignedReliefLoadBefore;
+      if (Math.abs(aCurrent - bCurrent) > 1e-6) {
+        return aCurrent - bCurrent;
+      }
+
+      // 3. When tied on total daily periods, prioritize teacher who teaches the same subject (同节数时优先同科任老师)
+      if (Boolean(a.isSameSubjectTeacher) !== Boolean(b.isSameSubjectTeacher)) {
+        return a.isSameSubjectTeacher ? -1 : 1;
+      }
+
+      // 4. Next tie-breaker: Same-Class teacher or lesson swap capability
+      const aIsSwap = a.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA';
+      const bIsSwap = b.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA';
+      if (aIsSwap !== bIsSwap) {
+        return aIsSwap ? -1 : 1;
+      }
+      if (Boolean(a.isSameClassTeacher) !== Boolean(b.isSameClassTeacher)) {
+        return a.isSameClassTeacher ? -1 : 1;
+      }
+
+      // 5. Fewest relief periods assigned today ascending
+      if (a.assignedReliefCount !== b.assignedReliefCount) {
+        return a.assignedReliefCount - b.assignedReliefCount;
+      }
+
+      // 6. Deterministic tie-break by roster number
+      return a.num - b.num;
+    });
+
     const overrideCode = manualOverrides[lesson.slotKey];
+
+    // =========================================================================
+    // CASE A: Subject is PM, PK, PSV, MZ, Klinik (W11) -> Auto mark TIADA GANTI
+    // =========================================================================
+    if (policy === 'TIADA_GANTI' && !overrideCode) {
+      const tiadaGantiLabel = 'Tiada Ganti (Dikecualikan Mengikut Polisi Subjek / Klinik)';
+      return {
+        slotKey: lesson.slotKey,
+        grade: lesson.grade,
+        classLabel: lesson.classLabel,
+        day,
+        slotId: lesson.slotId,
+        slotLabel: lesson.slotLabel,
+        timeLabel: lesson.timeLabel,
+        startMinutes: lesson.startMinutes,
+        endMinutes: lesson.endMinutes,
+        periodLength: lesson.periodLength,
+        isYear1ShiftedMorning: lesson.isYear1ShiftedMorning,
+        isPKAR: lesson.isPKAR,
+        isMembaca: lesson.isMembaca,
+        isPrasekolah: lesson.isPrasekolah,
+        ppmName: lesson.ppmName,
+        subjectCode: lesson.subjectCode,
+        subjectName: lesson.subjectName,
+        absentTeacherCodes: lesson.absentCodes,
+        absentTeacherNames: lesson.absentCodes.map((c) => teacherNameMap.get(c) || c),
+        presentCoTeacherCodes: lesson.presentCodes,
+        recommendedSubstituteCode: 'TIADA_GANTI',
+        assignedSubstituteCode: 'TIADA_GANTI',
+        assignedSubstituteName: 'Tiada Ganti',
+        reliefMode: 'TIADA_GANTI',
+        reliefModeLabel: tiadaGantiLabel,
+        requiresRepayment: false,
+        swapSummaryText: `${lesson.subjectCode} (${lesson.timeLabel}) — Tiada Ganti`,
+        whatsappNotificationText:
+          `*[TIADA GANTI — ${lesson.classLabel.toUpperCase()}]*\n` +
+          `• Tarikh: ${dateStr} (${day}) | ${lesson.slotLabel} (${lesson.timeLabel})\n` +
+          `• Subjek: ${lesson.subjectCode} (${lesson.subjectName})\n` +
+          `• Status: *Tiada Ganti*`,
+        recommendedCandidates: freeCandidates,
+      };
+    }
+
+    // =========================================================================
+    // CASE B: Subject is PJ -> Auto match GABUNG KELAS PJ (does not occupy free teacher)
+    // =========================================================================
+    if (policy === 'PJ_MERGE' && !overrideCode) {
+      const pjPartner = findPartnerClassForPjMerge(lesson);
+      const mergedClassLabel = pjPartner
+        ? pjPartner.partnerClassLabel
+        : lesson.grade < 6
+        ? `Tahun ${lesson.grade + 1}`
+        : 'Tahun 5';
+      const gabungText = `GABUNG KELAS PJ (Gabung dengan ${mergedClassLabel})`;
+
+      return {
+        slotKey: lesson.slotKey,
+        grade: lesson.grade,
+        classLabel: lesson.classLabel,
+        day,
+        slotId: lesson.slotId,
+        slotLabel: lesson.slotLabel,
+        timeLabel: lesson.timeLabel,
+        startMinutes: lesson.startMinutes,
+        endMinutes: lesson.endMinutes,
+        periodLength: lesson.periodLength,
+        isYear1ShiftedMorning: lesson.isYear1ShiftedMorning,
+        isPKAR: lesson.isPKAR,
+        isMembaca: lesson.isMembaca,
+        isPrasekolah: lesson.isPrasekolah,
+        ppmName: lesson.ppmName,
+        subjectCode: lesson.subjectCode,
+        subjectName: lesson.subjectName,
+        absentTeacherCodes: lesson.absentCodes,
+        absentTeacherNames: lesson.absentCodes.map((c) => teacherNameMap.get(c) || c),
+        presentCoTeacherCodes: lesson.presentCodes,
+        recommendedSubstituteCode: 'GABUNG_KELAS_PJ',
+        assignedSubstituteCode: 'GABUNG_KELAS_PJ',
+        assignedSubstituteName: gabungText,
+        reliefMode: 'GABUNG_KELAS_PJ',
+        reliefModeLabel: gabungText,
+        requiresRepayment: false,
+        mergedWithClassLabel: mergedClassLabel,
+        mergedWithTeacherCode: pjPartner?.partnerTeacherCode,
+        mergedWithTeacherName: pjPartner?.partnerTeacherName,
+        swapSummaryText: `${gabungText}${
+          pjPartner?.partnerTeacherCode ? ` — Dikendalikan bersama ${pjPartner.partnerTeacherCode}` : ''
+        } (Tidak menggunakan guru bilik guru)`,
+        whatsappNotificationText:
+          `*[GABUNG KELAS PJ — ${lesson.classLabel.toUpperCase()}]*\n` +
+          `• Tarikh: ${dateStr} (${day}) | ${lesson.slotLabel} (${lesson.timeLabel})\n` +
+          `• Guru PJ Asal Tidak Hadir: ${primaryAbsentName} (${primaryAbsentCode})\n` +
+          `• Tindakan: *${gabungText}*${
+            pjPartner?.partnerTeacherName
+              ? ` bersama *${pjPartner.partnerTeacherName} (${pjPartner.partnerTeacherCode})*`
+              : ''
+          }`,
+        recommendedCandidates: freeCandidates,
+      };
+    }
+
+    // =========================================================================
+    // CASE C: Core Academic Subject (BC, BM, BI, SN, AM, MT, RBT, SEJ) or Manual Override
+    // =========================================================================
+    if (overrideCode === 'TIADA_GANTI') {
+      return {
+        slotKey: lesson.slotKey,
+        grade: lesson.grade,
+        classLabel: lesson.classLabel,
+        day,
+        slotId: lesson.slotId,
+        slotLabel: lesson.slotLabel,
+        timeLabel: lesson.timeLabel,
+        startMinutes: lesson.startMinutes,
+        endMinutes: lesson.endMinutes,
+        periodLength: lesson.periodLength,
+        isYear1ShiftedMorning: lesson.isYear1ShiftedMorning,
+        isPKAR: lesson.isPKAR,
+        isMembaca: lesson.isMembaca,
+        isPrasekolah: lesson.isPrasekolah,
+        ppmName: lesson.ppmName,
+        subjectCode: lesson.subjectCode,
+        subjectName: lesson.subjectName,
+        absentTeacherCodes: lesson.absentCodes,
+        absentTeacherNames: lesson.absentCodes.map((c) => teacherNameMap.get(c) || c),
+        presentCoTeacherCodes: lesson.presentCodes,
+        recommendedSubstituteCode: 'TIADA_GANTI',
+        assignedSubstituteCode: 'TIADA_GANTI',
+        assignedSubstituteName: 'Tiada Ganti',
+        reliefMode: 'TIADA_GANTI',
+        reliefModeLabel: 'Tiada Ganti (Pilihan Manual)',
+        requiresRepayment: false,
+        swapSummaryText: 'Tiada Ganti',
+        whatsappNotificationText: `• [${lesson.classLabel}] ${lesson.slotLabel}: Tiada Ganti`,
+        recommendedCandidates: freeCandidates,
+      };
+    }
+
+    if (overrideCode === 'GABUNG_KELAS_PJ') {
+      const pjPartner = findPartnerClassForPjMerge(lesson);
+      const mergedClassLabel = pjPartner ? pjPartner.partnerClassLabel : 'Kelas PJ Lain';
+      const gabungText = `GABUNG KELAS PJ (Gabung dengan ${mergedClassLabel})`;
+      return {
+        slotKey: lesson.slotKey,
+        grade: lesson.grade,
+        classLabel: lesson.classLabel,
+        day,
+        slotId: lesson.slotId,
+        slotLabel: lesson.slotLabel,
+        timeLabel: lesson.timeLabel,
+        startMinutes: lesson.startMinutes,
+        endMinutes: lesson.endMinutes,
+        periodLength: lesson.periodLength,
+        isYear1ShiftedMorning: lesson.isYear1ShiftedMorning,
+        isPKAR: lesson.isPKAR,
+        isMembaca: lesson.isMembaca,
+        isPrasekolah: lesson.isPrasekolah,
+        ppmName: lesson.ppmName,
+        subjectCode: lesson.subjectCode,
+        subjectName: lesson.subjectName,
+        absentTeacherCodes: lesson.absentCodes,
+        absentTeacherNames: lesson.absentCodes.map((c) => teacherNameMap.get(c) || c),
+        presentCoTeacherCodes: lesson.presentCodes,
+        recommendedSubstituteCode: 'GABUNG_KELAS_PJ',
+        assignedSubstituteCode: 'GABUNG_KELAS_PJ',
+        assignedSubstituteName: gabungText,
+        reliefMode: 'GABUNG_KELAS_PJ',
+        reliefModeLabel: gabungText,
+        requiresRepayment: false,
+        mergedWithClassLabel: mergedClassLabel,
+        swapSummaryText: gabungText,
+        whatsappNotificationText: `• [${lesson.classLabel}] ${lesson.slotLabel}: ${gabungText}`,
+        recommendedCandidates: freeCandidates,
+      };
+    }
+
+    const recommendedCode = freeCandidates[0]?.code || '';
     const chosenCode =
       overrideCode && freeCandidates.some((c) => c.code === overrideCode)
         ? overrideCode
@@ -1561,6 +1917,9 @@ export function generateAutoReliefPlan(params: {
 
     const chosenCandidate = freeCandidates.find((c) => c.code === chosenCode);
     const chosenName = chosenCandidate?.name || teacherNameMap.get(chosenCode) || chosenCode;
+    const isPrincipalFallbackUsed = Boolean(
+      chosenCandidate?.isPrincipal && allNonPrincipalsAtLeastNine
+    );
 
     // Finalize reservation for the chosen candidate
     let finalRepaymentInfo: RepaymentReturnSlotInfo | undefined;
@@ -1584,6 +1943,7 @@ export function generateAutoReliefPlan(params: {
         !lesson.isPrasekolah &&
         chosenCandidate?.isSameClassTeacher &&
         chosenCandidate.isWithinEightPeriodCap &&
+        !chosenCandidate.isPrincipal &&
         primaryAbsentCode
       ) {
         finalRepaymentInfo = findRepaymentSlotForSwap({
@@ -1606,6 +1966,10 @@ export function generateAutoReliefPlan(params: {
         ? 'Tukar Waktu Kelas Sama'
         : finalReliefMode === 'GANTI_PRASEKOLAH'
         ? 'Ganti Prasekolah (Tidak Perlu Pulang Balik)'
+        : isPrincipalFallbackUsed
+        ? 'Ganti Guru Besar (Semua Guru Lain ≥ 9 Waktu)'
+        : chosenCandidate?.isSameSubjectTeacher
+        ? `Ganti Biasa (Guru Subjek ${lesson.subjectCode})`
         : 'Ganti Biasa (Tidak Perlu Pulang Balik)';
 
     const requiresRepayment = finalReliefMode === 'TUKAR_WAKTU_KELAS_SAMA';
@@ -1647,7 +2011,7 @@ export function generateAutoReliefPlan(params: {
           `• Kelas: ${lesson.classLabel} | Subjek: ${lesson.subjectCode} (${lesson.subjectName})\n` +
           `• Guru Tidak Hadir: ${primaryAbsentName} (${primaryAbsentCode})\n` +
           `• Guru Ganti Ditugaskan: *${chosenName} (${chosenCode})*\n` +
-          `• Status: *Ganti Biasa (Tidak Perlu Pulang Balik)*`;
+          `• Status: *${reliefModeLabel}*`;
 
     return {
       slotKey: lesson.slotKey,
@@ -1676,6 +2040,7 @@ export function generateAutoReliefPlan(params: {
       reliefMode: finalReliefMode,
       reliefModeLabel,
       requiresRepayment,
+      isPrincipalFallbackUsed,
       substituteTeachingSubjectCode,
       substituteTeachingSubjectName,
       repaymentDate: finalRepaymentInfo?.repaymentDate,
@@ -1725,6 +2090,13 @@ export function generateAutoReliefPlan(params: {
   const standardOneWayCount = resultSlots.filter(
     (s) => s.reliefMode === 'GANTI_BIASA'
   ).length;
+  const gabungKelasPjCount = resultSlots.filter(
+    (s) => s.reliefMode === 'GABUNG_KELAS_PJ'
+  ).length;
+  const tiadaGantiCount = resultSlots.filter(
+    (s) => s.reliefMode === 'TIADA_GANTI'
+  ).length;
+  const principalFallbackCount = resultSlots.filter((s) => Boolean(s.isPrincipalFallbackUsed)).length;
 
   return {
     dateStr,
@@ -1741,6 +2113,9 @@ export function generateAutoReliefPlan(params: {
       sameClassSwapCount,
       standardOneWayCount,
       prasekolahReliefCount,
+      gabungKelasPjCount,
+      tiadaGantiCount,
+      principalFallbackCount,
     },
   };
 }
@@ -1753,7 +2128,7 @@ export function buildFullDayWhatsAppReliefText(
   schoolName = 'SJK (C) CHUNG HUA BALINGIAN'
 ): string {
   const lines: string[] = [
-    `*📌 JADUAL GURU GANTI & TUKAR WAKTU (${schoolName.toUpperCase()})*`,
+    `*📌 JADUAL GURU GANTI & SLIP RELIEF PINTAR (${schoolName.toUpperCase()})*`,
     `📅 Tarikh: *${plan.dateStr} (${plan.day})*`,
     `👥 Guru Tidak Hadir: ${
       plan.absentTeachers.map((t) => `${t.teacherName} (${t.teacherCode})`).join(', ') || 'Tiada'
@@ -1766,7 +2141,21 @@ export function buildFullDayWhatsAppReliefText(
     const subName = slot.assignedSubstituteName || subCode;
     const absCode = slot.absentTeacherCodes.join('/');
 
-    if (slot.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA' && slot.repaymentDate) {
+    if (slot.reliefMode === 'TIADA_GANTI') {
+      lines.push(
+        `*${idx + 1}. [${slot.classLabel}] ${slot.slotLabel} (${slot.timeLabel})* — ⚪ *TIADA GANTI*`
+      );
+      lines.push(
+        `   • Subjek Asal: ${slot.subjectCode} (${absCode}) → *Tiada Ganti*`
+      );
+    } else if (slot.reliefMode === 'GABUNG_KELAS_PJ') {
+      lines.push(
+        `*${idx + 1}. [${slot.classLabel}] ${slot.slotLabel} (${slot.timeLabel})* — 🏃 *${slot.reliefModeLabel}*`
+      );
+      lines.push(
+        `   • Subjek: PJ (${absCode}) → *${slot.reliefModeLabel}*`
+      );
+    } else if (slot.reliefMode === 'TUKAR_WAKTU_KELAS_SAMA' && slot.repaymentDate) {
       lines.push(
         `*${idx + 1}. [${slot.classLabel}] ${slot.slotLabel} (${slot.timeLabel})* — 🔄 *TUKAR WAKTU KELAS SAMA*`
       );
@@ -1780,15 +2169,13 @@ export function buildFullDayWhatsAppReliefText(
       lines.push(
         `*${idx + 1}. [${slot.classLabel}] ${slot.slotLabel} (${slot.timeLabel})* — 🧸 *GANTI PRASEKOLAH (TIDAK PERLU PULANG BALIK)*`
       );
-      lines.push(
-        `   • Aktiviti: ${slot.subjectName}`
-      );
+      lines.push(`   • Aktiviti: ${slot.subjectName}`);
       lines.push(
         `   • Guru Ganti: *${subName} (${subCode})* (Ganti ${absCode} — Tiada Pulang Balik)`
       );
     } else {
       lines.push(
-        `*${idx + 1}. [${slot.classLabel}] ${slot.slotLabel} (${slot.timeLabel})* — ✅ *GANTI BIASA (TIDAK PERLU PULANG BALIK)*`
+        `*${idx + 1}. [${slot.classLabel}] ${slot.slotLabel} (${slot.timeLabel})* — ✅ *GANTI BIASA*`
       );
       lines.push(
         `   • Subjek Asal: ${slot.subjectCode} (${absCode}) → Guru Ganti: *${subName} (${subCode})*`
@@ -1798,8 +2185,9 @@ export function buildFullDayWhatsAppReliefText(
 
   lines.push(`----------------------------------------`);
   lines.push(
-    `📊 Ringkasan: ${plan.summary.sameClassSwapCount} Tukar Waktu Kelas Sama | ${plan.summary.standardOneWayCount} Ganti Biasa | ${plan.summary.prasekolahReliefCount} Ganti Prasekolah`
+    `📊 Ringkasan: ${plan.summary.standardOneWayCount} Ganti Biasa | ${plan.summary.sameClassSwapCount} Tukar Waktu | ${plan.summary.gabungKelasPjCount} Gabung Kelas PJ | ${plan.summary.tiadaGantiCount} Tiada Ganti`
   );
 
   return lines.join('\n');
 }
+

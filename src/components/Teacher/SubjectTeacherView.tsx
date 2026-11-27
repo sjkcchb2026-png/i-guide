@@ -32,6 +32,7 @@ import { SUBJECTS_BY_YEAR, ACADEMIC_YEARS, DEFAULT_ACADEMIC_YEAR, CLASSES } from
 import { useSchoolTenant } from '../../contexts/SchoolTenantContext';
 import { belongsToSchool, scopedDocId } from '../../utils/schoolTenant';
 import { useAcademicAccessControl } from '../../utils/academicAccessControl';
+import { isPrasekolahStudentRecord } from '../../utils/prasekolahAssessmentHelper';
 import SchoolLogo from '../SchoolLogo';
 import { StudentProfileModal } from '../Student/StudentProfileModal';
 import { Save, Search, Table as TableIcon, FileEdit, CheckCircle, AlertTriangle, Users, BarChart3, PieChart as PieChartIcon, TrendingUp, BookOpen, ShieldCheck, Lock } from 'lucide-react';
@@ -189,7 +190,7 @@ export default function SubjectTeacherView({ profile, initialAssessmentType = 'P
       );
       const snapshot = await getDocs(q);
       const list = snapshot.docs
-        .filter(d => belongsToSchool(d.data(), activeSchoolCode))
+        .filter(d => belongsToSchool(d.data(), activeSchoolCode) && !isPrasekolahStudentRecord(d.data()))
         .map(doc => ({ id: doc.id, ...doc.data() as any } as Student));
       list.sort((a, b) => a.name.localeCompare(b.name));
       setStudents(list);

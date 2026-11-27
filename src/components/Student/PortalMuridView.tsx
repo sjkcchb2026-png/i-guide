@@ -24,8 +24,18 @@ import {
   Info,
   Medal,
   Star,
+  Printer,
 } from 'lucide-react';
 import { getRuntimeActiveSchoolCode, belongsToSchool } from '../../utils/schoolTenant';
+import {
+  PrasekolahAssessmentDoc,
+  isPrasekolahStudentRecord,
+  resolvePrasekolahStudentAge,
+  normalizePrasekolahGrade,
+  normalizePrasekolahTerm,
+  printPrasekolahSlipsA4,
+} from '../../utils/prasekolahAssessmentHelper';
+import { PrasekolahSlipCard } from '../Academic/PrasekolahSlipCard';
 
 interface PortalMuridViewProps {
   currentUser: UserProfile;
@@ -172,6 +182,7 @@ export const PortalMuridView: React.FC<PortalMuridViewProps> = ({
   const [studentMasterRecord, setStudentMasterRecord] = useState<any | null>(null);
   const [enrolledRecords, setEnrolledRecords] = useState<any[]>([]);
   const [pbdResults, setPbdResults] = useState<any[]>([]);
+  const [prasekolahResults, setPrasekolahResults] = useState<any[]>([]);
   const [kokoGroups, setKokoGroups] = useState<KokoGroup[]>([]);
   const [kokoMemberships, setKokoMemberships] = useState<KokoMembership[]>([]);
   const [kokoCommittees, setKokoCommittees] = useState<any[]>([]);
@@ -375,6 +386,18 @@ export const PortalMuridView: React.FC<PortalMuridViewProps> = ({
       (err) => console.warn('PortalMurid koko_activities listener:', err)
     );
 
+    const unsubPrasekolah = onSnapshot(
+      collection(db, 'prasekolah_assessments'),
+      (snap) => {
+        setPrasekolahResults(
+          snap.docs
+            .map((d) => ({ id: d.id, ...(d.data() as any) }))
+            .filter((d) => belongsToSchool(d as any, activeCode))
+        );
+      },
+      (err) => console.warn('PortalMurid prasekolah_assessments listener:', err)
+    );
+
     return () => {
       unsubPbd();
       unsubGroups();
@@ -382,8 +405,85 @@ export const PortalMuridView: React.FC<PortalMuridViewProps> = ({
       unsubCommittees();
       unsubAtt();
       unsubAct();
+      unsubPrasekolah();
     };
   }, [currentUser.schoolCode]);
+
+  // Detect if this student is a Prasekolah student or has a Prasekolah assessment record
+  const myPrasekolahDocs = useMemo(() => {
+    const { candidateIds, displayNoKp, targetNameNorm } = resolvedStudentInfo;
+    return prasekolahResults.filter((r) => {
+      const sid = String(r.studentId || r.student_id || '');
+      const ric = cleanIcString(r.noKp || r.icNumber || r.ic);
+      if (sid && candidateIds.has(sid)) return true;
+      if (ric && displayNoKp !== '-' && ric === displayNoKp) return true;
+      if (targetNameNorm && r.studentName && normalizeName(r.studentName) === targetNameNorm) {
+        return true;
+      }
+      return false;
+    });
+  }, [prasekolahResults, resolvedStudentInfo]);
+
+  const isPrasekolahMurid = useMemo(() => {
+    if (myPrasekolahDocs.length > 0) return true;
+    if (isPrasekolahStudentRecord(resolvedStudentInfo.rawRecord)) return true;
+    if (isPrasekolahStudentRecord({ className: resolvedStudentInfo.displayClass })) return true;
+    return false;
+  }, [myPrasekolahDocs, resolvedStudentInfo]);
+
+  const studentPrasekolahSlipForTerm = useMemo<PrasekolahAssessmentDoc | null>(() => {
+    if (!isPrasekolahMurid) return null;
+    const targetTermLabel = selectedTerm === 2 ? 'Penggal 2' : 'Penggal 1';
+    const matchedDoc = myPrasekolahDocs.find(
+      (d) => normalizePrasekolahTerm(d.term) === targetTermLabel
+    );
+    const defaultAge = resolvePrasekolahStudentAge(
+      resolvedStudentInfo.rawRecord,
+      resolvedStudentInfo.academicYear
+    );
+
+    if (matchedDoc) {
+      return {
+        id: matchedDoc.id,
+        schoolCode: currentUser.schoolCode || getRuntimeActiveSchoolCode(),
+        academicYear: matchedDoc.academicYear || resolvedStudentInfo.academicYear,
+        term: targetTermLabel,
+        studentId: String(matchedDoc.studentId || currentUser.studentId || ''),
+        studentName: matchedDoc.studentName || resolvedStudentInfo.displayName,
+        noKp: matchedDoc.noKp || resolvedStudentInfo.displayNoKp,
+        age: Number(matchedDoc.age) === 5 ? 5 : 6,
+        akademik: {
+          bm: normalizePrasekolahGrade(matchedDoc.akademik?.bm),
+          bc: normalizePrasekolahGrade(matchedDoc.akademik?.bc),
+          bi: normalizePrasekolahGrade(matchedDoc.akademik?.bi),
+          mt: normalizePrasekolahGrade(matchedDoc.akademik?.mt),
+        },
+        sikapNilai: {
+          disiplin: normalizePrasekolahGrade(matchedDoc.sikapNilai?.disiplin),
+          sosial: normalizePrasekolahGrade(matchedDoc.sikapNilai?.sosial),
+          keyakinanDiri: normalizePrasekolahGrade(matchedDoc.sikapNilai?.keyakinanDiri),
+          rajin: normalizePrasekolahGrade(matchedDoc.sikapNilai?.rajin),
+        },
+        kedudukan: matchedDoc.kedudukan ?? '',
+        jumlahMurid: Number(matchedDoc.jumlahMurid || 0),
+      };
+    }
+
+    return {
+      id: `pra_${resolvedStudentInfo.displayNoKp}_${selectedTerm}`,
+      schoolCode: currentUser.schoolCode || getRuntimeActiveSchoolCode(),
+      academicYear: resolvedStudentInfo.academicYear,
+      term: targetTermLabel,
+      studentId: String(currentUser.studentId || resolvedStudentInfo.displayNoKp),
+      studentName: resolvedStudentInfo.displayName,
+      noKp: resolvedStudentInfo.displayNoKp,
+      age: defaultAge,
+      akademik: { bm: '', bc: '', bi: '', mt: '' },
+      sikapNilai: { disiplin: '', sosial: '', keyakinanDiri: '', rajin: '' },
+      kedudukan: '',
+      jumlahMurid: 0,
+    };
+  }, [isPrasekolahMurid, myPrasekolahDocs, selectedTerm, resolvedStudentInfo, currentUser]);
 
   // Filter PBD results for this student & selected term
   const studentPbdForTerm = useMemo(() => {
@@ -822,7 +922,7 @@ export const PortalMuridView: React.FC<PortalMuridViewProps> = ({
           </button>
         </nav>
 
-        {/* TAB 1: AKADEMIK (PBD) */}
+        {/* TAB 1: AKADEMIK (PBD OR PRASEKOLAH INSPIRASI) */}
         {activeTab === 'AKADEMIK' && (
           <section className="space-y-4">
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6">
@@ -830,41 +930,80 @@ export const PortalMuridView: React.FC<PortalMuridViewProps> = ({
                 <div>
                   <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
                     <BookOpen className="w-5 h-5 text-blue-400" />
-                    <span>Keputusan Pentaksiran Bilik Darjah (PBD)</span>
+                    <span>
+                      {isPrasekolahMurid
+                        ? 'PRASEKOLAH INSPIRASI — Rekod Pentaksiran dan Perkembangan Murid'
+                        : 'Keputusan Pentaksiran Bilik Darjah (PBD)'}
+                    </span>
                   </h3>
                   <p className="text-xs text-slate-400 mt-1">
-                    Tahap Penguasaan (TP1 - TP6) dan Ulasan Guru Mata Pelajaran bagi Sesi Semasa
+                    {isPrasekolahMurid
+                      ? 'Slip Rekod Pencapaian Akademik (BM, BC, BI, Matematik), Kedudukan Akademik, serta Sikap dan Nilai'
+                      : 'Tahap Penguasaan (TP1 - TP6) dan Ulasan Guru Mata Pelajaran bagi Sesi Semasa'}
                   </p>
                 </div>
 
-                {/* Penggal 1 / Penggal 2 Switcher */}
-                <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 self-start sm:self-center">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedTerm(1)}
-                    className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${
-                      selectedTerm === 1
-                        ? 'bg-blue-600 text-white shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    Penggal 1
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedTerm(2)}
-                    className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition ${
-                      selectedTerm === 2
-                        ? 'bg-blue-600 text-white shadow'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    Penggal 2
-                  </button>
+                <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-center">
+                  {/* Penggal 1 / Penggal 2 Switcher */}
+                  <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTerm(1)}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                        selectedTerm === 1
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Penggal 1
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTerm(2)}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                        selectedTerm === 2
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Penggal 2
+                    </button>
+                  </div>
+
+                  {isPrasekolahMurid && studentPrasekolahSlipForTerm && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        printPrasekolahSlipsA4([studentPrasekolahSlipForTerm], {
+                          schoolName:
+                            schoolSettings?.schoolName || 'SJK Chung Hua Balingian',
+                          schoolCode:
+                            schoolSettings?.schoolCode || currentUser.schoolCode || 'YCC3404',
+                          schoolLogo:
+                            schoolSettings?.schoolLogo || schoolSettings?.logoUrl || '',
+                          academicYear: studentPrasekolahSlipForTerm.academicYear,
+                          term: studentPrasekolahSlipForTerm.term,
+                        })
+                      }
+                      className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase tracking-wide inline-flex items-center gap-1.5 shadow transition cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>Cetak Slip A4</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {studentPbdForTerm.length === 0 ? (
+              {isPrasekolahMurid && studentPrasekolahSlipForTerm ? (
+                <div className="mt-6">
+                  <PrasekolahSlipCard
+                    slip={studentPrasekolahSlipForTerm}
+                    schoolName={schoolSettings?.schoolName || 'SJK Chung Hua Balingian'}
+                    schoolCode={schoolSettings?.schoolCode || currentUser.schoolCode || 'YCC3404'}
+                    schoolLogo={schoolSettings?.schoolLogo || schoolSettings?.logoUrl || ''}
+                  />
+                </div>
+              ) : studentPbdForTerm.length === 0 ? (
                 <div className="py-12 text-center space-y-3">
                   <div className="w-12 h-12 rounded-2xl bg-slate-800/80 border border-slate-700 flex items-center justify-center mx-auto text-slate-400">
                     <Clock className="w-6 h-6" />

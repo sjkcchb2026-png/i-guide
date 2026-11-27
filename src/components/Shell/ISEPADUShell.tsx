@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile, SchoolSettings } from '../../types';
 import { db, auth } from '../../firebase';
-import { collection, getDocs, query } from 'firebase/firestore';
+import { collection, getDocs, query, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import {
   belongsToSchool,
   DEFAULT_SCHOOL_NAME,
@@ -31,14 +31,20 @@ import {
   Camera,
   Mail,
   Key,
-  Bot
+  Bot,
+  Target,
+  CheckSquare,
+  Square,
+  FileText,
+  Lock
 } from 'lucide-react';
 
 import SchoolLogo from '../SchoolLogo';
 import { SchoolLogoModal } from '../SchoolLogoModal';
 import { ChangePasswordModal } from '../ChangePasswordModal';
 import SubjectTeacherView from '../Teacher/SubjectTeacherView';
-import AcademicAnalysisDashboard from '../Academic/AcademicAnalysisDashboard';
+import AcademicAnalysisDashboard, { MainAssessmentMode } from '../Academic/AcademicAnalysisDashboard';
+import { PrasekolahAssessmentView } from '../Academic/PrasekolahAssessmentView';
 import MasterDataDashboard from '../Dashboard/MasterDataDashboard';
 import KokurikulumSystem from '../Kokurikulum/KokurikulumSystem';
 import type { MaklumanOPRPrefill } from '../Kokurikulum/KokoSmartOPRManager';
@@ -51,10 +57,17 @@ import { SuratMasukManagerView } from '../SuratMasukManagerView';
 import { ReliefSchedulingView } from '../ReliefSchedulingView';
 import { AISetiausahaHub } from '../AISetiausaha/AISetiausahaHub';
 import { SetiausahaExternalPrefill } from '../AISetiausaha/types';
+import { KawalanProgramView } from '../KawalanProgram/KawalanProgramView';
+import {
+  KawalanProgramDoc,
+  PROGRAM_DOMAIN_META,
+  PDCA_STAGE_META,
+  evaluateProgramSLA,
+} from '../../utils/kawalanProgramHelper';
 import { useAcademicAccessControl } from '../../utils/academicAccessControl';
 
-export type Workspace = 'dashboard' | 'makluman' | 'surat-masuk' | 'ai-setiausaha' | 'academic' | 'kokurikulum' | 'attendance' | 'master-data';
-export type AcademicTab = 'pbd' | 'uasa' | 'analysis' | 'timetable' | 'relief' | 'opr';
+export type Workspace = 'dashboard' | 'kawalan-program' | 'makluman' | 'surat-masuk' | 'ai-setiausaha' | 'academic' | 'kokurikulum' | 'attendance' | 'master-data';
+export type AcademicTab = 'pbd' | 'uasa' | 'prasekolah' | 'analysis' | 'timetable' | 'relief' | 'opr';
 
 interface ISEPADUShellProps {
   currentUser: UserProfile;
@@ -71,6 +84,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
 }) => {
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace>('dashboard');
   const [academicTab, setAcademicTab] = useState<AcademicTab>('pbd');
+  const [analysisInitialMode, setAnalysisInitialMode] = useState<MainAssessmentMode>('PBD');
   const [kokoOprPrefill, setKokoOprPrefill] = useState<MaklumanOPRPrefill | null>(null);
   const [setiausahaPrefill, setSetiausahaPrefill] = useState<SetiausahaExternalPrefill | null>(null);
   const [principalAttendanceView, setPrincipalAttendanceView] = useState<'punch' | 'management'>('management');
@@ -86,10 +100,23 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
   const [pbdCount, setPbdCount] = useState<number>(0);
   const [uasaCount, setUasaCount] = useState<number>(0);
   const [loadingStats, setLoadingStats] = useState<boolean>(true);
+  const [myPendingPrograms, setMyPendingPrograms] = useState<KawalanProgramDoc[]>([]);
 
   const isPrincipal = currentUser.role === 'PRINCIPAL';
-  const isAkp = currentUser.category === 'AKP';
-  const isGuru = currentUser.category === 'GURU' || isPrincipal;
+  const userPosUpper = String((currentUser as any).position || (currentUser as any).jawatan || '').toUpperCase();
+  const isAkp =
+    currentUser.category === 'AKP' ||
+    currentUser.role === 'AKP' ||
+    currentUser.role === 'CLERK' ||
+    userPosUpper.includes('PKA') ||
+    userPosUpper.includes('PPM') ||
+    userPosUpper.includes('PT(') ||
+    userPosUpper === 'PT' ||
+    userPosUpper.includes('P/O') ||
+    userPosUpper.includes('PEMBANTU') ||
+    userPosUpper.includes('OPERASI') ||
+    userPosUpper.includes('KERANI');
+  const isGuru = (currentUser.category === 'GURU' || isPrincipal) && !isAkp;
   const activeSchoolCode = resolveRecordSchoolCode(currentUser);
   const displaySchoolName =
     schoolSettings?.schoolName || (isLegacyDefaultSchool(activeSchoolCode) ? DEFAULT_SCHOOL_NAME : activeSchoolCode);
@@ -97,6 +124,81 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
   const displaySlogan = schoolSettings?.slogan || DEFAULT_SCHOOL_SLOGAN;
   const displayLogo = schoolSettings?.schoolLogo || schoolSettings?.logoUrl || '';
   const academicAccess = useAcademicAccessControl(currentUser, '2026', displaySchoolCode);
+
+  // OPPM & PDCA module is currently closed to all users per administrator instruction
+  const isOppmPdcaOpen = false;
+
+  // Real-time subscription for current user's personal "Tugasan & OPR Belum Selesai" on home dashboard
+  useEffect(() => {
+    if (!isOppmPdcaOpen) {
+      setMyPendingPrograms([]);
+      return;
+    }
+    const unsub = onSnapshot(
+      collection(db, 'kawalan_programs'),
+      (snap) => {
+        const myNameUpper = (currentUser.name || '').trim().toUpperCase();
+        const myEmailLower = (currentUser.email || '').trim().toLowerCase();
+        const list: KawalanProgramDoc[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as KawalanProgramDoc;
+          if (!belongsToSchool(data, activeSchoolCode)) return;
+          if (data.pdcaStage === 'ACT' || data.pdcaStage === 'CHECK') return;
+          const isPic =
+            data.picId === currentUser.uid ||
+            (data.picName || '').trim().toUpperCase() === myNameUpper ||
+            (data.picEmail || '').trim().toLowerCase() === myEmailLower;
+          const isAjk =
+            Array.isArray(data.ajkMembers) &&
+            data.ajkMembers.some(
+              (m) =>
+                m.teacherId === currentUser.uid ||
+                (m.teacherName || '').trim().toUpperCase() === myNameUpper
+            );
+          if (isPic || isAjk) {
+            list.push({ ...data, id: d.id });
+          }
+        });
+        list.sort((a, b) => (a.tarikhMula || '').localeCompare(b.tarikhMula || ''));
+        setMyPendingPrograms(list);
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, [isOppmPdcaOpen, activeSchoolCode, currentUser.uid, currentUser.name, currentUser.email]);
+
+  const handleToggleDashboardChecklist = async (prog: KawalanProgramDoc, itemId: string) => {
+    const nowIso = new Date().toISOString();
+    const updatedChecklist = (prog.checklist || []).map((item) => {
+      if (item.id !== itemId) return item;
+      const nextDone = !item.done;
+      return {
+        ...item,
+        done: nextDone,
+        completedAt: nextDone ? nowIso : '',
+        completedBy: nextDone ? currentUser.name : '',
+      };
+    });
+    const oprItem = updatedChecklist.find((c) => c.stepKey === 'OPR');
+    const memoItem = updatedChecklist.find((c) => c.stepKey === 'MEMO');
+    const pelItem = updatedChecklist.find((c) => c.stepKey === 'PELAKSANAAN');
+    let nextStage = prog.pdcaStage;
+    if (oprItem?.done && prog.pdcaStage !== 'ACT') {
+      nextStage = 'CHECK';
+    } else if ((memoItem?.done || pelItem?.done) && prog.pdcaStage === 'PLAN') {
+      nextStage = 'DO';
+    }
+    try {
+      await updateDoc(doc(db, 'kawalan_programs', prog.id), {
+        checklist: updatedChecklist,
+        pdcaStage: nextStage,
+        oprSubmitted: Boolean(oprItem?.done) || Boolean(prog.oprSubmitted),
+        updatedAt: nowIso,
+      });
+    } catch (e) {
+      console.warn('Gagal kemaskini checklist dari dashboard:', e);
+    }
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -193,10 +295,10 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
             </div>
 
             {/* Navigation Workspace Links */}
-            <nav className="hidden md:flex items-center space-x-1 lg:space-x-2">
+            <nav className="hidden md:flex items-center space-x-1 lg:space-x-2 overflow-x-auto">
               <button
                 onClick={() => setActiveWorkspace('dashboard')}
-                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                   activeWorkspace === 'dashboard'
                     ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
@@ -206,10 +308,25 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                 <span>Dashboard</span>
               </button>
 
+              {/* Kawalan Program (PInTaS · OPPM · PDCA) — Displayed in menu, locked when !isOppmPdcaOpen */}
+              <button
+                onClick={() => setActiveWorkspace('kawalan-program')}
+                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                  activeWorkspace === 'kawalan-program'
+                    ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                }`}
+                title="Modul OPPM & PDCA (Ditutup Sementara)"
+              >
+                <Target className="w-4 h-4 text-blue-400" />
+                <span>Kawalan Program (PInTaS · OPPM · PDCA)</span>
+                {!isOppmPdcaOpen && <Lock className="w-3.5 h-3.5 text-amber-400 ml-1" />}
+              </button>
+
               {/* Makluman & Tugasan WhatsApp (Semua Warga Sekolah) */}
               <button
                 onClick={() => setActiveWorkspace('makluman')}
-                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                   activeWorkspace === 'makluman'
                     ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
@@ -222,9 +339,11 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               {/* Surat Masuk (PO / Pembantu Operasi & Semua Pentadbir) */}
               <button
                 onClick={() => setActiveWorkspace('surat-masuk')}
-                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                   activeWorkspace === 'surat-masuk'
                     ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
+                    : isAkp
+                    ? 'bg-blue-950/70 text-blue-300 border border-blue-700/60 hover:bg-blue-900/60 hover:text-white'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
                 }`}
               >
@@ -235,7 +354,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               {/* AI Setiausaha (OPR SKPM, Memo, Minit PKPA & Lantikan MySG) */}
               <button
                 onClick={() => setActiveWorkspace('ai-setiausaha')}
-                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                   activeWorkspace === 'ai-setiausaha'
                     ? 'bg-teal-600 text-white shadow-lg shadow-teal-600/30'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
@@ -249,7 +368,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               {isGuru && !isAkp && (
                 <button
                   onClick={() => setActiveWorkspace('academic')}
-                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                     activeWorkspace === 'academic'
                       ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
                       : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
@@ -264,7 +383,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               {isGuru && !isAkp && (
                 <button
                   onClick={() => setActiveWorkspace('kokurikulum')}
-                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                     activeWorkspace === 'kokurikulum'
                       ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
                       : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
@@ -278,7 +397,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               {/* Kehadiran Staf (All Roles) */}
               <button
                 onClick={() => setActiveWorkspace('attendance')}
-                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                   activeWorkspace === 'attendance'
                     ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
@@ -292,7 +411,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               {isPrincipal && (
                 <button
                   onClick={() => setActiveWorkspace('master-data')}
-                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
                     activeWorkspace === 'master-data'
                       ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
                       : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
@@ -316,7 +435,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                       ? 'bg-amber-950 text-amber-300 border-amber-700/60'
                       : 'bg-emerald-950 text-emerald-300 border-emerald-700/60'
                   }`}>
-                    {currentUser.role === 'PRINCIPAL' ? 'GURU BESAR' : currentUser.category || 'GURU'}
+                    {currentUser.role === 'PRINCIPAL' ? 'GURU BESAR' : isAkp ? 'AKP / PO' : currentUser.category || 'GURU'}
                   </span>
                 </div>
               </div>
@@ -341,7 +460,7 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
             </div>
           </div>
 
-          {/* Mobile Navigation bar */}
+          {/* Mobile & Tablet Navigation bar */}
           <div className="flex md:hidden border-t border-slate-800 py-2 space-x-1 overflow-x-auto">
             <button
               onClick={() => setActiveWorkspace('dashboard')}
@@ -352,6 +471,16 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               Dashboard
             </button>
             <button
+              onClick={() => setActiveWorkspace('kawalan-program')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 flex items-center gap-1 ${
+                activeWorkspace === 'kawalan-program' ? 'bg-amber-600 text-white' : 'text-slate-400'
+              }`}
+            >
+              <Target className="w-3.5 h-3.5" />
+              <span>Kawalan Program (PInTaS · OPPM · PDCA)</span>
+              {!isOppmPdcaOpen && <Lock className="w-3 h-3 text-amber-400" />}
+            </button>
+            <button
               onClick={() => setActiveWorkspace('makluman')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 flex items-center gap-1 ${
                 activeWorkspace === 'makluman' ? 'bg-indigo-600 text-white' : 'text-slate-400'
@@ -359,6 +488,19 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
             >
               <Bell className="w-3.5 h-3.5" />
               <span>Makluman</span>
+            </button>
+            <button
+              onClick={() => setActiveWorkspace('surat-masuk')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 flex items-center gap-1 ${
+                activeWorkspace === 'surat-masuk'
+                  ? 'bg-blue-600 text-white'
+                  : isAkp
+                  ? 'bg-blue-950/80 text-blue-300 border border-blue-700/60'
+                  : 'text-slate-400'
+              }`}
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>Surat Masuk (PO)</span>
             </button>
             <button
               onClick={() => setActiveWorkspace('ai-setiausaha')}
@@ -427,35 +569,206 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                       Sesi Akademik 2026 Aktif
                     </span>
                     <span className="px-2.5 py-1 bg-blue-500/10 border border-blue-500/30 text-blue-400 rounded-full text-[10px] font-black uppercase tracking-wider">
-                      OPEN_TEACHERS Mode
+                      {isAkp ? 'PORTAL AKP & PEMBANTU OPERASI (PO)' : 'OPEN_TEACHERS Mode'}
                     </span>
                   </div>
                   <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
                     Selamat Kembali, {currentUser.name}
                   </h2>
                   <p className="text-xs sm:text-sm text-slate-400 max-w-2xl mt-1">
-                    Portal pengurusan teras {displaySchoolName}. Akses terus modul pentaksiran PBD, UASA, rekod kehadiran staf dan integriti data sekolah.
+                    {isAkp
+                      ? `Portal pengurusan pentadbiran pejabat ${displaySchoolName}. Akses terus modul Daftar Surat Masuk (PO) 4-Hala, Paparan Makluman, AI Setiausaha dan Rekod Kehadiran Staf.`
+                      : `Portal pengurusan teras ${displaySchoolName}. Akses terus modul pentaksiran PBD, UASA, rekod kehadiran staf dan integriti data sekolah.`}
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setActiveWorkspace('kawalan-program')}
+                    className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-700/60 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Target className="w-4 h-4" />
+                    <span>Kawalan Program &amp; PDCA</span>
+                    {!isOppmPdcaOpen && <Lock className="w-3.5 h-3.5 text-amber-400" />}
+                  </button>
+                  <button
+                    onClick={() => setActiveWorkspace('surat-masuk')}
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-blue-600/30 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Mail className="w-4 h-4" /> Surat Masuk (PO)
+                  </button>
                   {isGuru && !isAkp && (
                     <button
                       onClick={() => { setActiveWorkspace('academic'); setAcademicTab('pbd'); }}
-                      className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-blue-600/30 flex items-center gap-1.5"
+                      className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 cursor-pointer"
                     >
                       <BookOpen className="w-4 h-4" /> Masuk PBD
                     </button>
                   )}
                   <button
                     onClick={() => setActiveWorkspace('attendance')}
-                    className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold uppercase tracking-wider transition border border-slate-700 flex items-center gap-1.5"
+                    className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold uppercase tracking-wider transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
                   >
                     <Clock className="w-4 h-4" /> Kehadiran Staf
                   </button>
                 </div>
               </div>
             </div>
+
+            {/* Personal Home Card for Guru / AJK: Tugasan & OPR Belum Selesai (Hidden when OPPM & PDCA is closed) */}
+            {isOppmPdcaOpen && (
+              <div className="bg-slate-900/95 border border-indigo-500/40 rounded-3xl p-6 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+                      <CheckSquare className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-white flex items-center gap-2">
+                        Tugasan &amp; OPR Belum Selesai ({currentUser.name})
+                        <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-indigo-600 text-white">
+                          {myPendingPrograms.length}
+                        </span>
+                      </h3>
+                      <p className="text-xs text-slate-400">
+                        Senarai program &amp; aktiviti di bawah tanggungjawab anda (PIC / AJK). Klik kotak untuk tanda selesai atau terus isi Smart OPR.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setActiveWorkspace('kawalan-program')}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 text-xs font-bold flex items-center gap-1.5 transition self-start sm:self-auto cursor-pointer"
+                  >
+                    <Target className="w-3.5 h-3.5" />
+                    <span>Buka Pusat Kawalan Program &amp; PDCA</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {myPendingPrograms.length === 0 ? (
+                  <div className="bg-slate-950/70 border border-slate-800/80 rounded-2xl p-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                      <span className="text-xs text-slate-300 font-medium">
+                        Tiada tugasan program atau Smart OPR yang tertunggak di bawah nama anda buat masa ini.
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setActiveWorkspace('kawalan-program')}
+                      className="text-xs font-bold text-blue-400 hover:text-blue-300 underline cursor-pointer"
+                    >
+                      Daftar Program Baharu
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {myPendingPrograms.map((prog) => {
+                      const sla = evaluateProgramSLA(prog);
+                      const domMeta = PROGRAM_DOMAIN_META[prog.domain] || PROGRAM_DOMAIN_META.PENTADBIRAN;
+                      const stageMeta = PDCA_STAGE_META[prog.pdcaStage] || PDCA_STAGE_META.PLAN;
+                      return (
+                        <div
+                          key={prog.id}
+                          className={`rounded-2xl p-4 border flex flex-col justify-between transition ${
+                            sla.isOverdueSLA
+                              ? 'bg-rose-950/30 border-rose-500/60'
+                              : 'bg-slate-950/90 border-slate-800 hover:border-indigo-500/50'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-black border ${domMeta.badgeBg} ${domMeta.badgeText} ${domMeta.badgeBorder}`}
+                              >
+                                {domMeta.shortLabel}
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-black border ${stageMeta.bgClass} ${stageMeta.textClass} ${stageMeta.borderClass}`}
+                              >
+                                {stageMeta.shortLabel}
+                              </span>
+                            </div>
+                            <h4 className="text-sm font-bold text-white line-clamp-1">{prog.title}</h4>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              Tarikh: <span className="text-slate-200 font-semibold">{prog.tarikhMula}</span> · SKAS{' '}
+                              <span className="text-indigo-300 font-mono">{prog.subStandardCode}</span>
+                            </p>
+                            {sla.isOverdueSLA && (
+                              <p className="text-[11px] font-bold text-rose-300 mt-1">
+                                ⚠️ Lewat {sla.workingDaysElapsed} hari bekerja (SLA &gt; 5 hari)
+                              </p>
+                            )}
+
+                            <div className="mt-3 space-y-1.5">
+                              {(prog.checklist || []).map((item) => (
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  onClick={() => handleToggleDashboardChecklist(prog, item.id)}
+                                  className={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-lg text-xs transition cursor-pointer ${
+                                    item.done
+                                      ? 'bg-emerald-950/40 text-emerald-300 line-through opacity-75'
+                                      : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
+                                  }`}
+                                >
+                                  {item.done ? (
+                                    <CheckSquare className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                  ) : (
+                                    <Square className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                  )}
+                                  <span className="truncate">{item.title}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSetiausahaPrefill({
+                                  targetTab: 'OPR',
+                                  taskItem: {
+                                    id: prog.id,
+                                    kawalanProgramId: prog.id,
+                                    title: prog.title,
+                                    tarikh: prog.tarikhMula,
+                                    dueDate: prog.tarikhMula,
+                                    masa: prog.masa || '08:00 Pagi - 12:00 Tengah Hari',
+                                    tempat: prog.tempat || 'SJK (C) Chung Hua Balingian',
+                                    category:
+                                      prog.domain === 'KURIKULUM'
+                                        ? 'KURIKULUM'
+                                        : prog.domain === 'HEM'
+                                        ? 'HEM'
+                                        : prog.domain === 'KOKURIKULUM'
+                                        ? 'KOKO'
+                                        : 'PENTADBIRAN',
+                                    standardGroup: prog.standardGroup,
+                                    subStandardCode: prog.subStandardCode,
+                                    subStandardTitle: prog.subStandardTitle,
+                                    objektif: prog.objektif || prog.pintas?.kpi || '',
+                                    kpi: prog.pintas?.kpi || '',
+                                    sasaran: prog.sasaran || 'Semua Warga Sekolah / Murid Terlibat',
+                                    picName: prog.picName,
+                                    invitedTeachers: prog.ajkMembers || [],
+                                  },
+                                });
+                                setActiveWorkspace('ai-setiausaha');
+                              }}
+                              className="flex-1 px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>Isi Smart OPR</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Quick Metrics Cards */}
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -517,6 +830,72 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
 
             {/* Quick Access Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Kawalan Program (PInTaS · OPPM · PDCA) Card — Always visible, marked locked when !isOppmPdcaOpen */}
+              <div 
+                onClick={() => setActiveWorkspace('kawalan-program')}
+                className="bg-slate-900/90 border border-amber-500/40 hover:border-amber-400/70 rounded-3xl p-6 transition-all cursor-pointer group shadow-lg flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="w-12 h-12 rounded-2xl bg-blue-600/20 text-blue-400 flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <Target className="w-6 h-6" />
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                        PInTaS · OPPM · PDCA
+                      </span>
+                      {!isOppmPdcaOpen && (
+                        <span className="px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
+                          <Lock className="w-3 h-3" /> Dikunci
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <h3 className="text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
+                    Kawalan Program &amp; PDCA Bersepadu
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                    Pusat kawalan semua aktiviti sekolah (Mod Strategik PInTaS/OPPM &amp; Mod Pantas 8 SOP), pautan terus Memo/Minit/Smart OPR, radar SLA 5 hari bekerja &amp; cetakan A4 Landscape.
+                  </p>
+                </div>
+                <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-amber-400">
+                  <span className="flex items-center gap-1.5">
+                    {!isOppmPdcaOpen && <Lock className="w-3.5 h-3.5" />}
+                    <span>{isOppmPdcaOpen ? 'Buka Kawalan Program' : 'Ditutup Sementara (Belum Dibuka)'}</span>
+                  </span>
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                </div>
+              </div>
+
+              {/* Surat Masuk (PO / Pembantu Operasi & Pentadbiran Pejabat) Card */}
+              <div 
+                onClick={() => setActiveWorkspace('surat-masuk')}
+                className={`bg-slate-900/90 border ${
+                  isAkp ? 'border-blue-500/70 ring-1 ring-blue-500/30' : 'border-slate-800'
+                } hover:border-blue-500/60 rounded-3xl p-6 transition-all cursor-pointer group shadow-lg flex flex-col justify-between`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="w-12 h-12 rounded-2xl bg-blue-600/20 text-blue-400 flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <Mail className="w-6 h-6" />
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                      MySG HR30 · PO / AKP
+                    </span>
+                  </div>
+                  <h3 className="text-lg font-bold text-white group-hover:text-blue-400 transition-colors">
+                    Daftar Surat Masuk (PO / Pejabat)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                    Pendaftaran surat rasmi masuk oleh Pembantu Operasi (PO) / AKP dengan automasi 4-hala: Paparan Makluman Guru, Keberadaan Staf, Jadual Ganti (Relief) &amp; Cetakan Daftar Bulanan Word.
+                  </p>
+                </div>
+                <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-blue-400">
+                  <span>Buka Daftar Surat Masuk (PO)</span>
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                </div>
+              </div>
+
               {/* PBD Entry Card */}
               {isGuru && !isAkp ? (
                 <div 
@@ -560,6 +939,30 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                   </div>
                   <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-amber-400">
                     <span>Buka UASA</span>
+                    <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Prasekolah Inspirasi Card */}
+              {isGuru && !isAkp ? (
+                <div 
+                  onClick={() => { setActiveWorkspace('academic'); setAcademicTab('prasekolah'); }}
+                  className="bg-slate-900/90 border border-slate-800 hover:border-purple-500/50 rounded-3xl p-6 transition-all cursor-pointer group shadow-lg flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="w-12 h-12 rounded-2xl bg-purple-600/20 text-purple-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                      <GraduationCap className="w-6 h-6" />
+                    </div>
+                    <h3 className="text-lg font-bold text-white group-hover:text-purple-400 transition-colors">
+                      Prasekolah Inspirasi (Pentaksiran &amp; Slip A4)
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                      Rekod Pentaksiran dan Perkembangan Murid Prasekolah (Umur 5 &amp; 6 Tahun): BM, BC, BI, Matematik, Sikap &amp; Nilai, Kedudukan Akademik &amp; Cetakan Slip 1:1.
+                    </p>
+                  </div>
+                  <div className="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-purple-400">
+                    <span>Buka Pentaksiran Prasekolah</span>
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                   </div>
                 </div>
@@ -709,6 +1112,43 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
           </div>
         )}
 
+        {/* ---------------- KAWALAN PROGRAM (PInTaS · OPPM · PDCA) WORKSPACE ---------------- */}
+        {activeWorkspace === 'kawalan-program' && (
+          <div className="animate-fade-in">
+            {isOppmPdcaOpen ? (
+              <KawalanProgramView
+                currentUser={currentUser}
+                schoolSettings={schoolSettings}
+                onOpenSetiausahaDoc={(payload) => {
+                  setSetiausahaPrefill(payload);
+                  setActiveWorkspace('ai-setiausaha');
+                }}
+              />
+            ) : (
+              <div className="bg-slate-900 border border-amber-500/40 rounded-3xl p-10 sm:p-12 text-center max-w-lg mx-auto my-12 shadow-2xl">
+                <div className="w-16 h-16 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-400 flex items-center justify-center mx-auto mb-5">
+                  <Lock className="w-8 h-8" />
+                </div>
+                <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  Akses Dikunci · Belum Dibuka
+                </span>
+                <h3 className="text-xl font-black text-white mt-4 mb-2">
+                  Kawalan Program (PInTaS · OPPM · PDCA)
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
+                  Modul OPPM dan PDCA Bersepadu telah siap dibina dalam sistem tetapi buat masa ini <strong className="text-amber-300">tidak dibuka kepada mana-mana pengguna</strong> atas arahan pentadbir.
+                </p>
+                <button
+                  onClick={() => setActiveWorkspace('dashboard')}
+                  className="mt-6 px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+                >
+                  Kembali ke Dashboard
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ---------------- MAKLUMAN & TUGASAN WHATSAPP WORKSPACE ---------------- */}
         {activeWorkspace === 'makluman' && (
           <div className="animate-fade-in">
@@ -782,7 +1222,20 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
                   UASA (Sumatif)
                 </button>
                 <button
-                  onClick={() => setAcademicTab('analysis')}
+                  onClick={() => setAcademicTab('prasekolah')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                    academicTab === 'prasekolah'
+                      ? 'bg-purple-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  Pentaksiran Prasekolah
+                </button>
+                <button
+                  onClick={() => {
+                    setAnalysisInitialMode('PBD');
+                    setAcademicTab('analysis');
+                  }}
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                     academicTab === 'analysis'
                       ? 'bg-blue-600 text-white shadow-md'
@@ -855,11 +1308,23 @@ export const ISEPADUShell: React.FC<ISEPADUShellProps> = ({
               <SubjectTeacherView profile={currentUser} initialAssessmentType="UASA" />
             )}
 
+            {academicTab === 'prasekolah' && (
+              <PrasekolahAssessmentView
+                currentUser={currentUser}
+                schoolSettings={schoolSettings}
+                onOpenAnalysis={() => {
+                  setAnalysisInitialMode('PRASEKOLAH');
+                  setAcademicTab('analysis');
+                }}
+              />
+            )}
+
             {academicTab === 'analysis' && (
               <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6">
                 <AcademicAnalysisDashboard
                   currentUser={currentUser}
                   schoolCode={displaySchoolCode}
+                  initialMainMode={analysisInitialMode}
                 />
               </div>
             )}
