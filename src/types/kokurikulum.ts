@@ -206,49 +206,131 @@ export interface KokoActivity {
   updatedAt?: string;
 }
 
+export interface KokoAmalanSivik {
+  nilaiTeras: string;
+  subNilai: string;
+  aktiviti: string;
+}
+
+export const CIRI_KBAT_KOKO_OPTIONS: string[] = [
+  'Aplikasi pengetahuan, kemahiran dan nilai',
+  'Menjana idea kreatif dan kritis',
+  'Menyelesaikan masalah',
+  'Membuat keputusan dan inovasi',
+  'Pemikiran kritis dan refleksi kendiri',
+];
+
+export const NILAI_TERAS_SIVIK_OPTIONS: string[] = [
+  'Kasih Sayang',
+  'Hormat-menghormati',
+  'Bertanggungjawab',
+  'Kegembiraan',
+];
+
+export const SUB_NILAI_SIVIK_OPTIONS: Record<string, string[]> = {
+  'Kasih Sayang': [
+    'Kelestarian Alam',
+    'Menghargai Alam Sekitar',
+    'Sayangi Diri dan Rakan Sebaya',
+    'Belas Kasihan dan Empati',
+  ],
+  'Hormat-menghormati': [
+    'Hormat Warga Sekolah dan Rakan',
+    'Toleransi dan Kerjasama Sepasukan',
+    'Mematuhi Peraturan dan Arahan Pemimpin',
+  ],
+  Bertanggungjawab: [
+    'Disiplin Diri dan Tepati Masa',
+    'Menjaga Kebersihan dan Peralatan Sekolah',
+    'Amanah dalam Melaksanakan Tugasan',
+  ],
+  Kegembiraan: [
+    'Interaksi Sihat dan Semangat Kesukanan',
+    'Fikiran Positif dan Keyakinan Diri',
+    'Menghargai Kejayaan Rakan',
+  ],
+};
+
+export const PIKEBM_ACTIVITY_OPTIONS: string[] = [
+  'Bisik-bisik',
+  'Akrostik',
+  'Teka Kata',
+  'Cakna Mata',
+  'Sorak Berirama',
+  'Stesen Ke Stesen',
+  'Madah Berirama',
+  'Tiada',
+];
+
 export interface KokoMeetingReport {
   id?: string;
+  schoolCode?: string;
   meetingNumber: number; // 1 - 12
   meetingTitle: string;  // e.g. "Perjumpaan 1: Mesyuarat Agung Tahunan & Pelantikan AJK"
   category: 'uniform' | 'club' | 'sport';
+  categoryLabel?: string; // Pasukan Badan Beruniform / Kelab dan Persatuan / Sukan dan Permainan
   groupId: string;
   groupName: string;
   date: string;          // YYYY-MM-DD
+  hariLabel?: string;    // e.g. "Rabu"
+  tarikhHariDisplay?: string;
+  masaDisplay?: string;  // e.g. "3.00 p.m. - 5.00 p.m."
   timeStart?: string;
   timeEnd?: string;
   venue: string;
-  
-  // Attendance sync from koko_attendance
+
+  // Attendance sync with koko_attendance & PAJSK
   attendanceSessionId?: string;
+  presentStudentIds?: string[];
+  absentStudentIds?: string[];
   attendanceStats: {
     present: number;
     absent: number;
     total: number;
     percentage: number;
   };
-  
-  // Personnel
+
+  // Personnel & Student Secretary
   guruPenasihatHadir: string[];
-  
-  // Content & KPM syllabus
+  setiausahaMurid?: string;
+  guruPenasihatPenyemak?: string;
+
+  // Upper Section: Butiran Aktiviti & KPM syllabus
   kpmModule?: string;
   tajukAktiviti: string;
+  butiranAktiviti?: string;
   objektif: string[];
   ringkasanAktiviti: string;
+
+  // Lower Section: Laporan Pemantauan Guru Penasihat
+  ciriKbat?: string;
+  amalanSivik?: KokoAmalanSivik;
+  sisipanPikebm?: string;
   refleksiImpak: string;
   halLain?: string;
   images?: string[];
-  
-  // Sign-off
+
+  // Sign-off (3-tier bottom verification: Guru Penasihat -> PK KK -> GB / Pengetua)
   disediakanOleh: string;
   jawatanPenyedia: string;
+  disemakOlehPkKk?: string;
   disahkanOleh?: string;
+  disahkanOlehGb?: string;
 
-  // SKPM Kualiti@Sekolah (SKAS) Standard 3.2 Linkage
+  // SKPM Kualiti@Sekolah (SKAS) Standard 3.2 Linkage (3.2.2.1 / 3.2.3.1 / 3.2.4.1)
+  standardGroup?: string;
+  subStandardCode?: string;
+  subStandardTitle?: string;
   skpmStandardCode?: string;
   skpmStandardTitle?: string;
   skpmAspekTitle?: string;
   skpmKualitiStatement?: string;
+
+  // Google Drive Archive Status
+  driveSynced?: boolean;
+  driveFileUrl?: string;
+  driveFolderUrl?: string;
+  driveFolderPath?: string;
 
   academicYear: string;
   createdAt: string;

@@ -709,6 +709,7 @@ export async function syncDocumentToSchoolDrive(
     const isSkasCategorizedDoc =
       isOpr ||
       docKindUpper === 'SIJIL' ||
+      docKindUpper === 'LAPORAN_PERJUMPAAN' ||
       docKindUpper === 'JADUAL_GANTI' ||
       docKindUpper === 'SLIP_RELIEF' ||
       docKindUpper === 'RELIEF_MMI';

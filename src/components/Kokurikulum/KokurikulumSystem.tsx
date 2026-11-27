@@ -116,7 +116,7 @@ export default function KokurikulumSystem({
               <span>2. Kehadiran Kokurikulum</span>
             </button>
 
-            {/* Tab 3: Laporan Perjumpaan (12 KPM) */}
+            {/* Tab 3: Laporan Aktiviti Perjumpaan Mingguan (12 KPM) */}
             <button
               onClick={() => setActiveTab('meeting-reports')}
               className={`flex items-center space-x-2 px-4 py-2.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
@@ -126,7 +126,7 @@ export default function KokurikulumSystem({
               }`}
             >
               <FileText className="w-4 h-4" />
-              <span>3. Laporan Perjumpaan (12 KPM)</span>
+              <span>3. Laporan Aktiviti Perjumpaan Mingguan (1–12)</span>
             </button>
 
             {/* Tab 4: Laporan Pertandingan & Aktiviti (Smart OPR) */}
