@@ -53,15 +53,20 @@ export function buildPrintableHtmlDocument(
     ? `
     html, body {
       width: 210mm;
-      height: 297mm;
-      max-height: 297mm;
+      min-height: 284mm;
+      margin: 0 !important;
+      padding: 0 !important;
       overflow: hidden !important;
     }
     .opr-single-page-viewport {
       width: 198mm;
-      height: 285mm;
-      max-height: 285mm;
+      min-height: 284mm;
+      height: 284mm;
+      max-height: 284mm;
       margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
       overflow: hidden !important;
       box-sizing: border-box;
       page-break-after: avoid !important;
@@ -72,14 +77,28 @@ export function buildPrintableHtmlDocument(
       background: #ffffff;
     }
     .opr-single-page-content {
-      width: 100%;
+      width: 198mm;
+      min-height: 284mm;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
       box-sizing: border-box;
       transform-origin: top left;
     }
     .opr-single-page-content > * {
-      max-width: 100% !important;
+      width: 198mm !important;
+      max-width: 198mm !important;
+      min-height: 284mm !important;
+      height: 100% !important;
       margin: 0 auto !important;
       box-shadow: none !important;
+      border: none !important;
+      border-radius: 0 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+      box-sizing: border-box !important;
     }
     `
     : '';
@@ -94,10 +113,10 @@ export function buildPrintableHtmlDocument(
         var viewport = document.getElementById('opr-single-page-viewport');
         var content = document.getElementById('opr-single-page-content');
         if (viewport && content) {
-          var maxH = viewport.clientHeight || 1075;
+          var maxH = viewport.clientHeight || 1073;
           var actualH = content.scrollHeight;
-          if (actualH > maxH) {
-            var scale = Math.max(0.72, (maxH - 5) / actualH);
+          if (actualH > maxH + 4) {
+            var scale = Math.max(0.75, (maxH - 2) / actualH);
             content.style.zoom = scale.toFixed(4);
             content.style.transform = 'scale(' + scale.toFixed(4) + ')';
             content.style.width = (100 / scale).toFixed(2) + '%';
@@ -213,6 +232,7 @@ export function triggerSmartPrint(options: SmartPrintOptions): SmartPrintResult 
           left: -9999px;
           top: 0;
           width: ${portalWidth};
+          min-height: ${singlePage ? '284mm' : 'auto'};
           background: #ffffff;
           color: #000000;
           z-index: -1;
@@ -227,7 +247,7 @@ export function triggerSmartPrint(options: SmartPrintOptions): SmartPrintResult 
           padding: 0 !important;
           ${
             singlePage
-              ? 'width: 210mm !important; height: 297mm !important; max-height: 297mm !important; overflow: hidden !important;'
+              ? 'width: 210mm !important; min-height: 284mm !important; overflow: hidden !important;'
               : ''
           }
           -webkit-print-color-adjust: exact !important;
@@ -237,19 +257,22 @@ export function triggerSmartPrint(options: SmartPrintOptions): SmartPrintResult 
           display: none !important;
         }
         #isepadu-print-portal {
-          display: block !important;
+          display: flex !important;
+          flex-direction: column !important;
+          justify-content: space-between !important;
           position: static !important;
           left: auto !important;
           top: auto !important;
           width: ${singlePage ? '198mm' : '100%'} !important;
           ${
             singlePage
-              ? 'height: 285mm !important; max-height: 285mm !important; overflow: hidden !important; page-break-after: avoid !important; page-break-inside: avoid !important; break-after: avoid !important; break-inside: avoid !important;'
+              ? 'min-height: 284mm !important; height: 284mm !important; max-height: 284mm !important; overflow: hidden !important; page-break-after: avoid !important; page-break-inside: avoid !important; break-after: avoid !important; break-inside: avoid !important;'
               : ''
           }
           margin: 0 auto !important;
           background: #ffffff !important;
           color: #000000 !important;
+          box-sizing: border-box !important;
           -webkit-print-color-adjust: exact !important;
           print-color-adjust: exact !important;
         }
@@ -265,7 +288,18 @@ export function triggerSmartPrint(options: SmartPrintOptions): SmartPrintResult 
     portalEl.id = 'isepadu-print-portal';
     const clone = target.cloneNode(true) as HTMLElement;
     clone.removeAttribute('id');
-    clone.style.maxWidth = '100%';
+    clone.style.width = singlePage ? '198mm' : '100%';
+    clone.style.maxWidth = singlePage ? '198mm' : '100%';
+    if (singlePage) {
+      clone.style.minHeight = '284mm';
+      clone.style.height = '284mm';
+      clone.style.border = 'none';
+      clone.style.borderRadius = '0';
+      clone.style.display = 'flex';
+      clone.style.flexDirection = 'column';
+      clone.style.justifyContent = 'space-between';
+      clone.style.boxSizing = 'border-box';
+    }
     clone.style.margin = '0 auto';
     clone.style.boxShadow = 'none';
     portalEl.appendChild(clone);
@@ -274,8 +308,8 @@ export function triggerSmartPrint(options: SmartPrintOptions): SmartPrintResult 
     // 3. 1-Page A4 Auto-Fit Measurement (singlePage === true)
     if (singlePage) {
       const scrollH = portalEl.scrollHeight || clone.scrollHeight;
-      if (scrollH > 1075) {
-        const scale = Math.max(0.72, 1070 / scrollH);
+      if (scrollH > 1076) {
+        const scale = Math.max(0.75, 1072 / scrollH);
         (clone.style as any).zoom = scale.toFixed(4);
         clone.style.transformOrigin = 'top left';
       }

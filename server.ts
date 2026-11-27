@@ -5609,7 +5609,20 @@ ${JSON.stringify(
   });
 }
 
+process.on('unhandledRejection', (reason) => {
+  console.warn('[Server Guard] Unhandled Promise Rejection caught (process kept alive):', reason);
+});
+
+process.on('uncaughtException', (err: any) => {
+  if (err?.code === 'EADDRINUSE') {
+    console.error('Fatal port conflict:', err);
+    process.exit(1);
+  }
+  console.warn('[Server Guard] Uncaught Exception caught (process kept alive):', err?.message || err);
+});
+
 startServer().catch((err) => {
   console.error('Fatal error during server startup:', err);
   process.exit(1);
 });
+
